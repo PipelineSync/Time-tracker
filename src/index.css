@@ -1,0 +1,93 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* PipelineSync brand palette */
+    --navy: 221 85% 19%;            /* #06245B Core Navy */
+    --blue: 212 93% 46%;            /* #0868D9 Pipeline Blue */
+    --steel: 206 43% 34%;           /* #37678C Sync Steel */
+    --aqua: 187 56% 50%;            /* #36B7C9 Bright Aqua */
+    --orange: 27 94% 50%;           /* #F77A0A Signal Orange */
+    --offwhite: 210 40% 98%;        /* #F8FAFC */
+    --ink: 216 47% 15%;             /* #15253A */
+    --border-gray: 208 28% 88%;     /* #D9E2EA */
+
+    --background: var(--offwhite);
+    --foreground: var(--ink);
+    --card: 0 0% 100%;
+    --card-foreground: var(--ink);
+    --popover: 0 0% 100%;
+    --popover-foreground: var(--ink);
+    --primary: var(--blue);
+    --primary-foreground: 210 40% 98%;
+    --secondary: 208 42% 94%;
+    --secondary-foreground: var(--navy);
+    --muted: 210 40% 96%;
+    --muted-foreground: 212 18% 42%;
+    --accent: var(--aqua);
+    --accent-foreground: var(--navy);
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 210 40% 98%;
+    --border: var(--border-gray);
+    --input: var(--border-gray);
+    --ring: var(--blue);
+    --radius: 0.625rem;
+    --sidebar: var(--navy);
+    --sidebar-foreground: 210 40% 98%;
+    --sidebar-border: 220 80% 24%;
+  }
+
+  .dark {
+    /* PipelineSync dark treatment: navy field, white type, blue/aqua controls, orange signal only */
+    --navy: 221 85% 16%;
+    --blue: 213 90% 58%;            /* brighter blue for contrast on navy */
+    --steel: 206 43% 44%;
+    --aqua: 187 56% 58%;
+    --orange: 27 94% 52%;
+
+    --background: 221 60% 9%;
+    --foreground: 211 60% 95%;
+    --card: 220 55% 12%;
+    --card-foreground: 211 60% 95%;
+    --popover: 220 55% 12%;
+    --popover-foreground: 211 60% 95%;
+    --primary: var(--blue);
+    --primary-foreground: 222 47% 8%;
+    --secondary: 220 45% 18%;
+    --secondary-foreground: 211 60% 95%;
+    --muted: 220 45% 17%;
+    --muted-foreground: 214 25% 68%;
+    --accent: var(--aqua);
+    --accent-foreground: 222 47% 8%;
+    --destructive: 0 62% 45%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 219 40% 22%;
+    --input: 219 40% 22%;
+    --ring: var(--blue);
+    --sidebar: 221 60% 7%;
+    --sidebar-foreground: 211 60% 95%;
+    --sidebar-border: 219 40% 16%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+  }
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+/* Signal Orange — small, focused status/active-state cues only (brand rule #05) */
+@layer utilities {
+  .animate-pulse-slow {
+    animation: pulse 2.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+}
