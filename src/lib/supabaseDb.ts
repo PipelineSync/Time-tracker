@@ -34,9 +34,32 @@ const ok = <T,>(data: T | null): BackendResult<T> => ({ data, error: null })
 const fail = <T,>(error: string): BackendResult<T> => ({ data: null, error })
 
 async function getAuthUser(): Promise<AuthUser | null> {
-  const { data } = await client().auth.getUser()
+  const sb = client()
+  const { data } = await sb.auth.getUser()
   if (!data?.user) return null
-  const { data: profile } = await client().from('profiles').select('role, worker_id').eq('user_id', data.user.id).maybeSingle()
+  let { data: profile } = await sb.from('profiles').select('role, worker_id').eq('user_id', data.user.id).maybeSingle()
+
+  // Older worker accounts may have been created before the worker/profile link
+  // was added. Repair that link once, server-side, using the authenticated email.
+  if (!profile || (profile.role === 'worker' && !profile.worker_id)) {
+    const session = await sb.auth.getSession()
+    const accessToken = session.data.session?.access_token
+    if (accessToken) {
+      try {
+        const response = await fetch('/.netlify/functions/sync-worker-profile', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${accessToken}` },
+        })
+        if (response.ok) {
+          const repaired = await sb.from('profiles').select('role, worker_id').eq('user_id', data.user.id).maybeSingle()
+          profile = repaired.data ?? profile
+        }
+      } catch {
+        // Keep the existing profile state; the UI can still report a missing link.
+      }
+    }
+  }
+
   return {
     id: data.user.id,
     email: data.user.email ?? '',

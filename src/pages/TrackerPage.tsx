@@ -73,7 +73,7 @@ export function TrackerPage() {
     toast.success(`Clocked out — ${formatMinutes(entry.total_minutes)} · ${money(entry.earnings, settings?.currency || 'USD')}`)
   }
 
-  if (dataLoading && workers.length === 0) {
+  if (dataLoading && workers.length === 0 && !user?.workerId) {
     return (
       <div className="space-y-6">
         <PageHeader title="Clock In / Out" />
