@@ -169,6 +169,14 @@ This repository already includes `netlify.toml` with `npm run build`, `dist`, No
 5. Redeploy after saving variables. Netlify exposes environment variables to Functions at runtime; build variables are also available to the site build.
 6. In Supabase **Authentication → URL Configuration**, set the deployed Netlify URL as the **Site URL** and add it to the allowed redirect URLs. Add your custom HTTPS domain too when you connect one.
 
+#### Supabase keep-alive (anti-sleep)
+
+Free-tier Supabase projects are **paused after ~7 days of no API/database activity**, which takes the app offline until you restore the project from the Supabase dashboard. This repo ships a Netlify **scheduled function** (`netlify/functions/supabase-keepalive.ts`, scheduled via `netlify.toml`) that pings the project **once a day** — both the database (PostgREST) and the Auth service — so the inactivity clock is always reset and the project never sleeps.
+
+- **No setup needed** — it reuses the `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` variables from step 4 and goes live automatically on your next Netlify deploy.
+- You can verify each run in **Netlify → Logs → supabase-keepalive**, or trigger it manually at `/.netlify/functions/supabase-keepalive`.
+- If you deploy somewhere without scheduled functions (e.g. Vercel free tier), point any external cron service (cron-job.org, GitHub Actions, UptimeRobot) at `https://YOUR-PROJECT.supabase.co/rest/v1/settings?select=id&limit=1` with your publishable key in the `apikey` header, once a day.
+
 ### Deploy to Vercel (free)
 
 1. Import the repo on Vercel.
