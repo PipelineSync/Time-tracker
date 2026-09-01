@@ -705,6 +705,17 @@ export const localBackend: DataBackend = {
     return { data: p, error: null }
   },
 
+  async updatePaymentNote(id, note) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (c.user.role !== 'admin') return { data: null, error: 'Only the admin can update payment notes.' }
+    const p = c.data.payments.find((x) => x.id === id)
+    if (!p) return { data: null, error: 'Payment not found.' }
+    p.note = note
+    save(c.data)
+    return { data: p, error: null }
+  },
+
   async deletePayment(id) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }

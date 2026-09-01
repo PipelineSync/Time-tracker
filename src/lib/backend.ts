@@ -75,6 +75,7 @@ export interface DataBackend {
   listPayments(): Promise<BackendResult<Payment[]>>
   settleWorker(workerId: string, note?: string): Promise<BackendResult<Payment>>
   updatePaymentStatus(id: string, status: PaymentStatus): Promise<BackendResult<Payment>>
+  updatePaymentNote(id: string, note: string | null): Promise<BackendResult<Payment>>
   deletePayment(id: string): Promise<BackendResult<null>>
 
   resetAll(): Promise<BackendResult<null>>
