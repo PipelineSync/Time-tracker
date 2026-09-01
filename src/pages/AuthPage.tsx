@@ -1,12 +1,15 @@
 import { useState } from 'react'
 import { useStore } from '@/lib/store'
+import { isSupabaseConfigured } from '@/lib/supabaseDb'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { BrandLogo } from '@/components/BrandLogo'
 import { toast } from 'sonner'
-import { Loader2, ShieldCheck, Eye, EyeOff } from 'lucide-react'
+import { Loader2, ShieldCheck, Eye, EyeOff, TriangleAlert, Database } from 'lucide-react'
+
+const supabaseReady = isSupabaseConfigured()
 
 export function AuthPage() {
   const { signIn } = useStore()
@@ -33,20 +36,36 @@ export function AuthPage() {
           </p>
         </div>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-lg">
-              <ShieldCheck className="h-5 w-5 text-primary" /> Sign in
-            </CardTitle>
-            <CardDescription>
-              Sign in with the credentials provided to you.
-            </CardDescription>
-          </CardHeader>
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-lg">
+                <ShieldCheck className="h-5 w-5 text-primary" /> Sign in
+              </CardTitle>
+              <CardDescription>
+                Sign in with the credentials provided to you.
+              </CardDescription>
+              {supabaseReady ? (
+                <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <Database className="h-3.5 w-3.5" /> Connected to Supabase — sign in with your account email.
+                </p>
+              ) : (
+                <p className="flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-2 text-xs text-amber-800">
+                  <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span>
+                    <strong>Demo mode.</strong> Supabase environment variables were missing when this site was
+                    built, so logins are stored only in this browser. Set{' '}
+                    <code className="font-mono">VITE_SUPABASE_URL</code> and{' '}
+                    <code className="font-mono">VITE_SUPABASE_PUBLISHABLE_KEY</code> in your host's environment
+                    variables, then redeploy.
+                  </span>
+                </p>
+              )}
+            </CardHeader>
           <CardContent>
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="email">Username / email</Label>
-                <Input id="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" autoComplete="username" required />
+                <Label htmlFor="email">{supabaseReady ? 'Email' : 'Username / email'}</Label>
+                <Input id="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder={supabaseReady ? 'you@example.com' : 'admin or you@example.com'} autoComplete="username" required />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="password">Password</Label>
