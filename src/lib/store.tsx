@@ -24,7 +24,14 @@ import { localBackend } from './localDb'
 import { supabaseBackend, isSupabaseConfigured } from './supabaseDb'
 
 function pickBackend(): DataBackend {
-  return isSupabaseConfigured() ? supabaseBackend : localBackend
+  if (isSupabaseConfigured()) return supabaseBackend
+  // Falling back to browser-local demo mode. If you expected Supabase (e.g. on a
+  // deployed site), the VITE_SUPABASE_* environment variables were missing at build time.
+  console.warn(
+    '[work-tracker] Supabase is not configured — falling back to local demo mode. ' +
+      'Set VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY at build time to connect Supabase.'
+  )
+  return localBackend
 }
 
 interface StoreValue {

@@ -116,12 +116,15 @@ The app also accepts the legacy `VITE_SUPABASE_ANON_KEY` as a fallback. **Never*
 
 1. In Supabase go to **Authentication → Providers** and confirm **Email** is enabled.
 2. To allow password reset emails, configure **Authentication → URL Configuration** with your site URL and confirm the **Redirect URLs**.
-3. Create the **admin account**: in Supabase **Authentication → Users → Add user**, create the admin (email `admin`, your password). Then in the SQL editor insert their profile as admin:
+3. Create the **admin account**: in Supabase **Authentication → Users → Add user → Create new user**, enter a **real email address** (for example `admin@yourcompany.com` — a bare username like `admin` is **not** valid and can never sign in), set a password, and turn on **Auto Confirm User**. Then in the SQL editor insert their profile as admin (replace the email with the one you used):
    ```sql
    insert into public.profiles (user_id, role)
-   select id, 'admin' from auth.users where email = 'admin' on conflict (user_id) do nothing;
+   select id, 'admin' from auth.users where email = 'admin@yourcompany.com'
+   on conflict (user_id) do nothing;
    ```
+   > Note: the demo login `admin` / `admin.pipelinesync` only exists in **demo mode** (no Supabase). In a Supabase-connected build, only real accounts created in Supabase Auth (or by the admin in-app) can sign in.
 4. Worker accounts are created **by the admin inside the app** (Workers → Add worker → set login email & password). In the deployed Netlify build, this uses a protected Netlify Function so the server-only Supabase secret is never exposed to the browser. The function verifies the signed-in user's admin profile before creating the Auth account.
+5. **Forgot-password emails** use Supabase's built-in email service (rate-limited to a few per hour — fine for admin recovery, add custom SMTP for heavier use). Make sure **Authentication → URL Configuration → Site URL** points to your deployed site so reset links open the right place.
 
 ---
 
