@@ -422,12 +422,13 @@ export const supabaseBackend: DataBackend = {
     return ok(data as ActiveTimer)
   },
 
-  async stopTimer(timerId) {
+  async stopTimer(timerId, note) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
     const { data: timer } = await client().from('active_timers').select('*').eq('id', timerId).single()
     if (!timer) return fail('No active timer found.')
     if (me.data!.role === 'worker' && timer.worker_id !== me.data!.workerId) return fail('Not your timer.')
+    const clockOutNote = typeof note === 'string' && note.trim() ? note.trim().slice(0, 2000) : null
     const end = new Date()
     let totalPause = timer.total_pause_ms || 0
     if (timer.paused && timer.pause_start) totalPause += end.getTime() - new Date(timer.pause_start).getTime()
@@ -440,7 +441,7 @@ export const supabaseBackend: DataBackend = {
       start_time: timer.start_time,
       end_time: end.toISOString(),
       break_minutes: breakMinutes,
-      notes: timer.notes || null,
+      notes: [timer.notes, clockOutNote].filter(Boolean).join('\n') || null,
       hourly_rate: timer.hourly_rate ?? 0,
       total_minutes: totalMinutes,
       earnings: computeEarnings(totalMinutes, timer.hourly_rate ?? 0),
@@ -452,7 +453,7 @@ export const supabaseBackend: DataBackend = {
     // Notify the admin when a worker clocks out.
     if (me.data!.role === 'worker') {
       const adminId = await getAdminUserId()
-      if (adminId) await pushNotification(adminId, { entry_id: created.id, type: 'time_out', message: `${await workerName(created.worker_id)} clocked out — ${formatMinutes(created.total_minutes)}` })
+      if (adminId) await pushNotification(adminId, { entry_id: created.id, type: 'time_out', message: `${await workerName(created.worker_id)} clocked out — ${formatMinutes(created.total_minutes)}${clockOutNote ? ' · added a note' : ''}` })
     }
     return ok(created)
   },

@@ -57,7 +57,7 @@ export interface DataBackend {
   startTimer(input: { worker_id: string; project?: string; notes?: string; start_time?: string; hourly_rate?: number }): Promise<BackendResult<ActiveTimer>>
   pauseTimer(): Promise<BackendResult<ActiveTimer>>
   resumeTimer(): Promise<BackendResult<ActiveTimer>>
-  stopTimer(timerId: string): Promise<BackendResult<TimeEntry>>
+  stopTimer(timerId: string, note?: string): Promise<BackendResult<TimeEntry>>
   deleteTimer(timerId: string): Promise<BackendResult<null>>
 
   getSettings(): Promise<BackendResult<Settings>>

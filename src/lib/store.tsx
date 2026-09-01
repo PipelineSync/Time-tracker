@@ -70,7 +70,7 @@ interface StoreValue {
   startTimer: (input: { worker_id: string; project?: string; notes?: string; hourly_rate?: number }) => Promise<BackendResult<ActiveTimer>>
   pauseTimer: () => Promise<BackendResult<ActiveTimer>>
   resumeTimer: () => Promise<BackendResult<ActiveTimer>>
-  stopTimer: () => Promise<BackendResult<TimeEntry>>
+  stopTimer: (note?: string) => Promise<BackendResult<TimeEntry>>
   cancelTimer: () => Promise<void>
 
   saveSettings: (patch: Partial<Settings>) => Promise<Settings | null>
@@ -287,10 +287,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return { data: res.data, error: null }
   }, [backend])
 
-  const stopTimer = useCallback(async () => {
+  const stopTimer = useCallback(async (note?: string) => {
     const current = activeTimer
     if (!current) return { data: null, error: 'No timer is running.' }
-    const res = await backend.stopTimer(current.id)
+    const res = await backend.stopTimer(current.id, note?.trim() ? note.trim() : undefined)
     if (res.error || !res.data) return { data: null, error: res.error }
     setActiveTimer(null)
     await refreshTimer()
