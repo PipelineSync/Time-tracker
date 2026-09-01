@@ -150,6 +150,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [user, refreshData])
 
+  // Keep cross-account updates fresh. Worker/admin actions happen in different
+  // browser sessions, so poll lightly and refresh on focus to pick up new
+  // entries, notes, and unread notifications without requiring a reload.
+  useEffect(() => {
+    if (!user) return
+    const refreshIfVisible = () => {
+      if (document.visibilityState !== 'hidden') void refreshData()
+    }
+    const interval = window.setInterval(refreshIfVisible, 15000)
+    window.addEventListener('focus', refreshIfVisible)
+    document.addEventListener('visibilitychange', refreshIfVisible)
+    return () => {
+      window.clearInterval(interval)
+      window.removeEventListener('focus', refreshIfVisible)
+      document.removeEventListener('visibilitychange', refreshIfVisible)
+    }
+  }, [user, refreshData])
+
   const signIn = useCallback(async (email: string, password: string) => {
     const res = await backend.signIn(email, password)
     if (res.error) return res.error

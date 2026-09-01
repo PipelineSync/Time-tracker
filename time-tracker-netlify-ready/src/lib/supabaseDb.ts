@@ -51,9 +51,15 @@ async function requireUser(): Promise<BackendResult<AuthUser>> {
   return ok(u)
 }
 
-/** The workspace admin's auth user id (the profile with role 'admin'). */
+/** The workspace admin's auth user id for the signed-in user's workspace. */
 async function getAdminUserId(): Promise<string | null> {
-  const { data } = await client().from('profiles').select('user_id').eq('role', 'admin').maybeSingle()
+  const sb = client()
+  // Workers cannot read the admin profile directly under RLS, so use the
+  // SECURITY DEFINER helper from the schema/migration. Keep the old profile
+  // lookup as a fallback for databases that have not applied the helper yet.
+  const rpc = await sb.rpc('workspace_owner_id')
+  if (!rpc.error && rpc.data) return rpc.data as string
+  const { data } = await sb.from('profiles').select('user_id').eq('role', 'admin').maybeSingle()
   return data?.user_id ?? null
 }
 
@@ -508,6 +514,7 @@ export const supabaseBackend: DataBackend = {
     }
     const now = new Date()
     const { data, error } = await sb.from('payments').insert({
+      user_id: me.data!.id,
       worker_id: workerId,
       amount: Math.round(earnings * 100) / 100,
       hours: Math.round((totalMinutes / 60) * 100) / 100,

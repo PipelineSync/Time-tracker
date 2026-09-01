@@ -77,19 +77,15 @@ export function AppLayout() {
   const UserMenu = (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="sm" className="gap-2">
-          <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
+        <Button variant="outline" size="sm" className="min-w-0 gap-2">
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
             {user?.email?.[0]?.toUpperCase() || 'U'}
           </span>
-          <span className="hidden max-w-[140px] truncate sm:inline">{user?.email}</span>
+          <span className="hidden max-w-[120px] truncate sm:inline">{user?.email}</span>
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
-        <DropdownMenuLabel>{user?.email}</DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={() => setTheme('light')}><Sun className="mr-2 h-4 w-4" /> Light mode</DropdownMenuItem>
-        <DropdownMenuItem onClick={() => setTheme('dark')}><Moon className="mr-2 h-4 w-4" /> Dark mode</DropdownMenuItem>
-        <DropdownMenuItem onClick={() => setTheme('system')}><Monitor className="mr-2 h-4 w-4" /> System theme</DropdownMenuItem>
+        <DropdownMenuLabel className="truncate">{user?.email}</DropdownMenuLabel>
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={() => setChangePwOpen(true)}><KeyRound className="mr-2 h-4 w-4" /> Change password</DropdownMenuItem>
         <DropdownMenuItem
@@ -132,11 +128,13 @@ export function AppLayout() {
             </NavLink>
           ))}
         </nav>
-        <div className="flex items-center justify-between border-t border-white/10 px-4 py-3">
-          {UserMenu}
-          <div className="flex items-center gap-1">
-            <NotificationsBell onNavy />
-            <ThemeToggle onNavy />
+        <div className="border-t border-white/10 px-4 py-3">
+          <div className="flex items-center gap-2">
+            <div className="min-w-0 flex-1">{UserMenu}</div>
+            <div className="flex shrink-0 items-center gap-1 rounded-lg bg-white/5 p-1">
+              <NotificationsBell onNavy />
+              <ThemeToggle onNavy />
+            </div>
           </div>
         </div>
       </aside>

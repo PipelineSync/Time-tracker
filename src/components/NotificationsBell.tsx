@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useStore } from '@/lib/store'
 import { Button } from '@/components/ui/button'
@@ -31,12 +31,6 @@ export function NotificationsBell({ onNavy }: { onNavy?: boolean }) {
   const bellCls = onNavy
     ? 'text-white/80 hover:bg-white/10 hover:text-white'
     : 'text-muted-foreground hover:bg-muted hover:text-foreground'
-
-  useEffect(() => {
-    if (open && unreadCount > 0) {
-      markNotificationsRead()
-    }
-  }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const recent = notifications.slice(0, 20)
 
@@ -75,14 +69,17 @@ export function NotificationsBell({ onNavy }: { onNavy?: boolean }) {
               return (
                 <DropdownMenuItem
                   key={n.id}
-                  className="items-start gap-3 whitespace-normal py-3"
+                  className={cn(
+                    'items-start gap-3 whitespace-normal border-l-2 py-3',
+                    n.read ? 'border-l-transparent' : 'border-l-[#F77A0A] bg-[#F77A0A]/5'
+                  )}
                   onClick={() => {
                     if (n.entry_id) navigate(`/entries?entry=${n.entry_id}`)
                   }}
                 >
                   <Icon className={cn('mt-0.5 h-4 w-4 shrink-0', meta.color)} />
                   <div className="min-w-0 flex-1">
-                    <p className={cn('text-sm leading-snug', !n.read && 'font-semibold')}>{n.message}</p>
+                    <p className={cn('text-sm leading-snug', !n.read && 'font-bold text-foreground')}>{n.message}</p>
                     <p className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
                       <Clock className="h-3 w-3" /> {formatDateTime(n.created_at)}
                     </p>

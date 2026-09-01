@@ -19,12 +19,19 @@ import type {
   Payment,
   PaymentStatus,
 } from './types'
-import type { DataBackend, CreateWorkerInput } from './backend'
+import type { DataBackend, CreateWorkerInput, BackendResult } from './backend'
 import { localBackend } from './localDb'
 import { supabaseBackend, isSupabaseConfigured } from './supabaseDb'
 
 function pickBackend(): DataBackend {
-  return isSupabaseConfigured() ? supabaseBackend : localBackend
+  if (isSupabaseConfigured()) return supabaseBackend
+  // Falling back to browser-local demo mode. If you expected Supabase (e.g. on a
+  // deployed site), the VITE_SUPABASE_* environment variables were missing at build time.
+  console.warn(
+    '[work-tracker] Supabase is not configured — falling back to local demo mode. ' +
+      'Set VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY at build time to connect Supabase.'
+  )
+  return localBackend
 }
 
 interface StoreValue {
@@ -60,10 +67,10 @@ interface StoreValue {
   deleteEntry: (id: string) => Promise<boolean>
   duplicateEntry: (entry: TimeEntry) => Promise<boolean>
 
-  startTimer: (input: { worker_id: string; project?: string; notes?: string; hourly_rate?: number }) => Promise<ActiveTimer | null>
-  pauseTimer: () => Promise<ActiveTimer | null>
-  resumeTimer: () => Promise<ActiveTimer | null>
-  stopTimer: () => Promise<TimeEntry | null>
+  startTimer: (input: { worker_id: string; project?: string; notes?: string; hourly_rate?: number }) => Promise<BackendResult<ActiveTimer>>
+  pauseTimer: () => Promise<BackendResult<ActiveTimer>>
+  resumeTimer: () => Promise<BackendResult<ActiveTimer>>
+  stopTimer: () => Promise<BackendResult<TimeEntry>>
   cancelTimer: () => Promise<void>
 
   saveSettings: (patch: Partial<Settings>) => Promise<Settings | null>
@@ -140,6 +147,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       refreshData()
     } else {
       setWorkers([]); setEntries([]); setSettings(null); setActiveTimer(null); setNotifications([]); setPayments([])
+    }
+  }, [user, refreshData])
+
+  // Keep cross-account updates fresh. Worker/admin actions happen in different
+  // browser sessions, so poll lightly and refresh on focus to pick up new
+  // entries, notes, and unread notifications without requiring a reload.
+  useEffect(() => {
+    if (!user) return
+    const refreshIfVisible = () => {
+      if (document.visibilityState !== 'hidden') void refreshData()
+    }
+    const interval = window.setInterval(refreshIfVisible, 15000)
+    window.addEventListener('focus', refreshIfVisible)
+    document.addEventListener('visibilitychange', refreshIfVisible)
+    return () => {
+      window.clearInterval(interval)
+      window.removeEventListener('focus', refreshIfVisible)
+      document.removeEventListener('visibilitychange', refreshIfVisible)
     }
   }, [user, refreshData])
 
@@ -242,34 +267,34 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const startTimer = useCallback(async (input: { worker_id: string; project?: string; notes?: string; hourly_rate?: number }) => {
     const res = await backend.startTimer(input)
-    if (res.error || !res.data) return null
+    if (res.error || !res.data) return { data: null, error: res.error }
     setActiveTimer(res.data)
-    return res.data
+    return { data: res.data, error: null }
   }, [backend])
 
   const pauseTimer = useCallback(async () => {
     const res = await backend.pauseTimer()
-    if (res.error || !res.data) return null
+    if (res.error || !res.data) return { data: null, error: res.error }
     setActiveTimer(res.data)
-    return res.data
+    return { data: res.data, error: null }
   }, [backend])
 
   const resumeTimer = useCallback(async () => {
     const res = await backend.resumeTimer()
-    if (res.error || !res.data) return null
+    if (res.error || !res.data) return { data: null, error: res.error }
     setActiveTimer(res.data)
-    return res.data
+    return { data: res.data, error: null }
   }, [backend])
 
   const stopTimer = useCallback(async () => {
     const current = activeTimer
-    if (!current) return null
+    if (!current) return { data: null, error: 'No timer is running.' }
     const res = await backend.stopTimer(current.id)
-    if (res.error || !res.data) return null
+    if (res.error || !res.data) return { data: null, error: res.error }
     setActiveTimer(null)
     await refreshTimer()
     await refreshData()
-    return res.data
+    return { data: res.data, error: null }
   }, [backend, activeTimer, refreshData])
 
   const cancelTimer = useCallback(async () => {
