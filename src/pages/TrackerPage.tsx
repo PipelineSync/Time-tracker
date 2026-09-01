@@ -22,6 +22,7 @@ export function TrackerPage() {
   const [now, setNow] = useState(Date.now())
 
   const workerProfile = user?.workerId ? workers.find((w) => w.id === user.workerId) : null
+  const currentWorkerId = user?.workerId ?? null
   const myTimer = activeTimer && (!workerProfile || activeTimer.worker_id === workerProfile.id) ? activeTimer : null
 
   useEffect(() => {
@@ -32,12 +33,12 @@ export function TrackerPage() {
   const elapsedMs = myTimer ? timerElapsedMs(myTimer, new Date(now)) : 0
 
   async function handleClockIn() {
-    if (!workerProfile) {
-      toast.error('No worker profile linked to this account.')
+    if (!currentWorkerId) {
+      toast.error('No worker profile linked to this account. Please contact your administrator.')
       return
     }
     setStarting(true)
-    const timer = await startTimer({ worker_id: workerProfile.id })
+    const timer = await startTimer({ worker_id: currentWorkerId })
     setStarting(false)
     if (!timer) {
       toast.error('Could not clock in. A timer may already be running.')
@@ -145,7 +146,7 @@ export function TrackerPage() {
               size="lg"
               className="gap-2 bg-[#06245B] px-10 text-base hover:bg-[#0a306e] dark:bg-white dark:text-[#06245B] dark:hover:bg-white/90"
               onClick={handleClockIn}
-              disabled={starting || !workerProfile}
+              disabled={starting || !currentWorkerId}
             >
               {starting ? 'Clocking in…' : (<><LogIn className="h-5 w-5" /> Clock In</>)}
             </Button>
