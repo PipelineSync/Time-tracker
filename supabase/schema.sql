@@ -201,6 +201,13 @@ drop policy if exists "profiles_update" on public.profiles;
 create policy "profiles_update" on public.profiles
   for update using (auth.uid() = user_id or public.is_admin());
 
+-- Admin may remove other accounts' profile rows (never their own) when a
+-- worker is deleted. The matching auth user is removed server-side by the
+-- delete-worker Netlify function.
+drop policy if exists "profiles_delete" on public.profiles;
+create policy "profiles_delete" on public.profiles
+  for delete using (public.is_admin() and auth.uid() <> user_id);
+
 -- workers policies
 drop policy if exists "workers_select" on public.workers;
 create policy "workers_select" on public.workers

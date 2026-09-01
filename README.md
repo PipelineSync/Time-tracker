@@ -33,7 +33,7 @@ Workers **clock in, take breaks, and clock out** — their rate is set by the ad
 
 ### Pages
 - **Dashboard** *(admin)* — today's & this week's hours and earnings, active-worker banner, per-worker summary, recent entries, "Add time"
-- **Workers** *(admin)* — add/edit/delete workers, create each worker's login account, set hourly rate & active/inactive status
+- **Workers** *(admin)* — add/edit/delete workers, create each worker's login account, set hourly rate & active/inactive status. **Deleting a worker also permanently disables their login account** (the Supabase Auth user is removed server-side, and any open session of theirs is signed out) — they can no longer sign in.
 - **Clock In / Out** *(worker)* — big clock-in button, then break/pause/resume and clock-out; survives a page refresh. At clock-out the worker can attach an **optional note** that is saved on the time entry (the admin's clock-out notification flags that a note was added).
 - **Manual entry** *(admin)* — date, start/end time, break, project, notes, auto-calculated hours & earnings (this is how the admin adds time to workers)
 - **Time Entries** — table on desktop / cards on mobile, filters, sorting; admin can edit/delete/duplicate, workers see their own
@@ -92,6 +92,8 @@ Log in as admin to manage workers, set rates, and create worker accounts. Log in
 In the Supabase dashboard, open **SQL Editor** → **New query**, paste the entire contents of `supabase/schema.sql`, and click **Run**.
 
 This creates the `workers`, `time_entries`, `active_timers`, `settings`, and `payments` tables with foreign keys, indexes, **Row Level Security policies**, and triggers that auto-set `user_id` and `updated_at`.
+
+> **Upgrading an existing database?** If your database predates the worker-login fix, also run `supabase/fix-deleted-worker-login.sql` once. It adds the `profiles_delete` policy and permanently removes the leftover logins of workers that were deleted before the fix (so those workers can no longer sign in).
 
 ---
 

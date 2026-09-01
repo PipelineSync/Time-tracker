@@ -16,6 +16,10 @@ export interface BackendResult<T> {
   error: string | null
 }
 
+/** Shown when an account that used to work is deleted by the admin. */
+export const ACCOUNT_DEACTIVATED_MESSAGE =
+  'This account is no longer active. If you believe this is a mistake, please contact the administrator.'
+
 export interface CreateWorkerInput {
   name: string
   email?: string

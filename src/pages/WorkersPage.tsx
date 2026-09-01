@@ -127,11 +127,11 @@ export function WorkersPage() {
           open={!!deleting}
           onOpenChange={(v) => { if (!v) setDeleting(null); }}
           title={`Delete ${deleting.name}?`}
-          description="This will permanently remove the worker and all of their time entries. This cannot be undone."
+          description="This will permanently remove the worker, all of their time entries, and disable their login account so they can no longer sign in. This cannot be undone."
           confirmLabel="Delete worker"
           onConfirm={async () => {
             const ok = await deleteWorker(deleting.id)
-            if (ok) toast.success('Worker deleted.')
+            if (ok) toast.success('Worker deleted — their login has been disabled.')
             else toast.error('Failed to delete worker.')
           }}
         />
