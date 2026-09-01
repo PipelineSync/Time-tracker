@@ -83,6 +83,7 @@ interface StoreValue {
 
   settleWorker: (workerId: string, note?: string) => Promise<Payment | null>
   updatePaymentStatus: (id: string, status: PaymentStatus) => Promise<Payment | null>
+  updatePaymentNote: (id: string, note: string | null) => Promise<Payment | null>
   deletePayment: (id: string) => Promise<boolean>
 }
 
@@ -353,6 +354,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return res.data
   }, [backend, refreshData])
 
+  const updatePaymentNote = useCallback(async (id: string, note: string | null) => {
+    const res = await backend.updatePaymentNote(id, note)
+    if (res.error || !res.data) return null
+    await refreshData()
+    return res.data
+  }, [backend, refreshData])
+
   const deletePayment = useCallback(async (id: string) => {
     const res = await backend.deletePayment(id)
     if (res.error) return false
@@ -402,6 +410,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     markNotificationsRead,
     settleWorker,
     updatePaymentStatus,
+    updatePaymentNote,
     deletePayment,
   }
 

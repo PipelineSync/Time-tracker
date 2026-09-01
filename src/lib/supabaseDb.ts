@@ -599,6 +599,15 @@ export const supabaseBackend: DataBackend = {
     return ok(p)
   },
 
+  async updatePaymentNote(id, note: string | null) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (me.data!.role !== 'admin') return fail('Only the admin can update payment notes.')
+    const { data, error } = await client().from('payments').update({ note }).eq('id', id).select().single()
+    if (error) return fail(error.message)
+    return ok(data as Payment)
+  },
+
   async deletePayment(id) {
     const me = await requireUser()
     if (me.error) return fail(me.error)

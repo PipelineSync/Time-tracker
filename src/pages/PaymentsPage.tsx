@@ -7,9 +7,18 @@ import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/EmptyState'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Textarea } from '@/components/ui/textarea'
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { Wallet, Trash2 } from 'lucide-react'
+import { Wallet, Trash2, Pencil } from 'lucide-react'
 import type { Payment, PaymentStatus } from '@/lib/types'
 import { money, formatMinutes, formatDate } from '@/lib/utils'
 
@@ -20,10 +29,13 @@ const statusBadge: Record<PaymentStatus, 'muted' | 'success' | 'outline'> = {
 }
 
 export function PaymentsPage() {
-  const { payments, workers, settings, isAdmin, dataLoading, updatePaymentStatus, deletePayment } = useStore()
+  const { payments, workers, settings, isAdmin, dataLoading, updatePaymentStatus, updatePaymentNote, deletePayment } = useStore()
   const currency = settings?.currency || 'USD'
   const [statusFilter, setStatusFilter] = useState<'all' | PaymentStatus>('all')
   const [deleting, setDeleting] = useState<Payment | null>(null)
+  const [editing, setEditing] = useState<Payment | null>(null)
+  const [editNote, setEditNote] = useState('')
+  const [editSaving, setEditSaving] = useState(false)
 
   const workerName = (id: string) => workers.find((w) => w.id === id)?.name || 'Worker'
 
@@ -100,6 +112,7 @@ export function PaymentsPage() {
                   <th className="px-3 py-2 font-medium">Worker</th>
                   <th className="px-3 py-2 font-medium">Hours</th>
                   <th className="px-3 py-2 font-medium">Amount</th>
+                  <th className="px-3 py-2 font-medium">Note</th>
                   <th className="px-3 py-2 font-medium">Status</th>
                   {isAdmin && <th className="px-3 py-2 text-right font-medium">Actions</th>}
                 </tr>
@@ -111,6 +124,22 @@ export function PaymentsPage() {
                     <td className="px-3 py-3 font-medium">{workerName(p.worker_id)}</td>
                     <td className="px-3 py-3">{formatMinutes(p.hours * 60)}</td>
                     <td className="px-3 py-3 font-semibold">{money(p.amount, currency)}</td>
+                    <td className="px-3 py-3 max-w-[200px]">
+                      <div className="flex items-center gap-1.5">
+                        <span className="truncate text-xs text-muted-foreground" title={p.note || ''}>
+                          {p.note || <span className="italic text-muted-foreground/60">—</span>}
+                        </span>
+                        {isAdmin && (
+                          <button
+                            className="shrink-0 rounded p-0.5 text-muted-foreground hover:text-foreground hover:bg-muted"
+                            onClick={() => { setEditing(p); setEditNote(p.note || '') }}
+                            aria-label="Edit note"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </td>
                     <td className="px-3 py-3">
                       <Badge variant={statusBadge[p.status]} className="capitalize">{p.status}</Badge>
                     </td>
@@ -154,6 +183,46 @@ export function PaymentsPage() {
           }}
         />
       )}
+
+      <Dialog open={!!editing} onOpenChange={(v) => { if (!v) setEditing(null) }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Edit settlement note</DialogTitle>
+            <DialogDescription>
+              Update the note for the {money(editing?.amount || 0, currency)} payment to {editing ? workerName(editing.worker_id) : ''}.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Note</label>
+            <Textarea
+              value={editNote}
+              onChange={(e) => setEditNote(e.target.value)}
+              placeholder="e.g. Weekly settlement, bonus adjustment…"
+              className="min-h-[80px]"
+            />
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setEditing(null)} disabled={editSaving}>Cancel</Button>
+            <Button
+              onClick={async () => {
+                if (!editing) return
+                setEditSaving(true)
+                const res = await updatePaymentNote(editing.id, editNote.trim() || null)
+                setEditSaving(false)
+                if (res) {
+                  toast.success('Note updated.')
+                  setEditing(null)
+                } else {
+                  toast.error('Failed to update note.')
+                }
+              }}
+              disabled={editSaving}
+            >
+              {editSaving ? 'Saving…' : 'Save note'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
