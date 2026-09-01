@@ -57,8 +57,11 @@ create table if not exists public.active_timers (
   created_at    timestamptz not null default now()
 );
 
--- Enforce only one active timer per user at the database level.
-create unique index if not exists active_timers_one_per_user on public.active_timers (user_id);
+-- Enforce only one active timer per worker at the database level. Rows are
+-- owned by the workspace admin (user_id), so a user_id unique index would
+-- incorrectly prevent multiple workers from clocking in at the same time.
+drop index if exists active_timers_one_per_user;
+create unique index if not exists active_timers_one_per_worker on public.active_timers (worker_id);
 create index if not exists active_timers_worker_id_idx on public.active_timers (worker_id);
 
 -- ---------- time_entry_comments (notes / chat on entries) ----------
@@ -79,7 +82,7 @@ create table if not exists public.notifications (
   id         uuid primary key default gen_random_uuid(),
   user_id    uuid not null references auth.users (id) on delete cascade,
   entry_id   uuid references public.time_entries (id) on delete cascade,
-  type       text not null default 'note' check (type in ('note','time_in','time_out','time_added')),
+  type       text not null default 'note' check (type in ('note','time_in','time_out','time_added','payment')),
   message    text not null,
   read       boolean not null default false,
   created_at timestamptz not null default now()
@@ -143,14 +146,46 @@ alter table public.notifications      enable row level security;
 alter table public.payments           enable row level security;
 
 create or replace function public.is_admin()
-returns boolean language sql stable as $$
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
   select exists (select 1 from public.profiles
                  where user_id = auth.uid() and role = 'admin');
 $$;
 
 create or replace function public.current_worker_id()
-returns uuid language sql stable as $$
+returns uuid
+language sql
+stable
+security definer
+set search_path = public
+as $$
   select worker_id from public.profiles where user_id = auth.uid();
+$$;
+
+-- Resolve the admin user_id that owns the current signed-in user's workspace.
+-- Admin-owned tables keep user_id set to this workspace owner, even when a
+-- worker creates a timer/entry from their own login. This lets the admin see
+-- worker clock-outs in Dashboard, Time Entries, and Reports.
+create or replace function public.workspace_owner_id()
+returns uuid
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select coalesce(
+    (select p.user_id from public.profiles p where p.user_id = auth.uid() and p.role = 'admin'),
+    (
+      select w.user_id
+      from public.profiles p
+      join public.workers w on w.id = p.worker_id
+      where p.user_id = auth.uid() and p.role = 'worker'
+    )
+  );
 $$;
 
 -- profiles policies (users read their own profile; admin can read all)
@@ -190,7 +225,10 @@ create policy "time_entries_select" on public.time_entries
 
 drop policy if exists "time_entries_insert" on public.time_entries;
 create policy "time_entries_insert" on public.time_entries
-  for insert with check (auth.uid() = user_id and public.is_admin());
+  for insert with check (
+    (auth.uid() = user_id and public.is_admin())
+    or (worker_id = public.current_worker_id() and user_id = public.workspace_owner_id())
+  );
 
 drop policy if exists "time_entries_update" on public.time_entries;
 create policy "time_entries_update" on public.time_entries
@@ -211,7 +249,11 @@ create policy "active_timers_insert" on public.active_timers
 
 drop policy if exists "active_timers_insert_worker" on public.active_timers;
 create policy "active_timers_insert_worker" on public.active_timers
-  for insert with check (worker_id = public.current_worker_id() and worker_id is not null);
+  for insert with check (
+    worker_id = public.current_worker_id()
+    and worker_id is not null
+    and user_id = public.workspace_owner_id()
+  );
 
 drop policy if exists "active_timers_update" on public.active_timers;
 create policy "active_timers_update" on public.active_timers
@@ -224,7 +266,7 @@ create policy "active_timers_delete" on public.active_timers
 -- settings policies (admin only for writes; workers may read)
 drop policy if exists "settings_select" on public.settings;
 create policy "settings_select" on public.settings
-  for select using (auth.role() = 'authenticated');
+  for select using (user_id = public.workspace_owner_id());
 
 drop policy if exists "settings_insert" on public.settings;
 create policy "settings_insert" on public.settings
@@ -248,10 +290,16 @@ create policy "comments_select" on public.time_entry_comments
 
 drop policy if exists "comments_insert" on public.time_entry_comments;
 create policy "comments_insert" on public.time_entry_comments
-  for insert with check (public.is_admin() or exists (
-    select 1 from public.time_entries e
-    where e.id = entry_id and e.worker_id = public.current_worker_id()
-  ));
+  for insert with check (
+    author_id = auth.uid()
+    and (
+      public.is_admin()
+      or exists (
+        select 1 from public.time_entries e
+        where e.id = entry_id and e.worker_id = public.current_worker_id()
+      )
+    )
+  );
 
 -- notifications policies (users manage their own notifications)
 drop policy if exists "notifications_select" on public.notifications;
@@ -260,7 +308,11 @@ create policy "notifications_select" on public.notifications
 
 drop policy if exists "notifications_insert" on public.notifications;
 create policy "notifications_insert" on public.notifications
-  for insert with check (public.is_admin() or auth.uid() = user_id);
+  for insert with check (
+    public.is_admin()
+    or auth.uid() = user_id
+    or user_id = public.workspace_owner_id()
+  );
 
 drop policy if exists "notifications_update" on public.notifications;
 create policy "notifications_update" on public.notifications
@@ -295,11 +347,18 @@ end $$;
 
 create or replace function public.set_user_id()
 returns trigger language plpgsql as $$
+declare
+  owner_id uuid;
 begin
-  -- Browser writes are always scoped to the signed-in user.
-  -- Server-side admin automation may provide an explicit user_id.
+  -- Browser writes are always scoped to the workspace owner. For workers this
+  -- is the admin who owns their worker row, not the worker auth user. Server-
+  -- side admin automation using the service role has no auth.uid() and may
+  -- provide an explicit user_id.
   if auth.uid() is not null then
-    new.user_id = auth.uid();
+    owner_id := public.workspace_owner_id();
+    if owner_id is not null then
+      new.user_id = owner_id;
+    end if;
   end if;
   return new;
 end $$;
@@ -319,6 +378,10 @@ create trigger trg_active_timers_user before insert on public.active_timers
 
 drop trigger if exists trg_settings_user on public.settings;
 create trigger trg_settings_user before insert on public.settings
+  for each row execute function public.set_user_id();
+
+drop trigger if exists trg_payments_user on public.payments;
+create trigger trg_payments_user before insert on public.payments
   for each row execute function public.set_user_id();
 
 drop trigger if exists trg_workers_updated on public.workers;

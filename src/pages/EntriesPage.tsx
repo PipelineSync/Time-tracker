@@ -42,26 +42,34 @@ export function EntriesPage() {
   const currency = settings?.currency || 'USD'
 
   useEffect(() => {
+    const next = new URLSearchParams(params)
     const newParam = params.get('new')
     const workerParam = params.get('worker')
     const entryParam = params.get('entry')
+    let changed = false
+
     if (newParam === '1') {
       setFormOpen(true)
-      params.delete('new')
+      next.delete('new')
+      changed = true
     }
     if (workerParam) {
       setWorkerFilter(workerParam)
-      params.delete('worker')
+      next.delete('worker')
+      changed = true
     }
     if (entryParam) {
       const e = entries.find((x) => x.id === entryParam)
       if (e) {
         setChatEntry(e)
         setChatOpen(true)
+        next.delete('entry')
+        changed = true
       }
-      params.delete('entry')
+      // If the entries are still loading, keep the entry param so the chat can
+      // open as soon as the worker/admin data arrives from Supabase.
     }
-    if (newParam === '1' || workerParam || entryParam) setParams(params, { replace: true })
+    if (changed) setParams(next, { replace: true })
   }, [params, setParams, entries])
 
   const projects = useMemo(() => {

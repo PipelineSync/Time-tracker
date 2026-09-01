@@ -74,9 +74,15 @@ async function requireUser(): Promise<BackendResult<AuthUser>> {
   return ok(u)
 }
 
-/** The workspace admin's auth user id (the profile with role 'admin'). */
+/** The workspace admin's auth user id for the signed-in user's workspace. */
 async function getAdminUserId(): Promise<string | null> {
-  const { data } = await client().from('profiles').select('user_id').eq('role', 'admin').maybeSingle()
+  const sb = client()
+  // Workers cannot read the admin profile directly under RLS, so use the
+  // SECURITY DEFINER helper from the schema/migration. Keep the old profile
+  // lookup as a fallback for databases that have not applied the helper yet.
+  const rpc = await sb.rpc('workspace_owner_id')
+  if (!rpc.error && rpc.data) return rpc.data as string
+  const { data } = await sb.from('profiles').select('user_id').eq('role', 'admin').maybeSingle()
   return data?.user_id ?? null
 }
 
@@ -376,8 +382,8 @@ export const supabaseBackend: DataBackend = {
       total_pause_ms: 0,
     }).select().single()
     if (error) {
-      // 23505 = unique violation on active_timers_one_per_user (user_id):
-      // a leftover timer row is occupying this user's slot.
+      // 23505 = unique violation on active_timers_one_per_worker: this
+      // worker already has an unfinished timer row.
       if ((error as { code?: string }).code === '23505') {
         return fail('You have an unfinished timer from a previous session. Refresh the page to load it, then clock out before starting a new one.')
       }
@@ -565,6 +571,7 @@ export const supabaseBackend: DataBackend = {
     }
     const now = new Date()
     const { data, error } = await sb.from('payments').insert({
+      user_id: me.data!.id,
       worker_id: workerId,
       amount: Math.round(earnings * 100) / 100,
       hours: Math.round((totalMinutes / 60) * 100) / 100,
