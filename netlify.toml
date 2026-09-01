@@ -9,3 +9,8 @@
   from = "/*"
   to = "/index.html"
   status = 200
+
+# Daily keep-alive ping so the free-tier Supabase project never pauses
+# (Netlify cron runs in UTC; "@daily" = 00:00 UTC = 8:00 AM PHT).
+[functions."supabase-keepalive"]
+  schedule = "@daily"
