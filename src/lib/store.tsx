@@ -19,7 +19,7 @@ import type {
   Payment,
   PaymentStatus,
 } from './types'
-import type { DataBackend, CreateWorkerInput } from './backend'
+import type { DataBackend, CreateWorkerInput, BackendResult } from './backend'
 import { localBackend } from './localDb'
 import { supabaseBackend, isSupabaseConfigured } from './supabaseDb'
 
@@ -67,10 +67,10 @@ interface StoreValue {
   deleteEntry: (id: string) => Promise<boolean>
   duplicateEntry: (entry: TimeEntry) => Promise<boolean>
 
-  startTimer: (input: { worker_id: string; project?: string; notes?: string; hourly_rate?: number }) => Promise<ActiveTimer | null>
-  pauseTimer: () => Promise<ActiveTimer | null>
-  resumeTimer: () => Promise<ActiveTimer | null>
-  stopTimer: () => Promise<TimeEntry | null>
+  startTimer: (input: { worker_id: string; project?: string; notes?: string; hourly_rate?: number }) => Promise<BackendResult<ActiveTimer>>
+  pauseTimer: () => Promise<BackendResult<ActiveTimer>>
+  resumeTimer: () => Promise<BackendResult<ActiveTimer>>
+  stopTimer: () => Promise<BackendResult<TimeEntry>>
   cancelTimer: () => Promise<void>
 
   saveSettings: (patch: Partial<Settings>) => Promise<Settings | null>
@@ -249,34 +249,34 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const startTimer = useCallback(async (input: { worker_id: string; project?: string; notes?: string; hourly_rate?: number }) => {
     const res = await backend.startTimer(input)
-    if (res.error || !res.data) return null
+    if (res.error || !res.data) return { data: null, error: res.error }
     setActiveTimer(res.data)
-    return res.data
+    return { data: res.data, error: null }
   }, [backend])
 
   const pauseTimer = useCallback(async () => {
     const res = await backend.pauseTimer()
-    if (res.error || !res.data) return null
+    if (res.error || !res.data) return { data: null, error: res.error }
     setActiveTimer(res.data)
-    return res.data
+    return { data: res.data, error: null }
   }, [backend])
 
   const resumeTimer = useCallback(async () => {
     const res = await backend.resumeTimer()
-    if (res.error || !res.data) return null
+    if (res.error || !res.data) return { data: null, error: res.error }
     setActiveTimer(res.data)
-    return res.data
+    return { data: res.data, error: null }
   }, [backend])
 
   const stopTimer = useCallback(async () => {
     const current = activeTimer
-    if (!current) return null
+    if (!current) return { data: null, error: 'No timer is running.' }
     const res = await backend.stopTimer(current.id)
-    if (res.error || !res.data) return null
+    if (res.error || !res.data) return { data: null, error: res.error }
     setActiveTimer(null)
     await refreshTimer()
     await refreshData()
-    return res.data
+    return { data: res.data, error: null }
   }, [backend, activeTimer, refreshData])
 
   const cancelTimer = useCallback(async () => {

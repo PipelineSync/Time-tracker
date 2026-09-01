@@ -23,7 +23,9 @@ export function TrackerPage() {
 
   const workerProfile = user?.workerId ? workers.find((w) => w.id === user.workerId) : null
   const currentWorkerId = user?.workerId ?? null
-  const myTimer = activeTimer && (!workerProfile || activeTimer.worker_id === workerProfile.id) ? activeTimer : null
+  // The backend already scopes activeTimer to the signed-in worker (including
+  // self-healed leftovers from a previous session), so no extra matching here.
+  const myTimer = activeTimer ?? null
 
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000)
@@ -38,20 +40,27 @@ export function TrackerPage() {
       return
     }
     setStarting(true)
-    const timer = await startTimer({ worker_id: currentWorkerId })
+    const res = await startTimer({ worker_id: currentWorkerId })
     setStarting(false)
-    if (!timer) {
-      toast.error('Could not clock in. A timer may already be running.')
+    if (res.error || !res.data) {
+      toast.error(res.error || 'Could not clock in. Please try again.')
       return
     }
-    toast.success('Clocked in.')
+    // If the backend handed back an existing (unfinished) timer instead of
+    // creating one, say so rather than pretending it's a fresh start.
+    const startedAgoMs = Date.now() - new Date(res.data.start_time).getTime()
+    if (startedAgoMs > 2 * 60 * 1000) {
+      toast.success(`Resumed your unfinished timer from ${new Date(res.data.start_time).toLocaleString()} — clock out when ready.`, { duration: 8000 })
+    } else {
+      toast.success('Clocked in.')
+    }
   }
 
   async function handlePause() {
     setBusy(true)
     const t = await pauseTimer()
     setBusy(false)
-    if (!t) toast.error('Could not pause.')
+    if (t.error || !t.data) toast.error(t.error || 'Could not pause.')
     else toast.success('On break.')
   }
 
@@ -59,19 +68,19 @@ export function TrackerPage() {
     setBusy(true)
     const t = await resumeTimer()
     setBusy(false)
-    if (!t) toast.error('Could not resume.')
+    if (t.error || !t.data) toast.error(t.error || 'Could not resume.')
     else toast.success('Back to work.')
   }
 
   async function handleStop() {
     setBusy(true)
-    const entry = await stopTimer()
+    const res = await stopTimer()
     setBusy(false)
-    if (!entry) {
-      toast.error('Failed to save time.')
+    if (res.error || !res.data) {
+      toast.error(res.error || 'Failed to save time.')
       return
     }
-    toast.success(`Clocked out — ${formatMinutes(entry.total_minutes)} · ${money(entry.earnings, settings?.currency || 'USD')}`)
+    toast.success(`Clocked out — ${formatMinutes(res.data.total_minutes)} · ${money(res.data.earnings, settings?.currency || 'USD')}`)
   }
 
   if (dataLoading && workers.length === 0 && !user?.workerId) {

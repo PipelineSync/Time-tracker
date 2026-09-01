@@ -313,25 +313,52 @@ export const supabaseBackend: DataBackend = {
   async getActiveTimer() {
     const me = await requireUser()
     if (me.error) return fail(me.error)
+    const sb = client()
     if (me.data!.role === 'worker' && me.data!.workerId) {
-      const { data, error } = await client().from('active_timers').select('*').eq('worker_id', me.data!.workerId).maybeSingle()
+      const wid = me.data!.workerId
+      // Fetch timers that belong to this worker OR occupy this auth user's
+      // single-timer slot (unique index on user_id). A stale row whose
+      // worker_id no longer matches the profile link would otherwise block
+      // new clock-ins with an invisible "duplicate key" error.
+      const { data, error } = await sb
+        .from('active_timers')
+        .select('*')
+        .or(`worker_id.eq.${wid},user_id.eq.${me.data!.id}`)
+        .order('start_time', { ascending: false })
+        .limit(10)
       if (error) return fail(error.message)
-      return ok(data as ActiveTimer | null)
+      const rows = (data as ActiveTimer[]) || []
+      if (rows.length === 0) return ok(null)
+      const [survivor, ...stale] = rows
+      // Point the surviving timer at the worker's current row (the link may
+      // have been repaired/re-created since it was started) and drop the rest.
+      if (survivor.worker_id !== wid) {
+        const upd = await sb.from('active_timers').update({ worker_id: wid }).eq('id', survivor.id).select().single()
+        if (!upd.error && upd.data) survivor.worker_id = wid
+      }
+      for (const s of stale) await sb.from('active_timers').delete().eq('id', s.id)
+      return ok(survivor)
     }
-    const { data, error } = await client().from('active_timers').select('*').maybeSingle()
+    const { data, error } = await sb.from('active_timers').select('*').order('start_time', { ascending: false }).limit(1)
     if (error) return fail(error.message)
-    return ok(data as ActiveTimer | null)
+    return ok(((data as ActiveTimer[]) || [])[0] ?? null)
   },
 
   async startTimer(input) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
     const existing = await this.getActiveTimer()
-    if (existing.data) return fail('A timer is already running.')
+    if (existing.data) {
+      // Workers clocking in again simply pick up their unfinished timer
+      // instead of dead-ending on "already running".
+      if (me.data!.role === 'worker') return ok(existing.data)
+      return fail('A timer is already running.')
+    }
     let workerId = input.worker_id
     let rate = input.hourly_rate
     if (me.data!.role === 'worker') {
-      workerId = me.data!.workerId || ''
+      if (!me.data!.workerId) return fail('Your account is not linked to a worker profile yet. Please ask your administrator to fix this.')
+      workerId = me.data!.workerId
       const { data: w } = await client().from('workers').select('hourly_rate').eq('id', workerId).single()
       rate = w?.hourly_rate ?? 0
     } else {
@@ -348,7 +375,14 @@ export const supabaseBackend: DataBackend = {
       pause_start: null,
       total_pause_ms: 0,
     }).select().single()
-    if (error) return fail(error.message)
+    if (error) {
+      // 23505 = unique violation on active_timers_one_per_user (user_id):
+      // a leftover timer row is occupying this user's slot.
+      if ((error as { code?: string }).code === '23505') {
+        return fail('You have an unfinished timer from a previous session. Refresh the page to load it, then clock out before starting a new one.')
+      }
+      return fail(error.message)
+    }
     // Notify the admin when a worker clocks in.
     if (me.data!.role === 'worker') {
       const adminId = await getAdminUserId()
