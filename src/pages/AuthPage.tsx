@@ -12,11 +12,12 @@ import { Loader2, ShieldCheck, Eye, EyeOff, TriangleAlert, Database } from 'luci
 const supabaseReady = isSupabaseConfigured()
 
 export function AuthPage() {
-  const { signIn } = useStore()
+  const { signIn, resetPassword } = useStore()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [sendingReset, setSendingReset] = useState(false)
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -24,6 +25,19 @@ export function AuthPage() {
     const err = await signIn(email, password)
     setLoading(false)
     if (err) toast.error(err)
+  }
+
+  async function handleForgotPassword() {
+    const trimmed = email.trim()
+    if (!trimmed) {
+      toast.error('Type your email in the field above, then click "Forgot password?".')
+      return
+    }
+    setSendingReset(true)
+    const err = await resetPassword(trimmed)
+    setSendingReset(false)
+    if (err) toast.error(err)
+    else toast.success(`Password reset email sent to ${trimmed} — check your inbox (and spam folder).`)
   }
 
   return (
@@ -102,6 +116,16 @@ export function AuthPage() {
               <Button type="submit" className="w-full" disabled={loading}>
                 {loading && <Loader2 className="animate-spin" />} Sign in
               </Button>
+              {supabaseReady && (
+                <button
+                  type="button"
+                  onClick={handleForgotPassword}
+                  disabled={sendingReset}
+                  className="w-full text-center text-sm text-muted-foreground hover:text-foreground disabled:opacity-60"
+                >
+                  {sendingReset ? 'Sending reset email…' : 'Forgot password?'}
+                </button>
+              )}
             </form>
           </CardContent>
         </Card>
