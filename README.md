@@ -34,7 +34,7 @@ Workers **clock in, take breaks, and clock out** — their rate is set by the ad
 ### Pages
 - **Dashboard** *(admin)* — today's & this week's hours and earnings, active-worker banner, per-worker summary, recent entries, "Add time"
 - **Workers** *(admin)* — add/edit/delete workers, create each worker's login account, set hourly rate & active/inactive status
-- **Clock In / Out** *(worker)* — big clock-in button, then break/pause/resume and clock-out; survives a page refresh
+- **Clock In / Out** *(worker)* — big clock-in button, then break/pause/resume and clock-out; survives a page refresh. At clock-out the worker can attach an **optional note** that is saved on the time entry (the admin's clock-out notification flags that a note was added).
 - **Manual entry** *(admin)* — date, start/end time, break, project, notes, auto-calculated hours & earnings (this is how the admin adds time to workers)
 - **Time Entries** — table on desktop / cards on mobile, filters, sorting; admin can edit/delete/duplicate, workers see their own
 - **Notes / chat** — every entry has a conversation thread: workers add notes, the admin replies (and vice versa), both sides are notified

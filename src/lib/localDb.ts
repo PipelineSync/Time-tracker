@@ -484,12 +484,13 @@ export const localBackend: DataBackend = {
     return { data: t, error: null }
   },
 
-  async stopTimer(timerId) {
+  async stopTimer(timerId, note) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
     const timer = c.data.activeTimer
     if (!timer || timer.id !== timerId) return { data: null, error: 'No active timer found.' }
     if (c.user.role === 'worker' && timer.worker_id !== c.user.workerId) return { data: null, error: 'Not your timer.' }
+    const clockOutNote = typeof note === 'string' && note.trim() ? note.trim().slice(0, 2000) : null
     const end = new Date()
     let totalPause = timer.total_pause_ms || 0
     if (timer.paused && timer.pause_start) {
@@ -506,7 +507,7 @@ export const localBackend: DataBackend = {
       start_time: timer.start_time,
       end_time: end.toISOString(),
       break_minutes: breakMinutes,
-      notes: timer.notes || null,
+      notes: [timer.notes, clockOutNote].filter(Boolean).join('\n') || null,
       hourly_rate: rate,
       total_minutes: totalMinutes,
       earnings: computeEarnings(totalMinutes, rate),
@@ -520,7 +521,7 @@ export const localBackend: DataBackend = {
       pushNotification(c.data, c.admin.id, {
         entry_id: entry.id,
         type: 'time_out',
-        message: `${workerName(c.data, entry.worker_id)} clocked out — ${formatMinutes(entry.total_minutes)}`,
+        message: `${workerName(c.data, entry.worker_id)} clocked out — ${formatMinutes(entry.total_minutes)}${clockOutNote ? ' · added a note' : ''}`,
       })
     }
     save(c.data)

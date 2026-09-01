@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button'
 import { TimerDisplay } from '@/components/TimerDisplay'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { ClockOutDialog } from '@/components/ClockOutDialog'
 import { toast } from 'sonner'
 import { Square, Pause, PlayCircle, LogIn, TimerReset } from 'lucide-react'
 import { formatMinutes, money, timerElapsedMs } from '@/lib/utils'
@@ -19,6 +20,7 @@ export function TrackerPage() {
   const [starting, setStarting] = useState(false)
   const [busy, setBusy] = useState(false)
   const [confirmCancel, setConfirmCancel] = useState(false)
+  const [clockOutOpen, setClockOutOpen] = useState(false)
   const [now, setNow] = useState(Date.now())
 
   const workerProfile = user?.workerId ? workers.find((w) => w.id === user.workerId) : null
@@ -72,15 +74,18 @@ export function TrackerPage() {
     else toast.success('Back to work.')
   }
 
-  async function handleStop() {
+  async function handleStop(note?: string) {
     setBusy(true)
-    const res = await stopTimer()
+    const res = await stopTimer(note)
     setBusy(false)
     if (res.error || !res.data) {
       toast.error(res.error || 'Failed to save time.')
       return
     }
-    toast.success(`Clocked out — ${formatMinutes(res.data.total_minutes)} · ${money(res.data.earnings, settings?.currency || 'USD')}`)
+    setClockOutOpen(false)
+    toast.success(
+      `Clocked out — ${formatMinutes(res.data.total_minutes)} · ${money(res.data.earnings, settings?.currency || 'USD')}${note?.trim() ? ' · note saved' : ''}`
+    )
   }
 
   if (dataLoading && workers.length === 0 && !user?.workerId) {
@@ -94,6 +99,11 @@ export function TrackerPage() {
 
   const running = !!myTimer && !myTimer.paused
   const paused = !!myTimer && myTimer.paused
+
+  const breakMs = myTimer
+    ? (myTimer.total_pause_ms || 0) +
+      (myTimer.paused && myTimer.pause_start ? Math.max(0, now - new Date(myTimer.pause_start).getTime()) : 0)
+    : 0
 
   return (
     <div className="space-y-6">
@@ -128,7 +138,7 @@ export function TrackerPage() {
                   <PlayCircle className="h-5 w-5" /> Resume
                 </Button>
               )}
-              <Button size="lg" variant="default" className="gap-2 bg-[#06245B] hover:bg-[#0a306e] dark:bg-white dark:text-[#06245B] dark:hover:bg-white/90" onClick={handleStop} disabled={busy}>
+              <Button size="lg" variant="default" className="gap-2 bg-[#06245B] hover:bg-[#0a306e] dark:bg-white dark:text-[#06245B] dark:hover:bg-white/90" onClick={() => setClockOutOpen(true)} disabled={busy}>
                 {busy ? 'Saving…' : (<><Square className="h-5 w-5" /> Clock Out</>)}
               </Button>
               <Button size="lg" variant="outline" onClick={() => setConfirmCancel(true)}>
@@ -177,6 +187,16 @@ export function TrackerPage() {
           }}
         />
       )}
+
+      <ClockOutDialog
+        open={clockOutOpen}
+        onOpenChange={setClockOutOpen}
+        workedLabel={formatMinutes(Math.max(0, Math.round(elapsedMs / 60000)))}
+        breakLabel={breakMs >= 60000 ? formatMinutes(Math.max(0, Math.round(breakMs / 60000))) : null}
+        onConfirm={async (note) => {
+          await handleStop(note)
+        }}
+      />
     </div>
   )
 }
