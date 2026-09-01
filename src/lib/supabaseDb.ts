@@ -10,6 +10,7 @@ import type {
   PaymentStatus,
 } from './types'
 import type { BackendResult, DataBackend, CreateWorkerInput } from './backend'
+import { ACCOUNT_DEACTIVATED_MESSAGE } from './backend'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { computeEarnings, computeTotalMinutes, formatMinutes, formatDate } from './utils'
 
@@ -33,15 +34,37 @@ function mapErr(e: unknown): string {
 const ok = <T,>(data: T | null): BackendResult<T> => ({ data, error: null })
 const fail = <T,>(error: string): BackendResult<T> => ({ data: null, error })
 
-async function getAuthUser(): Promise<AuthUser | null> {
+type AuthLookup =
+  | { status: 'authenticated'; user: AuthUser }
+  | { status: 'signed-out' }
+  /** The auth user exists but no longer has a valid account in this workspace
+   * (e.g. the admin deleted the worker). Login must be refused and any open
+   * session signed out. */
+  | { status: 'deactivated' }
+  /** Could not verify the account (e.g. transient network error). Callers
+   * should treat this as "keep the current state and retry later", never as
+   * a deactivation. */
+  | { status: 'unknown'; error: string }
+
+export { ACCOUNT_DEACTIVATED_MESSAGE }
+
+async function getAuthUser(): Promise<AuthLookup> {
   const sb = client()
-  const { data } = await sb.auth.getUser()
-  if (!data?.user) return null
-  let { data: profile } = await sb.from('profiles').select('role, worker_id').eq('user_id', data.user.id).maybeSingle()
+  const { data, error } = await sb.auth.getUser()
+  if (!data?.user) {
+    return error ? { status: 'unknown', error: error.message } : { status: 'signed-out' }
+  }
+  const { data: profileData, error: profileError } = await sb
+    .from('profiles')
+    .select('role, worker_id')
+    .eq('user_id', data.user.id)
+    .maybeSingle()
+  if (profileError) return { status: 'unknown', error: profileError.message }
+  let profile = profileData
 
   // Older worker accounts may have been created before the worker/profile link
   // was added. Repair that link once, server-side, using the authenticated email.
-  if (!profile || (profile.role === 'worker' && !profile.worker_id)) {
+  if (profile?.role === 'worker' && !profile.worker_id) {
     const session = await sb.auth.getSession()
     const accessToken = session.data.session?.access_token
     if (accessToken) {
@@ -55,23 +78,48 @@ async function getAuthUser(): Promise<AuthUser | null> {
           profile = repaired.data ?? profile
         }
       } catch {
-        // Keep the existing profile state; the UI can still report a missing link.
+        // Keep the existing profile state; the check below decides what to do.
       }
     }
   }
 
+  if (!profile) {
+    // No profile row: no confirmed role in this workspace. Both admin and
+    // worker accounts are provisioned with a profile, so an account without
+    // one is not a member (never fall back to 'admin').
+    return { status: 'deactivated' }
+  }
+  if (profile.role === 'worker') {
+    if (!profile.worker_id) {
+      // The link could not be repaired — the worker was deleted or never
+      // existed. This account must not be able to sign in.
+      return { status: 'deactivated' }
+    }
+    // The profile points at a worker row that no longer exists → deleted.
+    const { data: workerRow, error: workerError } = await sb
+      .from('workers')
+      .select('id')
+      .eq('id', profile.worker_id)
+      .maybeSingle()
+    if (workerError) return { status: 'unknown', error: workerError.message }
+    if (!workerRow) return { status: 'deactivated' }
+  }
+
   return {
-    id: data.user.id,
-    email: data.user.email ?? '',
-    role: profile?.role ?? 'admin',
-    workerId: profile?.worker_id ?? null,
+    status: 'authenticated',
+    user: {
+      id: data.user.id,
+      email: data.user.email ?? '',
+      role: profile.role === 'admin' ? 'admin' : 'worker',
+      workerId: profile.worker_id ?? null,
+    },
   }
 }
 
 async function requireUser(): Promise<BackendResult<AuthUser>> {
-  const u = await getAuthUser()
-  if (!u) return fail('Not signed in.')
-  return ok(u)
+  const lookup = await getAuthUser()
+  if (lookup.status !== 'authenticated') return fail('Not signed in.')
+  return ok(lookup.user)
 }
 
 /** The workspace admin's auth user id for the signed-in user's workspace. */
@@ -112,10 +160,20 @@ export const supabaseBackend: DataBackend = {
 
   async signIn(email, password) {
     const sb = client()
-    const { data, error } = await sb.auth.signInWithPassword({ email, password })
+    const { error } = await sb.auth.signInWithPassword({ email, password })
     if (error) return fail(error.message)
-    const authUser = await getAuthUser()
-    return ok(authUser || { id: data.user.id, email: data.user.email ?? email, role: 'admin', workerId: null })
+    const lookup = await getAuthUser()
+    if (lookup.status === 'deactivated') {
+      // The credentials are valid in Supabase Auth, but the account no longer
+      // exists in this workspace (e.g. the admin deleted the worker). Refuse
+      // entry and drop the just-created session.
+      await sb.auth.signOut()
+      return fail(ACCOUNT_DEACTIVATED_MESSAGE)
+    }
+    if (lookup.status === 'authenticated') return ok(lookup.user)
+    // signed-out / transient error — never fall back to a role guess.
+    await sb.auth.signOut()
+    return fail('Could not verify this account. Please try again.')
   },
 
   async signOut() {
@@ -123,8 +181,18 @@ export const supabaseBackend: DataBackend = {
   },
 
   async getSession() {
-    const u = await getAuthUser()
-    return ok(u)
+    const lookup = await getAuthUser()
+    if (lookup.status === 'deactivated') {
+      // Account was deleted (or otherwise deactivated) while signed in —
+      // invalidate the local session. The ACCOUNT_DEACTIVATED_MESSAGE error
+      // tells the store to sign the user out with a specific notice.
+      await client().auth.signOut()
+      return fail(ACCOUNT_DEACTIVATED_MESSAGE)
+    }
+    if (lookup.status === 'authenticated') return ok(lookup.user)
+    if (lookup.status === 'signed-out') return ok<AuthUser>(null)
+    // Transient error: keep the current session; the next tick will retry.
+    return fail(lookup.error)
   },
 
   async resetPassword(email) {
@@ -255,6 +323,38 @@ export const supabaseBackend: DataBackend = {
     const me = await requireUser()
     if (me.error) return fail(me.error)
     if (me.data!.role !== 'admin') return fail('Only the admin can delete workers.')
+
+    // Preferred path: the privileged function also deletes the worker's
+    // Supabase Auth account, which permanently disables their login and
+    // invalidates every session they hold.
+    const auth = await client().auth.getSession()
+    const accessToken = auth.data.session?.access_token
+    if (accessToken) {
+      try {
+        const response = await fetch('/.netlify/functions/delete-worker', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({ workerId: id }),
+        })
+        const payload = await response.json().catch(() => ({})) as { ok?: boolean; error?: string }
+        // Only trust a real function response — an undeployed function falls
+        // through to the SPA index.html (status 200, non-JSON), which must not
+        // be treated as success.
+        if (response.ok && payload && payload.ok === true) return ok(null)
+        if (payload?.error) return fail(payload.error)
+        throw new Error('The server did not confirm the deletion.')
+      } catch (e) {
+        // Fall through to the direct (data-only) fallback below.
+        console.warn('[work-tracker] delete-worker function unavailable; using fallback.', e)
+      }
+    }
+
+    // Fallback (older deployments without the function, e.g. Vercel): remove
+    // the data rows directly. The deleted account is still blocked from
+    // signing in by the deactivated-account check in getAuthUser().
     const { data: prof } = await client().from('profiles').select('user_id').eq('worker_id', id).maybeSingle()
     if (prof?.user_id) {
       await client().from('profiles').delete().eq('user_id', prof.user_id)
@@ -622,6 +722,31 @@ export const supabaseBackend: DataBackend = {
     const me = await requireUser()
     if (me.error) return fail(me.error)
     if (me.data!.role !== 'admin') return fail('Only the admin can delete data.')
+
+    // Preferred path: the privileged function also deletes every worker's
+    // login account, so reset workers cannot sign in afterwards either.
+    const auth = await client().auth.getSession()
+    const accessToken = auth.data.session?.access_token
+    if (accessToken) {
+      try {
+        const response = await fetch('/.netlify/functions/delete-worker', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({ all: true }),
+        })
+        const payload = await response.json().catch(() => ({})) as { ok?: boolean; error?: string }
+        if (response.ok && payload && payload.ok === true) return ok(null)
+        if (payload?.error) return fail(payload.error)
+        throw new Error('The server did not confirm the reset.')
+      } catch (e) {
+        // Fall through to the direct (data-only) fallback below.
+        console.warn('[work-tracker] delete-worker function unavailable; using fallback.', e)
+      }
+    }
+
     await client().from('time_entries').delete().neq('id', '')
     await client().from('active_timers').delete().neq('id', '')
     await client().from('workers').delete().neq('id', '')

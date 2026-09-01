@@ -21,7 +21,8 @@ import type {
 } from './types'
 import type { DataBackend, CreateWorkerInput, BackendResult } from './backend'
 import { localBackend } from './localDb'
-import { supabaseBackend, isSupabaseConfigured } from './supabaseDb'
+import { supabaseBackend, isSupabaseConfigured, ACCOUNT_DEACTIVATED_MESSAGE } from './supabaseDb'
+import { toast } from 'sonner'
 
 function pickBackend(): DataBackend {
   if (isSupabaseConfigured()) return supabaseBackend
@@ -153,21 +154,48 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   // Keep cross-account updates fresh. Worker/admin actions happen in different
   // browser sessions, so poll lightly and refresh on focus to pick up new
-  // entries, notes, and unread notifications without requiring a reload.
+  // entries, notes, and unread notifications without requiring a reload. The
+  // session is re-validated on each tick so an account that the admin deletes
+  // (or a token that stops being valid) is signed out without a reload. A
+  // transient network error must NOT sign the user out — it just retries.
   useEffect(() => {
     if (!user) return
-    const refreshIfVisible = () => {
-      if (document.visibilityState !== 'hidden') void refreshData()
+    let stopped = false
+    const tick = async () => {
+      if (document.visibilityState === 'hidden' || stopped) return
+      const session = await backend.getSession()
+      if (stopped) return
+      if (!userRef.current) return
+      if (session.data) {
+        if (session.data.id !== userRef.current.id) setUser(session.data)
+        void refreshData()
+        return
+      }
+      // No user data. Distinguish why:
+      if (session.error === ACCOUNT_DEACTIVATED_MESSAGE) {
+        // The admin deleted this account — sign out with a specific notice.
+        toast.error('You were signed out because your account is no longer active. If this was unexpected, please contact the administrator.')
+        setUser(null)
+        return
+      }
+      if (!session.error) {
+        // Clean sign-out (e.g. an expired token that could not refresh).
+        setUser(null)
+        return
+      }
+      // Transient error — keep the session and let the next tick retry.
+      void refreshData()
     }
-    const interval = window.setInterval(refreshIfVisible, 15000)
-    window.addEventListener('focus', refreshIfVisible)
-    document.addEventListener('visibilitychange', refreshIfVisible)
+    const interval = window.setInterval(tick, 15000)
+    window.addEventListener('focus', tick)
+    document.addEventListener('visibilitychange', tick)
     return () => {
+      stopped = true
       window.clearInterval(interval)
-      window.removeEventListener('focus', refreshIfVisible)
-      document.removeEventListener('visibilitychange', refreshIfVisible)
+      window.removeEventListener('focus', tick)
+      document.removeEventListener('visibilitychange', tick)
     }
-  }, [user, refreshData])
+  }, [user, refreshData, backend])
 
   const signIn = useCallback(async (email: string, password: string) => {
     const res = await backend.signIn(email, password)

@@ -11,6 +11,7 @@ import type {
   Role,
 } from './types'
 import type { BackendResult, DataBackend, CreateWorkerInput } from './backend'
+import { ACCOUNT_DEACTIVATED_MESSAGE } from './backend'
 import { buildDemoSeed } from './demoSeed'
 import { uid, computeEarnings, computeTotalMinutes, formatMinutes, formatDate } from './utils'
 import { storage } from './storage'
@@ -100,6 +101,14 @@ function getAdmin(): StoredUser {
   return ensureAdmin()
 }
 
+/** True while the worker row behind a login account still exists. */
+function workerAccountStillValid(userId: string): boolean {
+  const u = readUsers().find((x) => x.id === userId)
+  if (!u) return false
+  if (u.role !== 'worker') return true
+  return readData(getAdmin().id).workers.some((w) => w.id === u.workerId)
+}
+
 export function getSessionUser(): AuthUser | null {
   ensureAdmin()
   const session = read<{ userId: string } | null>(SESSION_KEY, null)
@@ -107,6 +116,7 @@ export function getSessionUser(): AuthUser | null {
   const users = readUsers()
   const u = users.find((x) => x.id === session.userId)
   if (!u) return null
+  if (!workerAccountStillValid(u.id)) return null
   return { id: u.id, email: u.email, role: u.role, workerId: u.workerId ?? null }
 }
 
@@ -192,6 +202,11 @@ export const localBackend: DataBackend = {
     const normalized = email.trim().toLowerCase()
     const u = users.find((x) => x.email === normalized && x.password === password)
     if (!u) return { data: null, error: 'Invalid username or password.' }
+    if (!workerAccountStillValid(u.id)) {
+      // The worker row was deleted (or data was reset) — the login must no
+      // longer work.
+      return { data: null, error: ACCOUNT_DEACTIVATED_MESSAGE }
+    }
     write(SESSION_KEY, { userId: u.id })
     if (u.role === 'admin') {
       const data = readData(getAdmin().id)
@@ -731,6 +746,9 @@ export const localBackend: DataBackend = {
     if (!c) return { data: null, error: 'Not signed in.' }
     if (c.user.role !== 'admin') return { data: null, error: 'Only the admin can delete data.' }
     save({ workers: [], entries: [], activeTimer: null, settings: null, comments: [], notifications: [], payments: [] })
+    // Worker login accounts are gone along with their worker rows — drop them
+    // so reset workers cannot sign in again. The admin account is kept.
+    writeUsers(readUsers().filter((u) => u.role !== 'worker'))
     return { data: null, error: null }
   },
 
