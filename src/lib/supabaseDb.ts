@@ -75,6 +75,7 @@ function rememberSession(session: Session | null) {
 }
 function forgetSession() {
   lastKnownSession = null
+  invalidateAuthCache()
 }
 
 function mapErr(e: unknown): string {
@@ -146,7 +147,70 @@ async function healSession(sb: SupabaseClient): Promise<SessionState> {
   return { status: 'signed-out' }
 }
 
-async function getAuthUser(): Promise<AuthLookup> {
+/**
+ * Identity cache.
+ *
+ * Every backend method calls requireUser(), and refreshData() fires seven of
+ * them at once — without this, a single refresh made ~8 auth.getUser() network
+ * round-trips plus ~14 redundant profile/worker lookups, every 15 seconds and
+ * after every mutation. That is what made the app feel slow.
+ *
+ * So: a resolved identity is reused for AUTH_CACHE_MS, and concurrent callers
+ * share one in-flight lookup. Anything that changes who is signed in
+ * (sign in/out, deactivation) clears the cache explicitly, and the store's
+ * session tick calls getSession() with the cache bypassed so a deleted account
+ * is still detected within one tick.
+ */
+const AUTH_CACHE_MS = 30_000
+let authCache: { at: number; key: string; value: AuthLookup } | null = null
+let authInFlight: { key: string; promise: Promise<AuthLookup> } | null = null
+
+function invalidateAuthCache() {
+  authCache = null
+  authInFlight = null
+}
+
+/**
+ * Cache key for the *current* session. auth.getSession() is a local
+ * (localStorage) read, unlike auth.getUser() which is a network round-trip —
+ * so this is cheap, and it guarantees the cache can never serve one account's
+ * identity to another: a different (or absent) token yields a different key.
+ */
+async function currentAuthKey(): Promise<string> {
+  try {
+    const { data } = await client().auth.getSession()
+    const session = data.session
+    if (session) return `${session.user?.id ?? ''}:${session.access_token}`
+  } catch {
+    // Fall through to the in-page memory below.
+  }
+  if (lastKnownSession) return `${lastKnownSession.user?.id ?? ''}:${lastKnownSession.access_token}`
+  return 'anonymous'
+}
+
+/** Cached identity lookup. `force` re-validates against the auth server. */
+async function getAuthUser(opts?: { force?: boolean }): Promise<AuthLookup> {
+  if (opts?.force) invalidateAuthCache()
+  const key = await currentAuthKey()
+  const cached = authCache
+  if (cached && cached.key === key && Date.now() - cached.at < AUTH_CACHE_MS) return cached.value
+  const pending = authInFlight
+  if (pending && pending.key === key) return pending.promise
+  const promise = loadAuthUser()
+    .then((value) => {
+      // Only cache stable answers. A transient 'unknown' must be retried, not
+      // remembered for 30 seconds.
+      if (value.status !== 'unknown') authCache = { at: Date.now(), key, value }
+      return value
+    })
+    .finally(() => {
+      if (authInFlight?.promise === promise) authInFlight = null
+    })
+  authInFlight = { key, promise }
+  return promise
+}
+
+async function loadAuthUser(): Promise<AuthLookup> {
   const sb = client()
 
   // 1. Read the persisted session. supabase-js refreshes the access token by
@@ -459,7 +523,7 @@ export const supabaseBackend: DataBackend = {
     const sb = client()
     const { error } = await sb.auth.signInWithPassword({ email, password })
     if (error) return fail(error.message)
-    const lookup = await getAuthUser()
+    const lookup = await getAuthUser({ force: true })
     if (lookup.status === 'deactivated') {
       // The credentials are valid in Supabase Auth, but the account no longer
       // exists in this workspace (e.g. the admin deleted the worker). Refuse
@@ -481,7 +545,10 @@ export const supabaseBackend: DataBackend = {
   },
 
   async getSession() {
-    const lookup = await getAuthUser()
+    // Bypass the identity cache: this is the periodic liveness check that must
+    // notice a revoked token or a deleted account. It also refills the cache,
+    // so the refreshData() burst that follows costs zero extra auth calls.
+    const lookup = await getAuthUser({ force: true })
     if (lookup.status === 'deactivated') {
       // Account was deleted (or otherwise deactivated) while signed in —
       // invalidate the local session. The ACCOUNT_DEACTIVATED_MESSAGE error

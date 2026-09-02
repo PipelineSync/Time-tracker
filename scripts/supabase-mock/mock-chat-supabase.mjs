@@ -382,7 +382,18 @@ export function createClient() {
           ? { data: { user: { id: state.authUser.id, email: state.authUser.email } }, error: null }
           : { data: { user: null }, error: null },
       getSession: async () => ({
-        data: { session: state.authUser ? { access_token: 'mock-token' } : null },
+        // A real Supabase session carries the signed-in user and a per-user
+        // access token; mirror that so code keyed on the session (e.g. the
+        // identity cache) can tell two accounts apart.
+        data: {
+          session: state.authUser
+            ? {
+                access_token: `mock-token-${state.authUser.id}`,
+                refresh_token: `mock-refresh-${state.authUser.id}`,
+                user: { id: state.authUser.id, email: state.authUser.email },
+              }
+            : null,
+        },
         error: null,
       }),
       signOut: async () => {
