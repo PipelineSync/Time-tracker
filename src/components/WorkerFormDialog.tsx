@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Worker } from '@/lib/types'
 import { useStore } from '@/lib/store'
 import {
@@ -32,17 +32,29 @@ export function WorkerFormDialog({
   const [password, setPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [saving, setSaving] = useState(false)
+  const seededKeyRef = useRef<string | null>(null)
 
   useEffect(() => {
-    if (open) {
-      setName(worker?.name || '')
-      setEmail(worker?.email || '')
-      setRate(String(worker?.hourly_rate ?? settings?.default_hourly_rate ?? 20))
-      setStatus(worker?.status || 'active')
-      setAccountEmail(worker?.email || '')
-      setPassword('')
-      setNewPassword('')
+    if (!open) {
+      // Reset so the next time the dialog opens it starts fresh.
+      seededKeyRef.current = null
+      return
     }
+
+    // Only seed the form when the dialog is opened (or switched to a different
+    // worker). Background session/data refreshes change the `settings` object,
+    // and without this guard they would wipe what the user is currently typing.
+    const key = worker?.id ?? '__new__'
+    if (seededKeyRef.current === key) return
+    seededKeyRef.current = key
+
+    setName(worker?.name || '')
+    setEmail(worker?.email || '')
+    setRate(String(worker?.hourly_rate ?? settings?.default_hourly_rate ?? 20))
+    setStatus(worker?.status || 'active')
+    setAccountEmail(worker?.email || '')
+    setPassword('')
+    setNewPassword('')
   }, [open, worker, settings])
 
   async function handleSubmit(e: React.FormEvent) {
