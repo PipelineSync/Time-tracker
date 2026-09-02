@@ -20,6 +20,7 @@ import type {
   AppNotification,
   Payment,
   PaymentStatus,
+  PaymentMethod,
 } from './types'
 import type { DataBackend, CreateWorkerInput, BackendResult } from './backend'
 import { localBackend } from './localDb'
@@ -62,6 +63,8 @@ interface StoreValue {
   resetWorkerPassword: (workerId: string, newPassword: string) => Promise<string | null>
   /** Worker self-service: update the signed-in worker's own profile picture. */
   updateOwnProfile: (avatarUrl: string | null) => Promise<Worker | null>
+  /** Worker self-service: choose accepted payment methods (+ QR code image). */
+  updateOwnPaymentMethods: (paymentMethods: PaymentMethod[], qrCodeUrl?: string | null) => Promise<Worker | null>
 
   refreshData: () => Promise<void>
 
@@ -265,6 +268,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const updateOwnProfile = useCallback(async (avatarUrl: string | null) => {
     const res = await backend.updateOwnProfile({ avatar_url: avatarUrl })
+    if (res.error || !res.data) return null
+    await refreshData()
+    return res.data
+  }, [backend, refreshData])
+
+  const updateOwnPaymentMethods = useCallback(async (paymentMethods: PaymentMethod[], qrCodeUrl?: string | null) => {
+    const res = await backend.updateOwnPaymentMethods({ payment_methods: paymentMethods, qr_code_url: qrCodeUrl })
     if (res.error || !res.data) return null
     await refreshData()
     return res.data
@@ -497,6 +507,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     changePassword,
     resetWorkerPassword,
     updateOwnProfile,
+    updateOwnPaymentMethods,
     refreshData,
     createWorker,
     updateWorker,

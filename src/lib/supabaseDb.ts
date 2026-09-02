@@ -10,6 +10,7 @@ import type {
   AppNotification,
   Payment,
   PaymentStatus,
+  PaymentMethod,
   Role,
 } from './types'
 import type { BackendResult, DataBackend, CreateWorkerInput } from './backend'
@@ -84,6 +85,20 @@ function mapErr(e: unknown): string {
 
 const ok = <T,>(data: T | null): BackendResult<T> => ({ data, error: null })
 const fail = <T,>(error: string): BackendResult<T> => ({ data: null, error })
+
+/**
+ * Normalize a worker row from the database. Older rows (and databases that
+ * haven't applied supabase/worker-payment-methods.sql yet) may not carry the
+ * payment-method columns, so default them here. A QR image only matters while
+ * the worker actually accepts QR payments.
+ */
+function normalizeWorker(w: Worker): Worker {
+  const methods: PaymentMethod[] = Array.isArray(w.payment_methods)
+    ? w.payment_methods.filter((m): m is PaymentMethod => m === 'cash' || m === 'qr')
+    : []
+  return { ...w, payment_methods: methods, qr_code_url: methods.includes('qr') ? (w.qr_code_url ?? null) : null }
+}
+const normalizeWorkers = (rows: Worker[] | null): Worker[] => (rows ?? []).map(normalizeWorker)
 
 type AuthLookup =
   | { status: 'authenticated'; user: AuthUser }
@@ -550,7 +565,48 @@ export const supabaseBackend: DataBackend = {
     }
     const { data, error } = await client().from('workers').select('*').eq('id', me.data!.workerId).single()
     if (error) return fail(error.message)
-    return ok(data as Worker)
+    return ok(normalizeWorker(data as Worker))
+  },
+
+  async updateOwnPaymentMethods(patch) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (me.data!.role !== 'worker') return fail('Only workers can update their payment methods here.')
+    if (!me.data!.workerId) return fail('No worker account is linked to this user.')
+    const methods: PaymentMethod[] = (Array.isArray(patch.payment_methods) ? patch.payment_methods : [])
+      .filter((m): m is PaymentMethod => m === 'cash' || m === 'qr')
+    if (methods.length === 0) return fail('Choose at least one payment method.')
+    const qrEnabled = methods.includes('qr')
+    // When QR is enabled the caller must have an image: either one they just
+    // uploaded or the one already saved on their row.
+    let qrCodeUrl: string | null = null
+    if (qrEnabled) {
+      qrCodeUrl = patch.qr_code_url === undefined ? null : patch.qr_code_url
+      if (!qrCodeUrl) {
+        const { data: cur } = await client()
+          .from('workers')
+          .select('qr_code_url')
+          .eq('id', me.data!.workerId)
+          .maybeSingle()
+        qrCodeUrl = (cur as { qr_code_url?: string | null } | null)?.qr_code_url ?? null
+      }
+      if (!qrCodeUrl) return fail('Upload your QR code image to accept QR Code payments.')
+    }
+    // The worker cannot UPDATE their own workers row under RLS (that would let
+    // them change their hourly rate/status). A SECURITY DEFINER RPC (see
+    // supabase/worker-payment-methods.sql) updates only the payment fields on
+    // the worker's own row.
+    const { error: rpcErr } = await client()
+      .rpc('update_own_payment_methods', { p_methods: methods, p_qr_code: qrCodeUrl })
+    if (rpcErr) {
+      if (/function update_own_payment_methods/.test(rpcErr.message) || rpcErr.code === 'PGRST202') {
+        return fail('Saving payment methods requires the database migration supabase/worker-payment-methods.sql to be applied.')
+      }
+      return fail(rpcErr.message)
+    }
+    const { data, error } = await client().from('workers').select('*').eq('id', me.data!.workerId).single()
+    if (error) return fail(error.message)
+    return ok(normalizeWorker(data as Worker))
   },
 
   async listWorkers() {
@@ -559,11 +615,11 @@ export const supabaseBackend: DataBackend = {
     if (me.data!.role === 'worker' && me.data!.workerId) {
       const { data, error } = await client().from('workers').select('*').eq('id', me.data!.workerId)
       if (error) return fail(error.message)
-      return ok(data as Worker[])
+      return ok(normalizeWorkers(data as Worker[]))
     }
     const { data, error } = await client().from('workers').select('*').order('name')
     if (error) return fail(error.message)
-    return ok(data as Worker[])
+    return ok(normalizeWorkers(data as Worker[]))
   },
 
   async createWorker(input: CreateWorkerInput) {

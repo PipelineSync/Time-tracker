@@ -10,6 +10,7 @@ import type {
   AppNotification,
   Payment,
   PaymentStatus,
+  PaymentMethod,
   Role,
 } from './types'
 
@@ -57,6 +58,10 @@ export interface DataBackend {
   // (their profile picture). Only ever touches the worker's own row and only
   // profile fields — never their rate, status, or other admin-managed data.
   updateOwnProfile(patch: { avatar_url?: string | null }): Promise<BackendResult<Worker>>
+  // Worker self-service: the signed-in worker chooses which payment methods
+  // they accept (cash and/or QR code), uploading their QR code image when QR
+  // is enabled. Only touches these two fields on the worker's own row.
+  updateOwnPaymentMethods(patch: { payment_methods: PaymentMethod[]; qr_code_url?: string | null }): Promise<BackendResult<Worker>>
 
   // Data (scoped to current user + role)
   listWorkers(): Promise<BackendResult<Worker[]>>

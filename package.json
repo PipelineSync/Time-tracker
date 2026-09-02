@@ -11,6 +11,7 @@
     "verify:active-workers": "tsx scripts/verify-active-workers-local.ts",
     "verify:chat": "tsx scripts/verify-chat-local.ts && tsx scripts/verify-chat-supabase.ts",
     "verify:settle": "tsx scripts/verify-settle-local.ts && tsx scripts/verify-settle-supabase.ts",
+    "verify:payment-methods": "tsx scripts/verify-payment-methods-local.ts",
     "verify:session": "tsx scripts/verify-session-supabase.ts",
     "verify": "npm run verify:deletion && npm run verify:active-workers && npm run verify:chat && npm run verify:settle && npm run verify:session"
   },
