@@ -27,6 +27,20 @@ export function SettingsPage() {
   const [avatar, setAvatar] = useState(settings?.avatar_url || '')
   const [confirmReset, setConfirmReset] = useState(false)
   const [resetting, setResetting] = useState(false)
+  const avatarInputRef = useRef<HTMLInputElement | null>(null)
+
+  // Admin account picture. Downscaled through the same helper as worker
+  // pictures/QR codes so a huge photo can't bloat the settings row.
+  function onPickAvatar(file?: File | null) {
+    if (!file) return
+    if (!isImageFile(file)) {
+      toast.error('Please choose an image file.')
+      return
+    }
+    imageFileToDataUrl(file)
+      .then((url) => setAvatar(url))
+      .catch(() => toast.error('That image could not be read. Please try another file.'))
+  }
 
   // Worker self-service profile picture. A worker only ever sees their own
   // worker row (both backends scope listWorkers to the signed-in user), so this
@@ -49,11 +63,17 @@ export function SettingsPage() {
   const [qrCode, setQrCode] = useState<string | null>(null)
   const [savingPayment, setSavingPayment] = useState(false)
   const qrInputRef = useRef<HTMLInputElement | null>(null)
-  // Seed the editor whenever the loaded worker row changes.
+  // Seed the editor only when the *saved* payment data actually changes. The
+  // store polls every few seconds and refreshes on window focus (e.g. when the
+  // file picker closes), and each refresh rebuilds `workers` with new array
+  // references. Depending on the `payment_methods` array reference itself made
+  // those no-op refreshes wipe unsaved toggles and a just-picked QR image — so
+  // compare a stable serialized key of the saved methods instead.
+  const savedMethodsKey = (myWorker?.payment_methods ?? []).join(',')
   useEffect(() => {
     setMethods(myWorker?.payment_methods ?? [])
-    setQrCode(myWorker?.payment_methods?.includes('qr') ? (myWorker.qr_code_url ?? null) : null)
-  }, [myWorker?.id, myWorker?.payment_methods, myWorker?.qr_code_url])
+    setQrCode(savedMethodsKey.includes('qr') ? (myWorker?.qr_code_url ?? null) : null)
+  }, [myWorker?.id, savedMethodsKey, myWorker?.qr_code_url])
 
   function toggleMethod(method: PaymentMethod, enabled: boolean) {
     setMethods((prev) => {
@@ -93,6 +113,13 @@ export function SettingsPage() {
     else toast.success('Payment methods updated.')
   }
 
+  // Seed the General form only when the saved settings *content* changes.
+  // Background refreshes rebuild the settings object (new reference, identical
+  // content); reseeding on the reference wiped unsaved admin edits — including
+  // a just-picked profile picture — whenever a refresh landed mid-edit.
+  const savedSettingsKey = settings
+    ? [settings.business_name, settings.currency, settings.timezone, settings.default_hourly_rate, settings.avatar_url ?? ''].join('|')
+    : ''
   useEffect(() => {
     if (settings) {
       setBusinessName(settings.business_name)
@@ -101,7 +128,7 @@ export function SettingsPage() {
       setDefaultRate(String(settings.default_hourly_rate ?? 20))
       setAvatar(settings.avatar_url || '')
     }
-  }, [settings])
+  }, [savedSettingsKey])
 
   const CURRENCIES = ['USD', 'EUR', 'GBP', 'PHP', 'CAD', 'AUD', 'JPY', 'INR']
 
@@ -370,12 +397,45 @@ export function SettingsPage() {
             <CardContent>
               <form onSubmit={handleSave} className="space-y-4">
                 <div className="space-y-2">
-                  <Label htmlFor="s-avatar">Profile picture</Label>
-                  <div className="flex items-center gap-3">
-                    {avatar ? <img src={avatar} alt="Profile" className="h-12 w-12 rounded-full object-cover" /> : <div className="h-12 w-12 rounded-full bg-muted" />}
-                    <Input id="s-avatar" type="file" accept="image/*" onChange={(e) => { const file = e.target.files?.[0]; if (file) { const reader = new FileReader(); reader.onload = () => setAvatar(String(reader.result)); reader.readAsDataURL(file) } }} />
+                  <Label>Profile picture</Label>
+                  <div className="flex items-center gap-4">
+                    <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary/10 text-xl font-semibold text-primary">
+                      {avatar ? (
+                        <img src={avatar} alt="Profile preview" className="h-full w-full object-cover" />
+                      ) : (
+                        initials(user?.email || businessName || 'Admin')
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap gap-2">
+                        <Button type="button" variant="outline" size="sm" onClick={() => avatarInputRef.current?.click()}>
+                          <Upload className="mr-1 h-4 w-4" /> {avatar ? 'Change picture' : 'Upload picture'}
+                        </Button>
+                        {avatar && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => { setAvatar(''); if (avatarInputRef.current) avatarInputRef.current.value = '' }}
+                          >
+                            <X className="mr-1 h-4 w-4" /> Remove
+                          </Button>
+                        )}
+                      </div>
+                      <input
+                        ref={avatarInputRef}
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => { onPickAvatar(e.target.files?.[0]); e.target.value = '' }}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        {avatar
+                          ? 'Save settings to apply your new picture. It appears next to your name in the header.'
+                          : 'Upload a JPG, PNG or GIF to personalize your account.'}
+                      </p>
+                    </div>
                   </div>
-                  <p className="text-xs text-muted-foreground">Upload a picture to personalize your account.</p>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="s-name">Company / business name</Label>

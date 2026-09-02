@@ -135,11 +135,6 @@ export function TrackerPage() {
               {running ? 'On the clock' : 'On break'}
             </CardDescription>
             <CardTitle className="text-2xl">{workerProfile?.name || 'You'}</CardTitle>
-            {workerProfile && (
-              <CardDescription className="font-medium text-primary">
-                {money(workerProfile.hourly_rate, settings?.currency || 'USD')}/hr
-              </CardDescription>
-            )}
           </CardHeader>
           <CardContent className="flex flex-col items-center space-y-6">
             <div className="rounded-2xl bg-primary/5 px-10 py-8">
@@ -175,11 +170,6 @@ export function TrackerPage() {
         <Card className="border-primary/40 bg-primary/5">
           <CardHeader className="text-center">
             <CardTitle className="text-2xl">{workerProfile?.name || 'Welcome'}</CardTitle>
-            {workerProfile && (
-              <CardDescription className="font-medium text-primary">
-                {money(workerProfile.hourly_rate, settings?.currency || 'USD')}/hr
-              </CardDescription>
-            )}
           </CardHeader>
           <CardContent className="flex flex-col items-center gap-6">
             <div className="rounded-2xl bg-background px-10 py-8 dark:bg-white/5">
