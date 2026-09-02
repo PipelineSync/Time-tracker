@@ -146,23 +146,31 @@ async function workerName(workerId: string): Promise<string> {
 }
 
 async function pushNotification(recipientUserId: string, n: { entry_id: string | null; type: AppNotification['type']; message: string }) {
-  const { error } = await client().from('notifications').insert({
-    user_id: recipientUserId,
-    entry_id: n.entry_id,
-    type: n.type,
-    message: n.message,
-  })
+  const insert = (row: { entry_id: string | null; type: AppNotification['type']; message: string }) =>
+    client().from('notifications').insert({
+      user_id: recipientUserId,
+      entry_id: row.entry_id,
+      type: row.type,
+      message: row.message,
+    })
+
+  let { error } = await insert(n)
+
   // 23514 = check violation: the database predates this notification type
   // (e.g. break notifications before running supabase/add-break-notifications.sql).
   // Still deliver the message rather than silently dropping it.
   if (error && (error as { code?: string }).code === '23514' && n.type !== 'note') {
-    await client().from('notifications').insert({
-      user_id: recipientUserId,
-      entry_id: n.entry_id,
-      type: 'note',
-      message: n.message,
-    })
+    ({ error } = await insert({ ...n, type: 'note' }))
   }
+
+  // The entry reference is only a convenience link. If it is what the database
+  // rejects (missing/unreadable row, FK violation), deliver the notification
+  // without it instead of losing the alert entirely.
+  if (error && n.entry_id) {
+    ({ error } = await insert({ ...n, entry_id: null }))
+  }
+
+  if (error) console.warn('[notifications] could not deliver notification:', error.message)
 }
 
 /** Timer targeted by a pause/resume call: an explicit id, else the caller's own. */
@@ -523,7 +531,11 @@ export const supabaseBackend: DataBackend = {
     // Notify the admin when a worker clocks in.
     if (me.data!.role === 'worker') {
       const adminId = await getAdminUserId()
-      if (adminId) await pushNotification(adminId, { entry_id: null, type: 'time_in', message: `${await workerName(workerId)} clocked in` })
+      if (adminId) {
+        const t = data as ActiveTimer
+        const detail = [t.project ? t.project : null, t.notes ? t.notes.replace(/\s+/g, ' ').slice(0, 140) : null].filter(Boolean).join(' · ')
+        await pushNotification(adminId, { entry_id: null, type: 'time_in', message: `${await workerName(workerId)} clocked in${detail ? ` — ${detail}` : ''}` })
+      }
     }
     return ok(data as ActiveTimer)
   },
@@ -590,10 +602,26 @@ export const supabaseBackend: DataBackend = {
     if (error) return fail(error.message)
     await client().from('active_timers').delete().eq('id', timerId)
     const created = data as TimeEntry
-    // Notify the admin when a worker clocks out.
+    // Notify the admin when a worker clocks out. This must happen whether or
+    // not the worker left a note — the note only changes the wording.
     if (me.data!.role === 'worker') {
-      const adminId = await getAdminUserId()
-      if (adminId) await pushNotification(adminId, { entry_id: created.id, type: 'time_out', message: `${await workerName(created.worker_id)} clocked out — ${formatMinutes(created.total_minutes)}${clockOutNote ? ' · added a note' : ''}` })
+      try {
+        const adminId = await getAdminUserId()
+        if (adminId) {
+          const parts = [formatMinutes(created.total_minutes)]
+          if (created.project) parts.push(created.project)
+          parts.push(clockOutNote ? 'added a note' : 'no note')
+          await pushNotification(adminId, {
+            entry_id: created.id,
+            type: 'time_out',
+            message: `${await workerName(created.worker_id)} clocked out — ${parts.join(' · ')}`,
+          })
+        } else {
+          console.warn('[notifications] no admin account found for the clock-out notification')
+        }
+      } catch (err) {
+        console.warn('[notifications] clock-out notification failed:', err)
+      }
     }
     return ok(created)
   },

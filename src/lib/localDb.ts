@@ -498,10 +498,11 @@ export const localBackend: DataBackend = {
     c.data.activeTimers.push(timer)
     // Notify the admin when a worker clocks in.
     if (c.user.role === 'worker') {
+      const detail = [timer.project, timer.notes ? timer.notes.replace(/\s+/g, ' ').slice(0, 140) : null].filter(Boolean).join(' · ')
       pushNotification(c.data, c.admin.id, {
         entry_id: null,
         type: 'time_in',
-        message: `${workerName(c.data, workerId)} clocked in`,
+        message: `${workerName(c.data, workerId)} clocked in${detail ? ` — ${detail}` : ''}`,
       })
     }
     save(c.data)
@@ -585,11 +586,15 @@ export const localBackend: DataBackend = {
     c.data.entries.push(entry)
     c.data.activeTimers = c.data.activeTimers.filter((t) => t.id !== timer.id)
     // Notify the admin when a worker clocks out.
+    // Always notify on clock out — with or without a note.
     if (c.user.role === 'worker') {
+      const parts = [formatMinutes(entry.total_minutes)]
+      if (entry.project) parts.push(entry.project)
+      parts.push(clockOutNote ? 'added a note' : 'no note')
       pushNotification(c.data, c.admin.id, {
         entry_id: entry.id,
         type: 'time_out',
-        message: `${workerName(c.data, entry.worker_id)} clocked out — ${formatMinutes(entry.total_minutes)}${clockOutNote ? ' · added a note' : ''}`,
+        message: `${workerName(c.data, entry.worker_id)} clocked out — ${parts.join(' · ')}`,
       })
     }
     save(c.data)
