@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useStore } from '@/lib/store'
 import { PageHeader } from '@/components/PageHeader'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { TimerDisplay } from '@/components/TimerDisplay'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { ClockOutDialog } from '@/components/ClockOutDialog'
+import { ClockInDialog } from '@/components/ClockInDialog'
 import { toast } from 'sonner'
 import { Square, Pause, PlayCircle, LogIn, TimerReset } from 'lucide-react'
 import { formatMinutes, money, timerElapsedMs } from '@/lib/utils'
@@ -15,12 +16,13 @@ import { formatMinutes, money, timerElapsedMs } from '@/lib/utils'
  * The admin has no start-timer — they add time via manual entries.
  */
 export function TrackerPage() {
-  const { workers, activeTimer, startTimer, pauseTimer, resumeTimer, stopTimer, cancelTimer, settings, user, dataLoading } = useStore()
+  const { workers, entries, activeTimer, startTimer, pauseTimer, resumeTimer, stopTimer, cancelTimer, settings, user, dataLoading } = useStore()
 
   const [starting, setStarting] = useState(false)
   const [busy, setBusy] = useState(false)
   const [confirmCancel, setConfirmCancel] = useState(false)
   const [clockOutOpen, setClockOutOpen] = useState(false)
+  const [clockInOpen, setClockInOpen] = useState(false)
   const [now, setNow] = useState(Date.now())
 
   const workerProfile = user?.workerId ? workers.find((w) => w.id === user.workerId) : null
@@ -36,25 +38,41 @@ export function TrackerPage() {
 
   const elapsedMs = myTimer ? timerElapsedMs(myTimer, new Date(now)) : 0
 
-  async function handleClockIn() {
+  /** Projects this worker has logged before — offered in the clock-in dialog. */
+  const projectSuggestions = useMemo(() => {
+    const seen = new Map<string, number>()
+    for (const e of entries) {
+      if (!e.project) continue
+      if (currentWorkerId && e.worker_id !== currentWorkerId) continue
+      seen.set(e.project, Math.max(seen.get(e.project) || 0, new Date(e.start_time).getTime()))
+    }
+    return Array.from(seen.entries()).sort((a, b) => b[1] - a[1]).map(([p]) => p).slice(0, 8)
+  }, [entries, currentWorkerId])
+
+  async function handleClockIn(input?: { project?: string; notes?: string }) {
     if (!currentWorkerId) {
       toast.error('No worker profile linked to this account. Please contact your administrator.')
       return
     }
     setStarting(true)
-    const res = await startTimer({ worker_id: currentWorkerId })
+    const res = await startTimer({
+      worker_id: currentWorkerId,
+      project: input?.project?.trim() || undefined,
+      notes: input?.notes?.trim() || undefined,
+    })
     setStarting(false)
     if (res.error || !res.data) {
       toast.error(res.error || 'Could not clock in. Please try again.')
       return
     }
+    setClockInOpen(false)
     // If the backend handed back an existing (unfinished) timer instead of
     // creating one, say so rather than pretending it's a fresh start.
     const startedAgoMs = Date.now() - new Date(res.data.start_time).getTime()
     if (startedAgoMs > 2 * 60 * 1000) {
       toast.success(`Resumed your unfinished timer from ${new Date(res.data.start_time).toLocaleString()} — clock out when ready.`, { duration: 8000 })
     } else {
-      toast.success('Clocked in.')
+      toast.success(`Clocked in${res.data.project ? ` — ${res.data.project}` : ''}.`)
     }
   }
 
@@ -128,6 +146,12 @@ export function TrackerPage() {
               <TimerDisplay ms={elapsedMs} running={running} />
             </div>
             <p className="text-sm text-muted-foreground">Clocked in {new Date(myTimer.start_time).toLocaleString()}</p>
+            {(myTimer.project || myTimer.notes) && (
+              <div className="w-full max-w-md space-y-1 rounded-lg bg-muted/50 px-4 py-3 text-center">
+                {myTimer.project && <p className="text-sm font-semibold">{myTimer.project}</p>}
+                {myTimer.notes && <p className="whitespace-pre-wrap text-sm text-muted-foreground">{myTimer.notes}</p>}
+              </div>
+            )}
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
               {running ? (
                 <Button size="lg" variant="secondary" className="gap-2" onClick={handlePause} disabled={busy}>
@@ -164,7 +188,7 @@ export function TrackerPage() {
             <Button
               size="lg"
               className="gap-2 bg-[#06245B] px-10 text-base hover:bg-[#0a306e] dark:bg-white dark:text-[#06245B] dark:hover:bg-white/90"
-              onClick={handleClockIn}
+              onClick={() => setClockInOpen(true)}
               disabled={starting || !currentWorkerId}
             >
               {starting ? 'Clocking in…' : (<><LogIn className="h-5 w-5" /> Clock In</>)}
@@ -187,6 +211,16 @@ export function TrackerPage() {
           }}
         />
       )}
+
+      <ClockInDialog
+        open={clockInOpen}
+        onOpenChange={setClockInOpen}
+        workerName={workerProfile?.name || null}
+        projectSuggestions={projectSuggestions}
+        onConfirm={async ({ project, notes }) => {
+          await handleClockIn({ project, notes })
+        }}
+      />
 
       <ClockOutDialog
         open={clockOutOpen}

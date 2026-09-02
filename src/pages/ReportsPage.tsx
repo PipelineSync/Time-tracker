@@ -55,10 +55,62 @@ export function ReportsPage() {
   )
 
   function exportCSV() {
-    const header = ['Date', 'Worker', 'Project', 'Start', 'End', 'Break (min)', 'Hours', 'Rate', 'Earnings', 'Notes']
-    const rows = filtered.map((e) => {
+    // Escape a value for CSV: quote it and double any embedded quotes so
+    // notes with commas/quotes/newlines survive the round-trip.
+    const cell = (v: string | number) => `"${String(v ?? '').replace(/"/g, '""')}"`
+    const line = (cells: (string | number)[]) => cells.map(cell).join(',')
+
+    const rangeLabel = `${range.from.toLocaleDateString()} - ${range.to.toLocaleDateString()}`
+
+    // ---- Per-worker totals (time + earnings), plus a grand total ----
+    const perWorker = byWorker.map((w) => ({
+      name: w.worker.name,
+      sessions: w.sessions,
+      minutes: Math.round(w.hours * 60),
+      hours: w.hours,
+      earnings: w.earnings,
+      rate: w.hours > 0 ? w.earnings / w.hours : 0,
+    }))
+    const totalMinutes = perWorker.reduce((a, w) => a + w.minutes, 0)
+    const totalHours = perWorker.reduce((a, w) => a + w.hours, 0)
+    const totalEarnings = perWorker.reduce((a, w) => a + w.earnings, 0)
+    const totalSessions = perWorker.reduce((a, w) => a + w.sessions, 0)
+
+    const lines: string[] = []
+    lines.push(line([`${settings?.business_name || 'Work Tracker'} — Time & Earnings Report`]))
+    lines.push(line([`Period: ${period}`, rangeLabel]))
+    lines.push(line([`Currency: ${currency}`]))
+    lines.push('')
+
+    lines.push(line(['TOTALS PER WORKER']))
+    lines.push(line(['Worker', 'Sessions', 'Total Time', 'Total Hours', 'Avg Rate', 'Total Earnings']))
+    for (const w of perWorker) {
+      lines.push(line([
+        w.name,
+        w.sessions,
+        formatMinutes(w.minutes),
+        w.hours.toFixed(2),
+        w.rate.toFixed(2),
+        w.earnings.toFixed(2),
+      ]))
+    }
+    lines.push(line([
+      'ALL WORKERS (TOTAL)',
+      totalSessions,
+      formatMinutes(totalMinutes),
+      totalHours.toFixed(2),
+      (totalHours > 0 ? totalEarnings / totalHours : 0).toFixed(2),
+      totalEarnings.toFixed(2),
+    ]))
+    lines.push('')
+
+    // ---- Detailed entries ----
+    lines.push(line(['DETAILED ENTRIES']))
+    lines.push(line(['Date', 'Worker', 'Project', 'Start', 'End', 'Break (min)', 'Hours', 'Rate', 'Earnings', 'Notes']))
+    const sorted = [...filtered].sort((a, b) => a.start_time.localeCompare(b.start_time))
+    for (const e of sorted) {
       const w = workers.find((x) => x.id === e.worker_id)?.name || 'Unknown'
-      return [
+      lines.push(line([
         new Date(e.start_time).toLocaleDateString(),
         w,
         e.project || '',
@@ -68,11 +120,13 @@ export function ReportsPage() {
         (e.total_minutes / 60).toFixed(2),
         e.hourly_rate.toFixed(2),
         e.earnings.toFixed(2),
-        (e.notes || '').replace(/[",\n]/g, ' '),
-      ]
-    })
-    const csv = [header, ...rows].map((r) => r.map((c) => `"${c}"`).join(',')).join('\n')
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+        (e.notes || '').replace(/\r?\n/g, ' '),
+      ]))
+    }
+    lines.push(line(['', 'TOTAL', '', '', '', '', totalHours.toFixed(2), '', totalEarnings.toFixed(2), '']))
+
+    // BOM so Excel opens UTF-8 (currency/accents) correctly.
+    const blob = new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
