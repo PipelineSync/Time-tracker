@@ -10,7 +10,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { Bell, BellOff, Check, Clock, Coffee, LogIn, LogOut, MessageSquare, Play, Plus, Wallet, type LucideIcon } from 'lucide-react'
+import { Bell, BellOff, Check, Clock, Coffee, LogIn, LogOut, MessageSquare, MessagesSquare, Play, Plus, Wallet, type LucideIcon } from 'lucide-react'
 import { formatDateTime } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import type { NotificationType } from '@/lib/types'
@@ -23,6 +23,7 @@ const typeMeta: Record<NotificationType, { icon: LucideIcon; color: string }> = 
   payment: { icon: Wallet, color: 'text-emerald-600' },
   break_start: { icon: Coffee, color: 'text-[#36B7C9]' },
   break_end: { icon: Play, color: 'text-[#F77A0A]' },
+  chat: { icon: MessagesSquare, color: 'text-[#0d7c8c] dark:text-[#7fdbe8]' },
 }
 
 export function NotificationsBell({ onNavy }: { onNavy?: boolean }) {
@@ -76,7 +77,9 @@ export function NotificationsBell({ onNavy }: { onNavy?: boolean }) {
                     n.read ? 'border-l-transparent' : 'border-l-[#F77A0A] bg-[#F77A0A]/5'
                   )}
                   onClick={() => {
-                    if (n.entry_id) navigate(`/entries?entry=${n.entry_id}`)
+                    // A chat notification opens the team chat; a note opens the entry.
+                    if (n.type === 'chat') navigate('/chat')
+                    else if (n.entry_id) navigate(`/entries?entry=${n.entry_id}`)
                   }}
                 >
                   <Icon className={cn('mt-0.5 h-4 w-4 shrink-0', meta.color)} />

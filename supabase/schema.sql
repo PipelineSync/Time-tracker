@@ -35,12 +35,18 @@ create table if not exists public.time_entries (
   total_minutes integer not null default 0 check (total_minutes >= 0),
   earnings      numeric(10,2) not null default 0,
   created_at    timestamptz not null default now(),
-  updated_at    timestamptz not null default now()
+  updated_at    timestamptz not null default now(),
+  -- When the entry was included in a settlement ("Settle & reset"), null while
+  -- it is still waiting to be settled. Settling never deletes entries — it
+  -- stamps the ones it paid for, so the next settlement only covers time worked
+  -- since and an entry only disappears when someone deletes it by hand.
+  settled_at    timestamptz
 );
 
 create index if not exists time_entries_user_id_idx on public.time_entries (user_id);
 create index if not exists time_entries_worker_id_idx on public.time_entries (worker_id);
 create index if not exists time_entries_start_time_idx on public.time_entries (start_time);
+create index if not exists time_entries_worker_settled_idx on public.time_entries (worker_id, settled_at);
 
 -- ---------- active_timers ----------
 create table if not exists public.active_timers (
@@ -103,7 +109,7 @@ create table if not exists public.notifications (
   id         uuid primary key default gen_random_uuid(),
   user_id    uuid not null references auth.users (id) on delete cascade,
   entry_id   uuid references public.time_entries (id) on delete cascade,
-  type       text not null default 'note' check (type in ('note','time_in','time_out','time_added','payment','break_start','break_end')),
+  type       text not null default 'note' check (type in ('note','time_in','time_out','time_added','payment','break_start','break_end','chat')),
   message    text not null,
   read       boolean not null default false,
   created_at timestamptz not null default now()
@@ -606,3 +612,50 @@ $$;
 
 revoke all on function public.workspace_members() from public, anon;
 grant execute on function public.workspace_members() to authenticated;
+
+-- Notify the rest of the workspace about a new team-chat message. One row per
+-- member except the author, worded like the client's chatNotificationText().
+-- SECURITY DEFINER because under RLS a worker may only insert notifications for
+-- themselves and the workspace admin, never for the other workers.
+create or replace function public.notify_chat_message(p_chat_id uuid)
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  msg      public.chat_messages;
+  preview  text;
+  inserted integer;
+begin
+  if auth.uid() is null then
+    raise exception 'Not signed in.';
+  end if;
+
+  select * into msg from public.chat_messages where id = p_chat_id;
+  if not found then
+    raise exception 'Chat message not found.';
+  end if;
+  -- Only the author notifies about their own message.
+  if msg.author_id <> auth.uid() then
+    raise exception 'You can only notify about your own message.';
+  end if;
+
+  preview := btrim(regexp_replace(msg.body, '\s+', ' ', 'g'));
+  if length(preview) > 120 then
+    preview := left(preview, 119) || '…';
+  end if;
+
+  insert into public.notifications (user_id, entry_id, type, message)
+  select m.user_id, null, 'chat', msg.author_name || ': ' || preview
+    from public.workspace_members() as m
+   where m.user_id is not null
+     and m.user_id <> msg.author_id;
+
+  get diagnostics inserted = row_count;
+  return inserted;
+end;
+$$;
+
+revoke all on function public.notify_chat_message(uuid) from public, anon;
+grant execute on function public.notify_chat_message(uuid) to authenticated;

@@ -9,7 +9,9 @@
     "preview": "vite preview",
     "verify:deletion": "tsx scripts/verify-delete-local.ts && tsx scripts/verify-delete-supabase.ts",
     "verify:active-workers": "tsx scripts/verify-active-workers-local.ts",
-    "verify:chat": "tsx scripts/verify-chat-local.ts && tsx scripts/verify-chat-supabase.ts"
+    "verify:chat": "tsx scripts/verify-chat-local.ts && tsx scripts/verify-chat-supabase.ts",
+    "verify:settle": "tsx scripts/verify-settle-local.ts && tsx scripts/verify-settle-supabase.ts",
+    "verify": "npm run verify:deletion && npm run verify:active-workers && npm run verify:chat && npm run verify:settle"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.2",

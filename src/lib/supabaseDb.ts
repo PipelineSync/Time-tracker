@@ -16,6 +16,7 @@ import type { BackendResult, DataBackend, CreateWorkerInput } from './backend'
 import { ACCOUNT_DEACTIVATED_MESSAGE, CHAT_MAX_LENGTH } from './backend'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { computeEarnings, computeTotalMinutes, formatMinutes, formatDate } from './utils'
+import { chatNotificationText } from './chat'
 
 const url = import.meta.env.VITE_SUPABASE_URL as string | undefined
 const anonKey = (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY) as string | undefined
@@ -158,6 +159,36 @@ function isMissingDbFunction(error: { code?: string; message?: string } | null, 
   return error.code === 'PGRST202' || new RegExp(`function ${fn}`, 'i').test(error.message ?? '')
 }
 
+/** True when PostgREST says a column is missing (schema not migrated). */
+function isMissingColumn(error: { code?: string; message?: string } | null, column: string): boolean {
+  if (!error) return false
+  const message = error.message ?? ''
+  if (!new RegExp(column, 'i').test(message)) return false
+  // 42703 = undefined_column, PGRST204 = column not found in the schema cache.
+  return error.code === '42703' || error.code === 'PGRST204' || /column/i.test(message)
+}
+
+/**
+ * The worker's time that has not been settled yet, on a database that predates
+ * `time_entries.settled_at` (supabase/settle-keeps-entries.sql not applied).
+ * The newest settlement's period_end is the "already paid up to" boundary, so
+ * settled time is not paid out twice even without the column.
+ */
+async function unsettledWithoutStampColumn(workerId: string): Promise<BackendResult<TimeEntry[]>> {
+  const sb = client()
+  const { data: entries, error } = await sb.from('time_entries').select('*').eq('worker_id', workerId)
+  if (error) return fail(error.message)
+  const rows = (entries as TimeEntry[]) ?? []
+  const { data: lastPayment } = await sb
+    .from('payments')
+    .select('period_end')
+    .eq('worker_id', workerId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+  const boundary = ((lastPayment as Array<{ period_end: string }> | null) ?? [])[0]?.period_end ?? null
+  return ok(boundary ? rows.filter((e) => e.end_time > boundary) : rows)
+}
+
 /** Chat errors, with a readable hint when the chat tables have not been created. */
 function chatTableHint(error: { code?: string; message?: string } | null): string {
   const message = error?.message ?? 'Something went wrong.'
@@ -220,6 +251,31 @@ async function pushNotification(recipientUserId: string, n: { entry_id: string |
   }
 
   if (error) console.warn('[notifications] could not deliver notification:', error.message)
+}
+
+/**
+ * Notify everyone else in the workspace about a new team-chat message.
+ *
+ * Preferred path is one SECURITY DEFINER call (supabase/chat-notifications.sql)
+ * that writes a row per recipient: under RLS a worker may only insert
+ * notifications for themselves and the admin, so the function is what lets a
+ * worker's message reach the rest of the team. On a database without it, the
+ * client inserts what RLS allows — always the admin — and warns about the rest.
+ */
+async function notifyChatMessage(message: ChatMessage) {
+  const sb = client()
+  const rpc = await sb.rpc('notify_chat_message', { p_chat_id: message.id })
+  if (!rpc.error) return
+  const rpcError = rpc.error as { code?: string; message?: string }
+  if (!isMissingDbFunction(rpcError, 'notify_chat_message')) {
+    console.warn('[chat] could not notify the team:', rpcError.message)
+    return
+  }
+  const members = await supabaseBackend.listChatMembers()
+  for (const m of members.data ?? []) {
+    if (!m.user_id || m.user_id === message.author_id) continue
+    await pushNotification(m.user_id, { entry_id: null, type: 'chat', message: chatNotificationText(message) })
+  }
 }
 
 /** Timer targeted by a pause/resume call: an explicit id, else the caller's own. */
@@ -795,7 +851,11 @@ export const supabaseBackend: DataBackend = {
     // Preferred path: an RPC that derives the author (name, role, picture) from
     // the authenticated user, so nobody can post as someone else.
     const rpc = await client().rpc('post_chat_message', { message_body: text })
-    if (!rpc.error) return ok(rpc.data as ChatMessage)
+    if (!rpc.error) {
+      const message = rpc.data as ChatMessage
+      await notifyChatMessage(message)
+      return ok(message)
+    }
     if (!isMissingDbFunction(rpc.error as { code?: string; message?: string }, 'post_chat_message')) {
       return fail(chatTableHint(rpc.error as { code?: string; message?: string }))
     }
@@ -822,7 +882,9 @@ export const supabaseBackend: DataBackend = {
       .select()
       .single()
     if (error) return fail(`${chatTableHint(error as { code?: string; message?: string })} ${migrationNeeded}`)
-    return ok(data as ChatMessage)
+    const posted = data as ChatMessage
+    await notifyChatMessage(posted)
+    return ok(posted)
   },
 
   async listChatMembers() {
@@ -923,12 +985,43 @@ export const supabaseBackend: DataBackend = {
     if (me.error) return fail(me.error)
     if (me.data!.role !== 'admin') return fail('Only the admin can settle worker time.')
     const sb = client()
-    const { data: entries } = await sb.from('time_entries').select('*').eq('worker_id', workerId)
+
+    // Settling never deletes time entries: it pays out the worker's unsettled
+    // entries and stamps them with settled_at, so they stay in Time Entries
+    // (notes included) until someone deletes one by hand and the next
+    // settlement only covers time worked since.
+    //
+    // `settled_at` needs supabase/settle-keeps-entries.sql. A database without
+    // it is detected below and falls back to the previous settlement's
+    // period_end as the "already paid" boundary — entries are still kept.
+    const unsettledRes = await sb
+      .from('time_entries')
+      .select('*')
+      .eq('worker_id', workerId)
+      .is('settled_at', null)
+    let entries: TimeEntry[]
+    let canStamp = true
+    if (!unsettledRes.error) {
+      entries = (unsettledRes.data as TimeEntry[]) ?? []
+    } else if (isMissingColumn(unsettledRes.error as { code?: string; message?: string }, 'settled_at')) {
+      canStamp = false
+      const legacy = await unsettledWithoutStampColumn(workerId)
+      if (legacy.error) return fail(legacy.error)
+      entries = legacy.data ?? []
+    } else {
+      return fail(unsettledRes.error.message)
+    }
+    if (entries.length === 0) return fail('This worker has no unsettled time to settle.')
+
     let totalMinutes = 0
     let earnings = 0
-    for (const e of (entries as TimeEntry[]) || []) {
+    let periodStart = entries[0].start_time
+    let periodEnd = entries[0].end_time
+    for (const e of entries) {
       totalMinutes += e.total_minutes
       earnings += e.earnings
+      if (e.start_time < periodStart) periodStart = e.start_time
+      if (e.end_time > periodEnd) periodEnd = e.end_time
     }
     const now = new Date()
     const { data, error } = await sb.from('payments').insert({
@@ -937,12 +1030,29 @@ export const supabaseBackend: DataBackend = {
       amount: Math.round(earnings * 100) / 100,
       hours: Math.round((totalMinutes / 60) * 100) / 100,
       status: 'unpaid',
-      period_end: now.toISOString(),
+      period_start: periodStart,
+      period_end: periodEnd,
       note: note || null,
     }).select().single()
     if (error) return fail(error.message)
-    // Reset the worker's tracked time by clearing their entries.
-    await sb.from('time_entries').delete().eq('worker_id', workerId)
+
+    if (canStamp) {
+      // Stamp exactly the entries that were paid for (by id, so time recorded
+      // in the meantime is left for the next settlement).
+      const { error: stampError } = await sb
+        .from('time_entries')
+        .update({ settled_at: (data as Payment).created_at ?? now.toISOString(), updated_at: now.toISOString() })
+        .in('id', entries.map((e) => e.id))
+      if (stampError) {
+        console.warn('[settle] could not mark the settled entries:', stampError.message)
+      }
+    } else {
+      console.warn(
+        '[settle] time_entries.settled_at is missing — run supabase/settle-keeps-entries.sql ' +
+          'so already-settled time is not paid out twice.'
+      )
+    }
+
     const wid = await getWorkerUserId(workerId)
     if (wid) await pushNotification(wid, { entry_id: null, type: 'payment', message: `A payment has been created for you` })
     return ok(data as Payment)

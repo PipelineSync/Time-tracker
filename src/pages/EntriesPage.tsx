@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { useStore } from '@/lib/store'
 import { PageHeader } from '@/components/PageHeader'
 import { Card, CardContent } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -32,6 +33,7 @@ export function EntriesPage() {
 
   const [workerFilter, setWorkerFilter] = useState('all')
   const [projectFilter, setProjectFilter] = useState('all')
+  const [settleFilter, setSettleFilter] = useState<'all' | 'unsettled' | 'settled'>('all')
   const [dateFilter, setDateFilter] = useState('all')
   const [fromDate, setFromDate] = useState('')
   const [toDate, setToDate] = useState('')
@@ -84,6 +86,10 @@ export function EntriesPage() {
     let list = entries
     if (workerFilter !== 'all') list = list.filter((e) => e.worker_id === workerFilter)
     if (projectFilter !== 'all') list = list.filter((e) => e.project === projectFilter)
+    // Settling keeps the entries, so the admin can still narrow down to the time
+    // that has (or has not) been paid out yet.
+    if (settleFilter === 'settled') list = list.filter((e) => Boolean(e.settled_at))
+    else if (settleFilter === 'unsettled') list = list.filter((e) => !e.settled_at)
     if (dateFilter === 'week') {
       const s = startOfWeek().getTime()
       list = list.filter((e) => new Date(e.start_time).getTime() >= s)
@@ -116,20 +122,33 @@ export function EntriesPage() {
       return sortDir === 'asc' ? cmp : -cmp
     })
     return sorted
-  }, [entries, workerFilter, projectFilter, dateFilter, fromDate, toDate, search, sortKey, sortDir]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [entries, workerFilter, projectFilter, settleFilter, dateFilter, fromDate, toDate, search, sortKey, sortDir]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const totals = useMemo(() => {
     let min = 0
     let earn = 0
-    for (const e of filtered) { min += e.total_minutes; earn += e.earnings }
-    return { min, earn }
+    let open = 0
+    for (const e of filtered) {
+      min += e.total_minutes
+      earn += e.earnings
+      if (!e.settled_at) open += e.earnings
+    }
+    return { min, earn, open }
   }, [filtered])
 
-  const hasFilters = workerFilter !== 'all' || projectFilter !== 'all' || dateFilter !== 'all' || search !== '' || fromDate !== '' || toDate !== ''
+  const hasFilters =
+    workerFilter !== 'all' ||
+    projectFilter !== 'all' ||
+    settleFilter !== 'all' ||
+    dateFilter !== 'all' ||
+    search !== '' ||
+    fromDate !== '' ||
+    toDate !== ''
 
   function clearFilters() {
     setWorkerFilter('all')
     setProjectFilter('all')
+    setSettleFilter('all')
     setDateFilter('all')
     setFromDate('')
     setToDate('')
@@ -145,7 +164,17 @@ export function EntriesPage() {
   const TableRow = ({ e }: { e: TimeEntry }) => (
     <>
       <td className="px-4 py-3 align-middle">{formatDate(e.start_time)}</td>
-      <td className="px-4 py-3 align-middle font-medium">{workerName(e.worker_id)}</td>
+      <td className="px-4 py-3 align-middle font-medium">
+        <span className="flex flex-wrap items-center gap-1.5">
+          {workerName(e.worker_id)}
+          {/* Settling keeps the entry — the badge says it has been paid out. */}
+          {e.settled_at && (
+            <Badge variant="muted" className="px-1.5 py-0 text-[10px]" title={`Settled ${formatDate(e.settled_at)}`}>
+              Settled
+            </Badge>
+          )}
+        </span>
+      </td>
       <td className="px-4 py-3 align-middle">{e.project || '—'}</td>
       <td className="px-4 py-3 align-middle whitespace-nowrap">{formatTime(e.start_time)}</td>
       <td className="px-4 py-3 align-middle whitespace-nowrap">{formatTime(e.end_time)}</td>
@@ -212,6 +241,14 @@ export function EntriesPage() {
                 <SelectItem value="custom">Custom range</SelectItem>
               </SelectContent>
             </Select>
+            <Select value={settleFilter} onValueChange={(v) => setSettleFilter(v as 'all' | 'unsettled' | 'settled')}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Settled & unsettled</SelectItem>
+                <SelectItem value="unsettled">Unsettled only</SelectItem>
+                <SelectItem value="settled">Settled only</SelectItem>
+              </SelectContent>
+            </Select>
             <Select value={sortKey} onValueChange={(v) => setSortKey(v as SortKey)}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -246,6 +283,9 @@ export function EntriesPage() {
             <span><span className="font-semibold text-foreground">{filtered.length}</span> entries</span>
             <span><span className="font-semibold text-foreground">{formatMinutes(totals.min)}</span> hours</span>
             <span><span className="font-semibold text-foreground">{money(totals.earn, currency)}</span> earnings</span>
+            <span title="Earnings that have not been settled yet">
+              <span className="font-semibold text-foreground">{money(totals.open, currency)}</span> unsettled
+            </span>
           </div>
         </CardContent>
       </Card>
@@ -296,7 +336,14 @@ export function EntriesPage() {
                 <CardContent className="p-4">
                   <div className="flex items-start justify-between">
                     <div>
-                      <p className="font-semibold">{workerName(e.worker_id)}</p>
+                      <p className="flex flex-wrap items-center gap-1.5 font-semibold">
+                        {workerName(e.worker_id)}
+                        {e.settled_at && (
+                          <Badge variant="muted" className="px-1.5 py-0 text-[10px]" title={`Settled ${formatDate(e.settled_at)}`}>
+                            Settled
+                          </Badge>
+                        )}
+                      </p>
                       <p className="text-xs text-muted-foreground">{formatDate(e.start_time)} · {formatTime(e.start_time)}–{formatTime(e.end_time)}</p>
                     </div>
                     <span className="font-semibold">{money(e.earnings, currency)}</span>

@@ -147,7 +147,7 @@ export function WorkersPage() {
                     <Button variant="outline" size="sm" className="gap-1" onClick={() => { setEditing(w); setFormOpen(true); }}>
                       <Pencil className="h-4 w-4" /> Edit
                     </Button>
-                    <Button variant="outline" size="sm" className="gap-1" onClick={() => setSettling(w)} title="Reset time & earnings">
+                    <Button variant="outline" size="sm" className="gap-1" onClick={() => setSettling(w)} title="Settle unsettled time into a payment — time entries are kept">
                       <RotateCcw className="h-4 w-4" /> Reset
                     </Button>
                     <Button variant="outline" size="sm" className="gap-1" onClick={() => setResettingPw(w)} title="Reset worker password">

@@ -33,6 +33,23 @@ export function resolveChatAuthor(
   }
 }
 
+/** Longest message preview kept in a chat notification. */
+export const CHAT_NOTIFICATION_PREVIEW = 120
+
+/**
+ * The text of the notification other members get when someone posts in the team
+ * chat: "John Smith: On site now." Kept in one place so the local and Supabase
+ * backends (and the SQL function) all word it the same way.
+ */
+export function chatNotificationText(message: Pick<ChatMessage, 'author_name' | 'body'>): string {
+  const flat = message.body.replace(/\s+/g, ' ').trim()
+  const preview =
+    flat.length > CHAT_NOTIFICATION_PREVIEW
+      ? `${flat.slice(0, CHAT_NOTIFICATION_PREVIEW - 1)}…`
+      : flat
+  return `${message.author_name}: ${preview}`
+}
+
 /** Day separator label for the chat timeline. */
 export function chatDayLabel(iso: string): string {
   const d = new Date(iso)

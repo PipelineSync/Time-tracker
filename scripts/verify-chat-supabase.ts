@@ -110,6 +110,30 @@ async function scenario1_worker_reads_and_posts() {
   assert(state.calls.some((c: any) => c.rpc === 'post_chat_message'), 'posting goes through the post_chat_message RPC')
   assert(state.chat.at(-1)?.user_id === ADMIN.id, 'the row is owned by the workspace admin')
 
+  // The rest of the room is notified about the new message.
+  assert(
+    state.calls.some((c: any) => c.rpc === 'notify_chat_message'),
+    'posting notifies the team through the notify_chat_message RPC'
+  )
+  const notifs = state.notifications.filter((n: any) => n.type === 'chat')
+  assert(notifs.length === 2, `the two other members are notified (${notifs.length})`)
+  assert(
+    notifs.some((n: any) => n.user_id === ADMIN.id && n.message === 'John Smith: On site now.'),
+    'the admin notification names the sender and previews the message'
+  )
+  assert(notifs.some((n: any) => n.user_id === SARAH.id), 'the other worker is notified too')
+  assert(!notifs.some((n: any) => n.user_id === JOHN.id), 'the sender is not notified about their own message')
+  assert(notifs.every((n: any) => n.read === false), 'chat notifications arrive unread')
+
+  const longPost = await supabaseBackend.sendChatMessage('Site update. '.repeat(30))
+  assert(!longPost.error, 'a long message posts fine')
+  const longNotif: any = state.notifications.at(-1)
+  assert(
+    (longNotif?.message?.length ?? 0) <= 'John Smith: '.length + 120,
+    `a long message is clipped in the notification (${longNotif?.message?.length} chars)`
+  )
+  assert(longNotif?.message?.endsWith('…'), 'the clipped notification ends with an ellipsis')
+
   const empty = await supabaseBackend.sendChatMessage('    ')
   assert(empty.error === 'Write a message first.', 'empty messages are refused client-side')
   const long = await supabaseBackend.sendChatMessage('x'.repeat(2001))
@@ -157,10 +181,42 @@ async function scenario3_unmigrated_database() {
   assert(workerRoster.data?.length === 2, `a worker's fallback roster is themselves + the admin (${workerRoster.data?.length})`)
 }
 
+async function scenario4_notifications_without_the_function() {
+  console.log('\n--- S4: database without notify_chat_message ---')
+  seedWorkspace()
+  state.missingFunctions = ['notify_chat_message']
+
+  // A worker: posting must keep working, and the admin still hears about it —
+  // RLS only lets a worker write notifications for themselves and the admin.
+  await signInAs(JOHN)
+  const posted = await supabaseBackend.sendChatMessage('Ladder is on the van.')
+  assert(!posted.error, 'the worker can still post without the notification function')
+  const notifs = state.notifications.filter((n: any) => n.type === 'chat')
+  assert(
+    notifs.length === 1 && notifs[0].user_id === ADMIN.id,
+    `the fallback still reaches the admin (${notifs.length} notification(s))`
+  )
+  assert(notifs[0]?.message === 'John Smith: Ladder is on the van.', 'the fallback uses the same wording')
+
+  // The admin can write a notification for anyone, so the whole team is reached.
+  state.notifications = []
+  await signInAs(ADMIN)
+  const adminPost = await supabaseBackend.sendChatMessage('Thanks — see you at 7.')
+  assert(!adminPost.error, 'the admin can post without the notification function')
+  const adminNotifs = state.notifications.filter((n: any) => n.type === 'chat')
+  assert(
+    adminNotifs.length === 2 &&
+      adminNotifs.every((n: any) => n.user_id === JOHN.id || n.user_id === SARAH.id),
+    `the admin fallback notifies both workers (${adminNotifs.length})`
+  )
+  assert(!adminNotifs.some((n: any) => n.user_id === ADMIN.id), 'the admin is not notified about their own message')
+}
+
 async function main() {
   await scenario1_worker_reads_and_posts()
   await scenario2_admin_view()
   await scenario3_unmigrated_database()
+  await scenario4_notifications_without_the_function()
   console.log(failures ? `\n${failures} FAILURE(S)` : '\nall chat/supabase checks passed')
   if (failures) process.exit(1)
 }

@@ -97,7 +97,11 @@ export function PaymentsPage() {
         <EmptyState
           icon={Wallet}
           title="No payments"
-          description={isAdmin ? 'Reset a worker’s time & earnings to create an unpaid payment.' : 'You don’t have any payments yet.'}
+          description={
+            isAdmin
+              ? 'Settle a worker’s unsettled time to create an unpaid payment. Their time entries are kept and marked as settled.'
+              : 'You don’t have any payments yet.'
+          }
         />
       ) : (
         <Card>

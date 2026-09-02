@@ -142,10 +142,7 @@ export function ChatPage() {
 
   return (
     <div className="space-y-4">
-      <PageHeader
-        title="Chat"
-        description={`The shared room for ${roomName}. Every message shows who sent it — picture, name and role.`}
-      >
+      <PageHeader title="Chat">
         <div className="flex items-center gap-2">
           <Button variant="ghost" size="sm" onClick={handleRetry} disabled={refreshing}>
             <RefreshCw className={cn('mr-1 h-4 w-4', refreshing && 'animate-spin')} /> Refresh
