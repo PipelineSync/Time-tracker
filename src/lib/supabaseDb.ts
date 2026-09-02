@@ -14,7 +14,13 @@ import type {
 } from './types'
 import type { BackendResult, DataBackend, CreateWorkerInput } from './backend'
 import { ACCOUNT_DEACTIVATED_MESSAGE, CHAT_MAX_LENGTH } from './backend'
-import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import {
+  createClient,
+  type Session,
+  type SupabaseClient,
+  isAuthRefreshDiscardedError,
+  isAuthRetryableFetchError,
+} from '@supabase/supabase-js'
 import { computeEarnings, computeTotalMinutes, formatMinutes, formatDate } from './utils'
 import { chatNotificationText } from './chat'
 
@@ -25,9 +31,50 @@ export function isSupabaseConfigured(): boolean {
   return Boolean(url && anonKey)
 }
 
+let supabase: SupabaseClient | null = null
+
 function client(): SupabaseClient {
   if (!url || !anonKey) throw new Error('Supabase is not configured.')
-  return createClient(url, anonKey)
+  if (!supabase) {
+    // ONE client for the whole app lifetime. A supabase client owns the
+    // background access-token refresh (autoRefreshToken), the persisted
+    // session, and the cross-tab session broadcast. Constructing a fresh
+    // client per call (as this module used to) left many overlapping clients
+    // with their own refresh timers and storage writers all sharing the same
+    // localStorage slot — those could invalidate each other's token refresh
+    // and silently drop a perfectly good session, which looked like the app
+    // "logging you out by itself".
+    supabase = createClient(url, anonKey, {
+      auth: {
+        // Keep the access token fresh while the app is open, and keep the
+        // session in localStorage so a reload never signs the user out.
+        autoRefreshToken: true,
+        persistSession: true,
+        detectSessionInUrl: true,
+      },
+    })
+  }
+  return supabase
+}
+
+/** Auth errors that mean "try again later" — never "the user is signed out". */
+function isTransientAuthError(e: unknown): boolean {
+  if (!e || typeof e !== 'object') return true
+  // Offline / DNS / fetch failure, or a refresh that lost a race to another
+  // tab. In both cases the session itself is fine — only the attempt failed.
+  if (isAuthRetryableFetchError(e)) return true
+  if (isAuthRefreshDiscardedError(e)) return true
+  if (typeof (e as { status?: unknown }).status === 'number' && (e as { status: number }).status >= 500) return true
+  return false
+}
+
+/** The last session this page saw, kept so we can restore it if storage is cleared. */
+let lastKnownSession: Session | null = null
+function rememberSession(session: Session | null) {
+  lastKnownSession = session
+}
+function forgetSession() {
+  lastKnownSession = null
 }
 
 function mapErr(e: unknown): string {
@@ -52,16 +99,132 @@ type AuthLookup =
 
 export { ACCOUNT_DEACTIVATED_MESSAGE }
 
+type SessionState =
+  | { status: 'ok'; session: Session }
+  | { status: 'signed-out' }
+  | { status: 'transient'; error: string }
+
+/**
+ * Ask the auth server to confirm/refresh a session, using the freshest tokens
+ * we can find: whatever is currently persisted (supabase-js may have rotated
+ * it since we last read), else the last session this page saw. setSession()
+ * refreshes the access token when it has expired and validates it when it is
+ * still current — so this is the definitive server-side answer on whether the
+ * session is still alive.
+ *
+ * Returns:
+ *  - 'ok'         the session is valid again (and re-remembered)
+ *  - 'transient'  the auth server could not be reached — retry later
+ *  - 'signed-out' the server rejected the tokens (revoked/expired for good) —
+ *                 this really is a logout
+ */
+async function healSession(sb: SupabaseClient): Promise<SessionState> {
+  let tokens: { access_token: string; refresh_token: string } | null = null
+  try {
+    const { data, error } = await sb.auth.getSession()
+    if (!error && data.session) {
+      tokens = { access_token: data.session.access_token, refresh_token: data.session.refresh_token }
+    }
+  } catch {
+    // Fall back to the in-page memory below.
+  }
+  if (!tokens && lastKnownSession) {
+    tokens = { access_token: lastKnownSession.access_token, refresh_token: lastKnownSession.refresh_token }
+  }
+  if (!tokens) return { status: 'signed-out' }
+  try {
+    const { data, error } = await sb.auth.setSession(tokens)
+    if (!error && data.session) {
+      rememberSession(data.session)
+      return { status: 'ok', session: data.session }
+    }
+    if (error && isTransientAuthError(error)) return { status: 'transient', error: error.message }
+  } catch (e) {
+    return { status: 'transient', error: mapErr(e) }
+  }
+  forgetSession()
+  return { status: 'signed-out' }
+}
+
 async function getAuthUser(): Promise<AuthLookup> {
   const sb = client()
-  const { data, error } = await sb.auth.getUser()
-  if (!data?.user) {
-    return error ? { status: 'unknown', error: error.message } : { status: 'signed-out' }
+
+  // 1. Read the persisted session. supabase-js refreshes the access token by
+  //    itself when it nears expiry, so the stored session is normally enough.
+  let session: Session | null = null
+  let sessionError: string | null = null
+  try {
+    const { data, error } = await sb.auth.getSession()
+    if (error) sessionError = error.message
+    session = data.session
+  } catch (e) {
+    sessionError = mapErr(e)
   }
+  if (session) {
+    rememberSession(session)
+  } else if (sessionError) {
+    // The session could not even be read — never sign the user out for that.
+    return { status: 'unknown', error: sessionError }
+  } else if (lastKnownSession) {
+    // The persisted session disappeared while this page was open (a failed
+    // background refresh, a cross-tab race, a storage hiccup). Restore it
+    // from the refresh token before ever reporting a sign-out.
+    const healed = await healSession(sb)
+    if (healed.status === 'ok') session = healed.session
+    else if (healed.status === 'transient') return { status: 'unknown', error: healed.error }
+    else return { status: 'signed-out' }
+  } else {
+    return { status: 'signed-out' }
+  }
+  if (!session) return { status: 'signed-out' }
+
+  // 2. Validate the session with the Auth server. This is the check that also
+  //    refuses accounts the admin deleted while they were signed in.
+  let authUser: { id: string; email?: string | null } | null = null
+  let authError: unknown = null
+  try {
+    const { data, error } = await sb.auth.getUser()
+    if (data?.user) authUser = data.user
+    else if (error) authError = error
+  } catch (e) {
+    authError = e
+  }
+
+  // 3. The access token did not validate. A transient problem (network blip)
+  //    keeps the session and retries on the next tick. Anything else usually
+  //    means the access token expired and its background refresh failed — give
+  //    the refresh token one explicit chance before concluding anything.
+  if (!authUser) {
+    if (authError !== null && isTransientAuthError(authError)) {
+      return { status: 'unknown', error: mapErr(authError) }
+    }
+    const healed = await healSession(sb)
+    if (healed.status === 'ok') {
+      try {
+        const { data, error } = await sb.auth.getUser()
+        if (data?.user) authUser = data.user
+        else authError = error ?? 'Could not validate the restored session.'
+      } catch (e) {
+        authError = e
+      }
+    } else if (healed.status === 'signed-out') {
+      return { status: 'signed-out' }
+    } else {
+      return { status: 'unknown', error: healed.error }
+    }
+    if (!authUser) {
+      if (authError !== null && isTransientAuthError(authError)) return { status: 'unknown', error: mapErr(authError) }
+      // The auth server rejected both the access token and the refresh token
+      // (revoked, expired beyond its lifetime, account deleted) — sign out.
+      return { status: 'signed-out' }
+    }
+  }
+
+  const user = authUser
   const { data: profileData, error: profileError } = await sb
     .from('profiles')
     .select('role, worker_id')
-    .eq('user_id', data.user.id)
+    .eq('user_id', user.id)
     .maybeSingle()
   if (profileError) return { status: 'unknown', error: profileError.message }
   let profile = profileData
@@ -69,8 +232,8 @@ async function getAuthUser(): Promise<AuthLookup> {
   // Older worker accounts may have been created before the worker/profile link
   // was added. Repair that link once, server-side, using the authenticated email.
   if (profile?.role === 'worker' && !profile.worker_id) {
-    const session = await sb.auth.getSession()
-    const accessToken = session.data.session?.access_token
+    const sessionRes = await sb.auth.getSession()
+    const accessToken = sessionRes.data.session?.access_token
     if (accessToken) {
       try {
         const response = await fetch('/.netlify/functions/sync-worker-profile', {
@@ -78,7 +241,7 @@ async function getAuthUser(): Promise<AuthLookup> {
           headers: { Authorization: `Bearer ${accessToken}` },
         })
         if (response.ok) {
-          const repaired = await sb.from('profiles').select('role, worker_id').eq('user_id', data.user.id).maybeSingle()
+          const repaired = await sb.from('profiles').select('role, worker_id').eq('user_id', user.id).maybeSingle()
           profile = repaired.data ?? profile
         }
       } catch {
@@ -112,8 +275,8 @@ async function getAuthUser(): Promise<AuthLookup> {
   return {
     status: 'authenticated',
     user: {
-      id: data.user.id,
-      email: data.user.email ?? '',
+      id: user.id,
+      email: user.email ?? '',
       role: profile.role === 'admin' ? 'admin' : 'worker',
       workerId: profile.worker_id ?? null,
     },
@@ -302,15 +465,18 @@ export const supabaseBackend: DataBackend = {
       // exists in this workspace (e.g. the admin deleted the worker). Refuse
       // entry and drop the just-created session.
       await sb.auth.signOut()
+      forgetSession()
       return fail(ACCOUNT_DEACTIVATED_MESSAGE)
     }
     if (lookup.status === 'authenticated') return ok(lookup.user)
     // signed-out / transient error — never fall back to a role guess.
     await sb.auth.signOut()
+    forgetSession()
     return fail('Could not verify this account. Please try again.')
   },
 
   async signOut() {
+    forgetSession()
     await client().auth.signOut()
   },
 
@@ -321,6 +487,7 @@ export const supabaseBackend: DataBackend = {
       // invalidate the local session. The ACCOUNT_DEACTIVATED_MESSAGE error
       // tells the store to sign the user out with a specific notice.
       await client().auth.signOut()
+      forgetSession()
       return fail(ACCOUNT_DEACTIVATED_MESSAGE)
     }
     if (lookup.status === 'authenticated') return ok(lookup.user)

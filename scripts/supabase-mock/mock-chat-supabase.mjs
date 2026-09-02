@@ -414,3 +414,11 @@ export function createClient() {
 }
 
 export { workspaceMembers, postChatMessage, notifyChatMessage, workspaceOwnerId }
+
+// Guards mirroring the real @supabase/auth-js exports used by supabaseDb.ts.
+export function isAuthRetryableFetchError(e) {
+  return Boolean(e && typeof e === 'object' && e.name === 'AuthRetryableFetchError')
+}
+export function isAuthRefreshDiscardedError(e) {
+  return Boolean(e && typeof e === 'object' && e.name === 'AuthRefreshDiscardedError')
+}

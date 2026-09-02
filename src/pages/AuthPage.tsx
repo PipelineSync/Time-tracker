@@ -7,7 +7,7 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { BrandLogo } from '@/components/BrandLogo'
 import { toast } from 'sonner'
-import { Loader2, ShieldCheck, Eye, EyeOff, TriangleAlert, Database } from 'lucide-react'
+import { Loader2, ShieldCheck, Eye, EyeOff, TriangleAlert } from 'lucide-react'
 
 const supabaseReady = isSupabaseConfigured()
 
@@ -58,11 +58,7 @@ export function AuthPage() {
               <CardDescription>
                 Sign in with the credentials provided to you.
               </CardDescription>
-              {supabaseReady ? (
-                <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <Database className="h-3.5 w-3.5" /> Connected to Supabase — sign in with your account email.
-                </p>
-              ) : (
+              {!supabaseReady && (
                 <p className="flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-2 text-xs text-amber-800">
                   <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                   <span>
