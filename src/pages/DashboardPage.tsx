@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from 'react'
+import { useMemo } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useStore } from '@/lib/store'
 import { StatCard } from '@/components/StatCard'
@@ -6,22 +6,17 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/EmptyState'
+import { ActiveWorkersPanel } from '@/components/ActiveWorkersPanel'
 import {
   Clock, DollarSign, CalendarRange, Wallet, Plus, Users, ListChecks,
 } from 'lucide-react'
-import { money, formatMinutes, formatDate, formatTime, timerElapsedMs } from '@/lib/utils'
+import { money, formatMinutes, formatDate } from '@/lib/utils'
 import { dateRangeFor, filterEntriesInRange, summarizeEntries, hoursByWorker } from '@/lib/stats'
 
 export function DashboardPage() {
-  const { entries, workers, settings, activeTimer, dataLoading } = useStore()
+  const { entries, workers, settings, dataLoading } = useStore()
   const navigate = useNavigate()
-  const [now, setNow] = useState(Date.now())
   const currency = settings?.currency || 'USD'
-
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(t)
-  }, [])
 
   const today = useMemo(() => {
     const { from, to } = dateRangeFor('today')
@@ -38,9 +33,6 @@ export function DashboardPage() {
 
   const byWorker = useMemo(() => hoursByWorker(week, workers), [week, workers])
 
-  const activeElapsed = activeTimer ? timerElapsedMs(activeTimer, new Date(now)) : 0
-  const activeWorker = activeTimer ? workers.find((w) => w.id === activeTimer.worker_id) : null
-
   const recent = useMemo(() => [...entries].sort((a, b) => b.start_time.localeCompare(a.start_time)).slice(0, 6), [entries])
 
   return (
@@ -50,27 +42,8 @@ export function DashboardPage() {
         <p className="text-sm text-muted-foreground">Overview of your team’s time and earnings.</p>
       </div>
 
-      {/* Active timer banner */}
-      {activeTimer && (
-        <Card className="border-primary/40 bg-primary/5">
-          <CardContent className="flex flex-col items-start justify-between gap-4 p-5 sm:flex-row sm:items-center">
-            <div className="flex items-center gap-4">
-              <span className="relative flex h-3 w-3">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#F77A0A] opacity-75" />
-                <span className="relative inline-flex h-3 w-3 rounded-full bg-[#F77A0A]" />
-              </span>
-              <div>
-                <p className="font-semibold">{activeWorker?.name || 'Worker'} is working</p>
-                <p className="font-mono text-sm text-muted-foreground">
-                  {formatDate(activeTimer.start_time)} {formatTime(activeTimer.start_time)} ·{' '}
-                  {Math.floor(activeElapsed / 60000 / 60)}h {Math.floor((activeElapsed / 60000) % 60)}m
-                </p>
-              </div>
-            </div>
-            <Link to="/entries"><Button>View entries</Button></Link>
-          </CardContent>
-        </Card>
-      )}
+      {/* Everyone currently on the clock (working or on break) */}
+      <ActiveWorkersPanel />
 
       {/* Stat cards */}
       <div className="grid grid-cols-2 gap-4">

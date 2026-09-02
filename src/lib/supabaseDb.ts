@@ -146,12 +146,33 @@ async function workerName(workerId: string): Promise<string> {
 }
 
 async function pushNotification(recipientUserId: string, n: { entry_id: string | null; type: AppNotification['type']; message: string }) {
-  await client().from('notifications').insert({
+  const { error } = await client().from('notifications').insert({
     user_id: recipientUserId,
     entry_id: n.entry_id,
     type: n.type,
     message: n.message,
   })
+  // 23514 = check violation: the database predates this notification type
+  // (e.g. break notifications before running supabase/add-break-notifications.sql).
+  // Still deliver the message rather than silently dropping it.
+  if (error && (error as { code?: string }).code === '23514' && n.type !== 'note') {
+    await client().from('notifications').insert({
+      user_id: recipientUserId,
+      entry_id: n.entry_id,
+      type: 'note',
+      message: n.message,
+    })
+  }
+}
+
+/** Timer targeted by a pause/resume call: an explicit id, else the caller's own. */
+async function resolveTimer(backend: DataBackend, timerId?: string): Promise<ActiveTimer | null> {
+  if (timerId) {
+    const { data } = await client().from('active_timers').select('*').eq('id', timerId).maybeSingle()
+    return (data as ActiveTimer) ?? null
+  }
+  const { data } = await backend.getActiveTimer()
+  return data ?? null
 }
 
 export const supabaseBackend: DataBackend = {
@@ -417,6 +438,12 @@ export const supabaseBackend: DataBackend = {
   },
 
   async getActiveTimer() {
+    const res = await this.listActiveTimers()
+    if (res.error) return fail(res.error)
+    return ok((res.data || [])[0] ?? null)
+  },
+
+  async listActiveTimers() {
     const me = await requireUser()
     if (me.error) return fail(me.error)
     const sb = client()
@@ -434,7 +461,7 @@ export const supabaseBackend: DataBackend = {
         .limit(10)
       if (error) return fail(error.message)
       const rows = (data as ActiveTimer[]) || []
-      if (rows.length === 0) return ok(null)
+      if (rows.length === 0) return ok([])
       const [survivor, ...stale] = rows
       // Point the surviving timer at the worker's current row (the link may
       // have been repaired/re-created since it was started) and drop the rest.
@@ -443,23 +470,17 @@ export const supabaseBackend: DataBackend = {
         if (!upd.error && upd.data) survivor.worker_id = wid
       }
       for (const s of stale) await sb.from('active_timers').delete().eq('id', s.id)
-      return ok(survivor)
+      return ok([survivor])
     }
-    const { data, error } = await sb.from('active_timers').select('*').order('start_time', { ascending: false }).limit(1)
+    // Admin: every worker currently on the clock, working or on break.
+    const { data, error } = await sb.from('active_timers').select('*').order('start_time', { ascending: false })
     if (error) return fail(error.message)
-    return ok(((data as ActiveTimer[]) || [])[0] ?? null)
+    return ok((data as ActiveTimer[]) || [])
   },
 
   async startTimer(input) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    const existing = await this.getActiveTimer()
-    if (existing.data) {
-      // Workers clocking in again simply pick up their unfinished timer
-      // instead of dead-ending on "already running".
-      if (me.data!.role === 'worker') return ok(existing.data)
-      return fail('A timer is already running.')
-    }
     let workerId = input.worker_id
     let rate = input.hourly_rate
     if (me.data!.role === 'worker') {
@@ -470,6 +491,16 @@ export const supabaseBackend: DataBackend = {
     } else {
       const { data: w } = await client().from('workers').select('hourly_rate').eq('id', workerId).single()
       rate = rate ?? w?.hourly_rate ?? 0
+    }
+    // Only one timer per worker — but any number of workers can be clocked in
+    // at the same time.
+    const { data: running } = await client().from('active_timers').select('*').eq('worker_id', workerId).limit(1)
+    const existing = ((running as ActiveTimer[]) || [])[0]
+    if (existing) {
+      // Workers clocking in again simply pick up their unfinished timer
+      // instead of dead-ending on "already running".
+      if (me.data!.role === 'worker') return ok(existing)
+      return fail('That worker already has a running timer.')
     }
     const { data, error } = await client().from('active_timers').insert({
       worker_id: workerId,
@@ -497,28 +528,37 @@ export const supabaseBackend: DataBackend = {
     return ok(data as ActiveTimer)
   },
 
-  async pauseTimer() {
+  async pauseTimer(timerId) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    const { data: t } = await this.getActiveTimer()
+    const t = await resolveTimer(this, timerId)
     if (!t) return fail('No active timer.')
     if (me.data!.role === 'worker' && t.worker_id !== me.data!.workerId) return fail('Not your timer.')
     if (t.paused) return ok(t)
     const { data, error } = await client().from('active_timers').update({ paused: true, pause_start: new Date().toISOString() }).eq('id', t.id).select().single()
     if (error) return fail(error.message)
+    // Let the admin know the worker went on break.
+    if (me.data!.role === 'worker') {
+      const adminId = await getAdminUserId()
+      if (adminId) await pushNotification(adminId, { entry_id: null, type: 'break_start', message: `${await workerName(t.worker_id)} started a break` })
+    }
     return ok(data as ActiveTimer)
   },
 
-  async resumeTimer() {
+  async resumeTimer(timerId) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    const { data: t } = await this.getActiveTimer()
+    const t = await resolveTimer(this, timerId)
     if (!t) return fail('No active timer.')
     if (me.data!.role === 'worker' && t.worker_id !== me.data!.workerId) return fail('Not your timer.')
     if (!t.paused) return ok(t)
     const extra = t.pause_start ? new Date().getTime() - new Date(t.pause_start).getTime() : 0
     const { data, error } = await client().from('active_timers').update({ paused: false, pause_start: null, total_pause_ms: (t.total_pause_ms || 0) + extra }).eq('id', t.id).select().single()
     if (error) return fail(error.message)
+    if (me.data!.role === 'worker') {
+      const adminId = await getAdminUserId()
+      if (adminId) await pushNotification(adminId, { entry_id: null, type: 'break_end', message: `${await workerName(t.worker_id)} is back from break` })
+    }
     return ok(data as ActiveTimer)
   },
 

@@ -73,6 +73,29 @@ export function timerElapsedMs(timer: ActiveTimer, now: Date): number {
   return Math.max(0, elapsed)
 }
 
+/** Total break time so far for an active timer, including a break in progress. */
+export function timerBreakMs(timer: ActiveTimer, now: Date): number {
+  let ms = timer.total_pause_ms || 0
+  if (timer.paused && timer.pause_start) {
+    ms += Math.max(0, now.getTime() - new Date(timer.pause_start).getTime())
+  }
+  return Math.max(0, ms)
+}
+
+/** Short "1h 05m" style label for a duration in milliseconds. */
+export function formatMsShort(ms: number): string {
+  const totalMinutes = Math.max(0, Math.floor(ms / 60000))
+  const h = Math.floor(totalMinutes / 60)
+  const m = totalMinutes % 60
+  return h > 0 ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}m`
+}
+
+/** Initials for an avatar bubble. */
+export function initials(name?: string | null): string {
+  if (!name) return '?'
+  return name.trim().split(/\s+/).map((n) => n[0]).slice(0, 2).join('').toUpperCase() || '?'
+}
+
 /** Compute total minutes for an entry, correctly handling sessions crossing midnight. */
 export function computeTotalMinutes(start: Date, end: Date, breakMinutes: number): number {
   let diffMs = end.getTime() - start.getTime()

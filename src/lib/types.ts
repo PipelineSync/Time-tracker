@@ -57,6 +57,19 @@ export interface AuthUser {
 
 export type Theme = 'light' | 'dark' | 'system'
 
+/** Live clock state of a worker, derived from their running timer. */
+export type LiveStatus = 'working' | 'break'
+
+export interface ActiveWorker {
+  timer: ActiveTimer
+  worker: Worker | null
+  status: LiveStatus
+  /** Worked milliseconds so far (breaks excluded). */
+  workedMs: number
+  /** Total break milliseconds so far (including any break in progress). */
+  breakMs: number
+}
+
 export interface WorkerStats {
   worker: Worker
   hours: number
@@ -74,7 +87,14 @@ export interface TimeEntryComment {
   created_at: string
 }
 
-export type NotificationType = 'note' | 'time_in' | 'time_out' | 'time_added' | 'payment'
+export type NotificationType =
+  | 'note'
+  | 'time_in'
+  | 'time_out'
+  | 'time_added'
+  | 'payment'
+  | 'break_start'
+  | 'break_end'
 
 export interface AppNotification {
   id: string

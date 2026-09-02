@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useStore } from '@/lib/store'
 import { PageHeader } from '@/components/PageHeader'
@@ -13,12 +13,12 @@ import { WorkerLoginDetails } from '@/components/WorkerLoginDetails'
 import { SettleWorkerDialog } from '@/components/SettleWorkerDialog'
 import { ResetWorkerPasswordDialog } from '@/components/ResetWorkerPasswordDialog'
 import { toast } from 'sonner'
-import { Users, Plus, UserRound, Pencil, Trash2, History, RotateCcw, KeyRound } from 'lucide-react'
+import { Users, Plus, UserRound, Pencil, Trash2, History, RotateCcw, KeyRound, Coffee } from 'lucide-react'
 import type { Worker } from '@/lib/types'
-import { money, formatDate, formatMinutes } from '@/lib/utils'
+import { cn, money, formatDate, formatMinutes, formatMsShort, timerBreakMs, timerElapsedMs } from '@/lib/utils'
 
 export function WorkersPage() {
-  const { workers, entries, deleteWorker, settings, dataLoading } = useStore()
+  const { workers, entries, activeTimers, deleteWorker, settings, dataLoading } = useStore()
   const navigate = useNavigate()
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<Worker | null>(null)
@@ -27,6 +27,20 @@ export function WorkersPage() {
   const [resettingPw, setResettingPw] = useState<Worker | null>(null)
 
   const currency = settings?.currency || 'USD'
+
+  // Live clock state per worker, refreshed every second.
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => {
+    if (activeTimers.length === 0) return
+    const t = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [activeTimers.length])
+
+  const timerByWorker = useMemo(() => {
+    const map = new Map<string, (typeof activeTimers)[number]>()
+    for (const t of activeTimers) map.set(t.worker_id, t)
+    return map
+  }, [activeTimers])
 
   const statsFor = (id: string) => {
     let minutes = 0
@@ -63,8 +77,16 @@ export function WorkersPage() {
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {workers.map((w) => {
             const s = statsFor(w.id)
+            const timer = timerByWorker.get(w.id) || null
+            const onBreak = !!timer?.paused
             return (
-              <Card key={w.id} className={w.status === 'inactive' ? 'opacity-70' : ''}>
+              <Card
+                key={w.id}
+                className={cn(
+                  w.status === 'inactive' && 'opacity-70',
+                  timer && (onBreak ? 'border-[#36B7C9]/50' : 'border-[#F77A0A]/50')
+                )}
+              >
                 <CardContent className="p-5">
                   <div className="flex items-start justify-between">
                     <div className="flex items-center gap-3">
@@ -76,10 +98,35 @@ export function WorkersPage() {
                         {w.email && <p className="text-xs text-muted-foreground">{w.email}</p>}
                       </div>
                     </div>
-                    <Badge variant={w.status === 'active' ? 'success' : 'muted'}>
-                      {w.status === 'active' ? 'Active' : 'Inactive'}
-                    </Badge>
+                    <div className="flex flex-col items-end gap-1">
+                      <Badge variant={w.status === 'active' ? 'success' : 'muted'}>
+                        {w.status === 'active' ? 'Active' : 'Inactive'}
+                      </Badge>
+                      {timer && (
+                        onBreak ? (
+                          <Badge className="gap-1 border-transparent bg-[#36B7C9]/15 text-[#0d7c8c] dark:text-[#7fdbe8]">
+                            <Coffee className="h-3 w-3" /> On break
+                          </Badge>
+                        ) : (
+                          <Badge className="gap-1 border-transparent bg-[#F77A0A]/15 text-[#b85c05] dark:text-[#ffb066]">
+                            <span className="relative flex h-2 w-2">
+                              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#F77A0A] opacity-75" />
+                              <span className="relative inline-flex h-2 w-2 rounded-full bg-[#F77A0A]" />
+                            </span>
+                            Working
+                          </Badge>
+                        )
+                      )}
+                    </div>
                   </div>
+
+                  {timer && (
+                    <p className="mt-3 text-xs text-muted-foreground">
+                      {onBreak
+                        ? `On break for ${formatMsShort(timerBreakMs(timer, new Date(now)))} · worked ${formatMsShort(timerElapsedMs(timer, new Date(now)))} today`
+                        : `On the clock for ${formatMsShort(timerElapsedMs(timer, new Date(now)))}`}
+                    </p>
+                  )}
 
                   <div className="mt-4 space-y-1 rounded-lg bg-muted/60 p-3 text-sm">
                     <div className="flex justify-between"><span className="text-muted-foreground">Rate</span><span className="font-semibold">{money(w.hourly_rate, currency)}/hr</span></div>

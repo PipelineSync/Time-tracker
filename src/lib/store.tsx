@@ -44,7 +44,10 @@ interface StoreValue {
   workers: Worker[]
   entries: TimeEntry[]
   settings: Settings | null
+  /** The signed-in user's own running timer. */
   activeTimer: ActiveTimer | null
+  /** Everyone currently on the clock (admin: all workers, worker: only self). */
+  activeTimers: ActiveTimer[]
   notifications: AppNotification[]
   payments: Payment[]
   unreadCount: number
@@ -69,8 +72,8 @@ interface StoreValue {
   duplicateEntry: (entry: TimeEntry) => Promise<boolean>
 
   startTimer: (input: { worker_id: string; project?: string; notes?: string; hourly_rate?: number }) => Promise<BackendResult<ActiveTimer>>
-  pauseTimer: () => Promise<BackendResult<ActiveTimer>>
-  resumeTimer: () => Promise<BackendResult<ActiveTimer>>
+  pauseTimer: (timerId?: string) => Promise<BackendResult<ActiveTimer>>
+  resumeTimer: (timerId?: string) => Promise<BackendResult<ActiveTimer>>
   stopTimer: (note?: string) => Promise<BackendResult<TimeEntry>>
   cancelTimer: () => Promise<void>
 
@@ -98,6 +101,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [entries, setEntries] = useState<TimeEntry[]>([])
   const [settings, setSettings] = useState<Settings | null>(null)
   const [activeTimer, setActiveTimer] = useState<ActiveTimer | null>(null)
+  const [activeTimers, setActiveTimers] = useState<ActiveTimer[]>([])
   const [notifications, setNotifications] = useState<AppNotification[]>([])
   const [payments, setPayments] = useState<Payment[]>([])
   const [dataLoading, setDataLoading] = useState(false)
@@ -113,11 +117,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const token = ++dataVersion.current
     setDataLoading(true)
     try {
-      const [w, e, s, t, n, p] = await Promise.all([
+      const [w, e, s, t, at, n, p] = await Promise.all([
         backend.listWorkers(),
         backend.listEntries(),
         backend.getSettings(),
         backend.getActiveTimer(),
+        backend.listActiveTimers(),
         backend.listNotifications(),
         backend.listPayments(),
       ])
@@ -125,7 +130,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (w.data) setWorkers(w.data)
       if (e.data) setEntries(e.data)
       if (s.data) setSettings(s.data)
-      if (t.data) setActiveTimer(t.data)
+      // Clear on a clean empty result (someone clocked out elsewhere); keep the
+      // previous value when the backend errored so a blip doesn't hide a timer.
+      if (!t.error) setActiveTimer(t.data ?? null)
+      if (!at.error) setActiveTimers(at.data ?? [])
       if (n.data) setNotifications(n.data)
       if (p.data) setPayments(p.data)
     } finally {
@@ -148,7 +156,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (user) {
       refreshData()
     } else {
-      setWorkers([]); setEntries([]); setSettings(null); setActiveTimer(null); setNotifications([]); setPayments([])
+      setWorkers([]); setEntries([]); setSettings(null); setActiveTimer(null); setActiveTimers([]); setNotifications([]); setPayments([])
     }
   }, [user, refreshData])
 
@@ -290,30 +298,45 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [backend, refreshData])
 
   async function refreshTimer() {
-    const t = await backend.getActiveTimer()
-    if (t.data) setActiveTimer(t.data)
+    const [t, at] = await Promise.all([backend.getActiveTimer(), backend.listActiveTimers()])
+    if (!t.error) setActiveTimer(t.data ?? null)
+    if (!at.error) setActiveTimers(at.data ?? [])
   }
+
+  /** Keep the running-timer list in sync after a local timer change. */
+  const upsertActiveTimer = useCallback((timer: ActiveTimer) => {
+    setActiveTimers((prev) => {
+      const idx = prev.findIndex((t) => t.id === timer.id)
+      if (idx === -1) return [timer, ...prev]
+      const next = [...prev]
+      next[idx] = timer
+      return next
+    })
+  }, [])
 
   const startTimer = useCallback(async (input: { worker_id: string; project?: string; notes?: string; hourly_rate?: number }) => {
     const res = await backend.startTimer(input)
     if (res.error || !res.data) return { data: null, error: res.error }
-    setActiveTimer(res.data)
+    if (!userRef.current || userRef.current.role === 'worker') setActiveTimer(res.data)
+    upsertActiveTimer(res.data)
     return { data: res.data, error: null }
-  }, [backend])
+  }, [backend, upsertActiveTimer])
 
-  const pauseTimer = useCallback(async () => {
-    const res = await backend.pauseTimer()
+  const pauseTimer = useCallback(async (timerId?: string) => {
+    const res = await backend.pauseTimer(timerId)
     if (res.error || !res.data) return { data: null, error: res.error }
-    setActiveTimer(res.data)
+    setActiveTimer((prev) => (prev && prev.id === res.data!.id ? res.data : prev))
+    upsertActiveTimer(res.data)
     return { data: res.data, error: null }
-  }, [backend])
+  }, [backend, upsertActiveTimer])
 
-  const resumeTimer = useCallback(async () => {
-    const res = await backend.resumeTimer()
+  const resumeTimer = useCallback(async (timerId?: string) => {
+    const res = await backend.resumeTimer(timerId)
     if (res.error || !res.data) return { data: null, error: res.error }
-    setActiveTimer(res.data)
+    setActiveTimer((prev) => (prev && prev.id === res.data!.id ? res.data : prev))
+    upsertActiveTimer(res.data)
     return { data: res.data, error: null }
-  }, [backend])
+  }, [backend, upsertActiveTimer])
 
   const stopTimer = useCallback(async (note?: string) => {
     const current = activeTimer
@@ -321,6 +344,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const res = await backend.stopTimer(current.id, note?.trim() ? note.trim() : undefined)
     if (res.error || !res.data) return { data: null, error: res.error }
     setActiveTimer(null)
+    setActiveTimers((prev) => prev.filter((t) => t.id !== current.id))
     await refreshTimer()
     await refreshData()
     return { data: res.data, error: null }
@@ -331,6 +355,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (current) {
       await backend.deleteTimer(current.id)
       setActiveTimer(null)
+      setActiveTimers((prev) => prev.filter((t) => t.id !== current.id))
     }
   }, [backend, activeTimer])
 
@@ -407,6 +432,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     entries,
     settings,
     activeTimer,
+    activeTimers,
     notifications,
     payments,
     unreadCount,

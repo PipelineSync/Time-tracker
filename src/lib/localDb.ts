@@ -30,7 +30,10 @@ interface StoredUser {
 interface UserData {
   workers: Worker[]
   entries: TimeEntry[]
-  activeTimer: ActiveTimer | null
+  /** Every timer currently running — one per worker, many at the same time. */
+  activeTimers: ActiveTimer[]
+  /** @deprecated legacy single-timer field, migrated into `activeTimers`. */
+  activeTimer?: ActiveTimer | null
   settings: Settings | null
   comments: TimeEntryComment[]
   notifications: AppNotification[]
@@ -63,12 +66,20 @@ function writeUsers(users: StoredUser[]) {
   write(USERS_KEY, users)
 }
 
+function emptyData(): UserData {
+  return { workers: [], entries: [], activeTimers: [], settings: null, comments: [], notifications: [], payments: [] }
+}
+
 function readData(userId: string): UserData {
-  const empty: UserData = { workers: [], entries: [], activeTimer: null, settings: null, comments: [], notifications: [], payments: [] }
-  const d = read<UserData>(dataKey(userId), empty)
+  const d = read<UserData>(dataKey(userId), emptyData())
   d.workers = d.workers || []
   d.entries = d.entries || []
-  d.activeTimer = d.activeTimer || null
+  d.activeTimers = d.activeTimers || []
+  // Migrate workspaces saved before multi-worker timers existed.
+  if (d.activeTimer) {
+    if (!d.activeTimers.some((t) => t.id === d.activeTimer!.id)) d.activeTimers.push(d.activeTimer)
+    d.activeTimer = null
+  }
   d.settings = d.settings || null
   d.comments = d.comments || []
   d.notifications = d.notifications || []
@@ -152,6 +163,20 @@ function pushNotification(data: UserData, recipientUserId: string, n: Omit<AppNo
     read: false,
     created_at: new Date().toISOString(),
   })
+}
+
+/** The signed-in user's own timer (admin: the most recently started one). */
+function ownTimer(c: { user: AuthUser; data: UserData }): ActiveTimer | null {
+  if (c.user.role === 'worker') {
+    return c.data.activeTimers.find((t) => t.worker_id === c.user.workerId) || null
+  }
+  return [...c.data.activeTimers].sort((a, b) => b.start_time.localeCompare(a.start_time))[0] || null
+}
+
+/** Resolve a timer by id, falling back to the caller's own timer. */
+function findTimer(c: { user: AuthUser; data: UserData }, timerId?: string): ActiveTimer | null {
+  if (timerId) return c.data.activeTimers.find((t) => t.id === timerId) || null
+  return ownTimer(c)
 }
 
 function workerName(data: UserData, workerId: string): string {
@@ -344,7 +369,7 @@ export const localBackend: DataBackend = {
     if (c.user.role !== 'admin') return { data: null, error: 'Only the admin can delete workers.' }
     c.data.workers = c.data.workers.filter((w) => w.id !== id)
     c.data.entries = c.data.entries.filter((e) => e.worker_id !== id)
-    if (c.data.activeTimer && c.data.activeTimer.worker_id === id) c.data.activeTimer = null
+    c.data.activeTimers = c.data.activeTimers.filter((t) => t.worker_id !== id)
     const entryIds = new Set(c.data.entries.map((e) => e.id))
     c.data.comments = c.data.comments.filter((cm) => entryIds.has(cm.entry_id))
     // Delete the worker's login account.
@@ -421,17 +446,24 @@ export const localBackend: DataBackend = {
   async getActiveTimer() {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
+    return { data: ownTimer(c), error: null }
+  },
+
+  async listActiveTimers() {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
     if (c.user.role === 'worker') {
-      const t = c.data.activeTimer && c.data.activeTimer.worker_id === c.user.workerId ? c.data.activeTimer : null
-      return { data: t, error: null }
+      const mine = c.data.activeTimers.filter((t) => t.worker_id === c.user.workerId)
+      return { data: mine, error: null }
     }
-    return { data: c.data.activeTimer, error: null }
+    // The admin sees everyone that is currently on the clock.
+    const all = [...c.data.activeTimers].sort((a, b) => b.start_time.localeCompare(a.start_time))
+    return { data: all, error: null }
   },
 
   async startTimer(input) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
-    if (c.data.activeTimer) return { data: null, error: 'A timer is already running.' }
     let workerId = input.worker_id
     let rate = input.hourly_rate
     if (c.user.role === 'worker') {
@@ -445,6 +477,12 @@ export const localBackend: DataBackend = {
       if (!w) return { data: null, error: 'Select a worker.' }
       rate = rate ?? w.hourly_rate
     }
+    // Only one timer per worker — other workers may be clocked in at the same time.
+    const existing = c.data.activeTimers.find((t) => t.worker_id === workerId)
+    if (existing) {
+      if (c.user.role === 'worker') return { data: existing, error: null }
+      return { data: null, error: 'That worker already has a running timer.' }
+    }
     const timer: ActiveTimer = {
       id: uid(),
       worker_id: workerId,
@@ -457,7 +495,7 @@ export const localBackend: DataBackend = {
       total_pause_ms: 0,
       created_at: new Date().toISOString(),
     }
-    c.data.activeTimer = timer
+    c.data.activeTimers.push(timer)
     // Notify the admin when a worker clocks in.
     if (c.user.role === 'worker') {
       pushNotification(c.data, c.admin.id, {
@@ -470,23 +508,31 @@ export const localBackend: DataBackend = {
     return { data: timer, error: null }
   },
 
-  async pauseTimer() {
+  async pauseTimer(timerId) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
-    const t = c.data.activeTimer
+    const t = findTimer(c, timerId)
     if (!t) return { data: null, error: 'No active timer.' }
     if (c.user.role === 'worker' && t.worker_id !== c.user.workerId) return { data: null, error: 'Not your timer.' }
     if (t.paused) return { data: t, error: null }
     t.paused = true
     t.pause_start = new Date().toISOString()
+    // Let the admin know the worker went on break.
+    if (c.user.role === 'worker') {
+      pushNotification(c.data, c.admin.id, {
+        entry_id: null,
+        type: 'break_start',
+        message: `${workerName(c.data, t.worker_id)} started a break`,
+      })
+    }
     save(c.data)
     return { data: t, error: null }
   },
 
-  async resumeTimer() {
+  async resumeTimer(timerId) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
-    const t = c.data.activeTimer
+    const t = findTimer(c, timerId)
     if (!t) return { data: null, error: 'No active timer.' }
     if (c.user.role === 'worker' && t.worker_id !== c.user.workerId) return { data: null, error: 'Not your timer.' }
     if (!t.paused) return { data: t, error: null }
@@ -495,6 +541,13 @@ export const localBackend: DataBackend = {
     }
     t.paused = false
     t.pause_start = null
+    if (c.user.role === 'worker') {
+      pushNotification(c.data, c.admin.id, {
+        entry_id: null,
+        type: 'break_end',
+        message: `${workerName(c.data, t.worker_id)} is back from break`,
+      })
+    }
     save(c.data)
     return { data: t, error: null }
   },
@@ -502,8 +555,8 @@ export const localBackend: DataBackend = {
   async stopTimer(timerId, note) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
-    const timer = c.data.activeTimer
-    if (!timer || timer.id !== timerId) return { data: null, error: 'No active timer found.' }
+    const timer = c.data.activeTimers.find((t) => t.id === timerId)
+    if (!timer) return { data: null, error: 'No active timer found.' }
     if (c.user.role === 'worker' && timer.worker_id !== c.user.workerId) return { data: null, error: 'Not your timer.' }
     const clockOutNote = typeof note === 'string' && note.trim() ? note.trim().slice(0, 2000) : null
     const end = new Date()
@@ -530,7 +583,7 @@ export const localBackend: DataBackend = {
       updated_at: new Date().toISOString(),
     }
     c.data.entries.push(entry)
-    c.data.activeTimer = null
+    c.data.activeTimers = c.data.activeTimers.filter((t) => t.id !== timer.id)
     // Notify the admin when a worker clocks out.
     if (c.user.role === 'worker') {
       pushNotification(c.data, c.admin.id, {
@@ -546,10 +599,11 @@ export const localBackend: DataBackend = {
   async deleteTimer(timerId) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
-    if (c.data.activeTimer && c.data.activeTimer.id === timerId) {
-      c.data.activeTimer = null
-      save(c.data)
-    }
+    const t = c.data.activeTimers.find((x) => x.id === timerId)
+    if (!t) return { data: null, error: null }
+    if (c.user.role === 'worker' && t.worker_id !== c.user.workerId) return { data: null, error: 'Not your timer.' }
+    c.data.activeTimers = c.data.activeTimers.filter((x) => x.id !== timerId)
+    save(c.data)
     return { data: null, error: null }
   },
 
@@ -745,7 +799,7 @@ export const localBackend: DataBackend = {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
     if (c.user.role !== 'admin') return { data: null, error: 'Only the admin can delete data.' }
-    save({ workers: [], entries: [], activeTimer: null, settings: null, comments: [], notifications: [], payments: [] })
+    save(emptyData())
     // Worker login accounts are gone along with their worker rows — drop them
     // so reset workers cannot sign in again. The admin account is kept.
     writeUsers(readUsers().filter((u) => u.role !== 'worker'))
@@ -769,7 +823,7 @@ export const localBackend: DataBackend = {
     save({
       workers: seededWorkers,
       entries: seed.entries.map((e) => ({ ...e, worker_id: idMap.get(e.worker_id) || e.worker_id, id: uid() })),
-      activeTimer: null,
+      activeTimers: [],
       settings: seed.settings,
       comments: [],
       notifications: [],
