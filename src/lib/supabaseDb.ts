@@ -5,12 +5,15 @@ import type {
   Settings,
   AuthUser,
   TimeEntryComment,
+  ChatMessage,
+  ChatMember,
   AppNotification,
   Payment,
   PaymentStatus,
+  Role,
 } from './types'
 import type { BackendResult, DataBackend, CreateWorkerInput } from './backend'
-import { ACCOUNT_DEACTIVATED_MESSAGE } from './backend'
+import { ACCOUNT_DEACTIVATED_MESSAGE, CHAT_MAX_LENGTH } from './backend'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { computeEarnings, computeTotalMinutes, formatMinutes, formatDate } from './utils'
 
@@ -143,6 +146,52 @@ async function getWorkerUserId(workerId: string): Promise<string | null> {
 async function workerName(workerId: string): Promise<string> {
   const { data } = await client().from('workers').select('name').eq('id', workerId).single()
   return data?.name ?? 'A worker'
+}
+
+/** How the admin is identified in the team chat (picture comes from settings). */
+const ADMIN_CHAT_NAME = 'Admin'
+const ADMIN_CHAT_POSITION = 'Owner'
+
+/** True when PostgREST says a database function is missing (schema not migrated). */
+function isMissingDbFunction(error: { code?: string; message?: string } | null, fn: string): boolean {
+  if (!error) return false
+  return error.code === 'PGRST202' || new RegExp(`function ${fn}`, 'i').test(error.message ?? '')
+}
+
+/** Chat errors, with a readable hint when the chat tables have not been created. */
+function chatTableHint(error: { code?: string; message?: string } | null): string {
+  const message = error?.message ?? 'Something went wrong.'
+  const missingTable = error?.code === '42P01' || (/chat_messages/i.test(message) && /does not exist|not find|relation/i.test(message))
+  if (missingTable) {
+    return 'The team chat is not set up in this database yet. Run supabase/chat-messages.sql once in the Supabase SQL editor to create it.'
+  }
+  return message
+}
+
+/** Identity a chat message is stamped with when the RPC is unavailable. */
+async function chatAuthor(
+  user: AuthUser
+): Promise<{ name: string; role: Role; workerId: string | null; position: string | null; avatarUrl: string | null } | null> {
+  const sb = client()
+  if (user.role === 'admin') {
+    const { data } = await sb.from('settings').select('avatar_url').maybeSingle()
+    return {
+      name: ADMIN_CHAT_NAME,
+      role: 'admin',
+      workerId: null,
+      position: ADMIN_CHAT_POSITION,
+      avatarUrl: (data as { avatar_url: string | null } | null)?.avatar_url ?? null,
+    }
+  }
+  if (!user.workerId) return null
+  const { data } = await sb
+    .from('workers')
+    .select('name, position, avatar_url')
+    .eq('id', user.workerId)
+    .maybeSingle()
+  if (!data) return null
+  const w = data as { name: string; position: string | null; avatar_url: string | null }
+  return { name: w.name, role: 'worker', workerId: user.workerId, position: w.position ?? null, avatarUrl: w.avatar_url ?? null }
 }
 
 async function pushNotification(recipientUserId: string, n: { entry_id: string | null; type: AppNotification['type']; message: string }) {
@@ -721,7 +770,126 @@ export const supabaseBackend: DataBackend = {
     return ok(data as TimeEntryComment)
   },
 
+  async listChatMessages(limit) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    const max = Math.max(1, Math.min(Math.floor(limit ?? 200), 500))
+    // RLS keeps this to the caller's workspace; everyone in it reads the same
+    // timeline (the chat is not scoped per worker the way entries are).
+    const { data, error } = await client()
+      .from('chat_messages')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(max)
+    if (error) return fail(chatTableHint(error as { code?: string; message?: string }))
+    // Asked for newest-first (so a limit keeps the tail), presented oldest-first.
+    return ok([...((data as ChatMessage[]) ?? [])].reverse())
+  },
+
+  async sendChatMessage(body) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    const text = body.trim()
+    if (!text) return fail('Write a message first.')
+    if (text.length > CHAT_MAX_LENGTH) return fail(`Message is too long (${CHAT_MAX_LENGTH} characters max).`)
+    // Preferred path: an RPC that derives the author (name, role, picture) from
+    // the authenticated user, so nobody can post as someone else.
+    const rpc = await client().rpc('post_chat_message', { message_body: text })
+    if (!rpc.error) return ok(rpc.data as ChatMessage)
+    if (!isMissingDbFunction(rpc.error as { code?: string; message?: string }, 'post_chat_message')) {
+      return fail(chatTableHint(rpc.error as { code?: string; message?: string }))
+    }
+    // Older database without the function. Only the admin may insert under the
+    // chat RLS policies, so a worker is told to apply the migration instead of
+    // being shown a raw row-level-security error.
+    const migrationNeeded =
+      'The team chat needs the supabase/chat-messages.sql migration on this database. Ask the workspace admin to run it once in the Supabase SQL editor.'
+    if (me.data!.role !== 'admin') return fail(migrationNeeded)
+    const author = await chatAuthor(me.data!)
+    if (!author) return fail('No worker profile linked to this account.')
+    const { data, error } = await client()
+      .from('chat_messages')
+      .insert({
+        user_id: me.data!.id,
+        author_id: me.data!.id,
+        worker_id: author.workerId,
+        author_name: author.name,
+        author_role: author.role,
+        author_position: author.position,
+        author_avatar_url: author.avatarUrl,
+        body: text,
+      })
+      .select()
+      .single()
+    if (error) return fail(`${chatTableHint(error as { code?: string; message?: string })} ${migrationNeeded}`)
+    return ok(data as ChatMessage)
+  },
+
+  async listChatMembers() {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    // A worker may not read other members' rows under RLS, so the authoritative
+    // member list comes from a SECURITY DEFINER function that is limited to the
+    // caller's own workspace and always includes the admin.
+    const rpc = await client().rpc('workspace_members')
+    if (!rpc.error && Array.isArray(rpc.data)) {
+      const rows = rpc.data as Array<{
+        worker_id: string | null
+        user_id: string | null
+        full_name: string
+        member_role: Role
+        member_position: string | null
+        avatar_url: string | null
+        worker_status: Worker['status'] | null
+      }>
+      const members: ChatMember[] = rows.map((r) => ({
+        id: r.worker_id ?? `admin:${r.user_id}`,
+        user_id: r.user_id,
+        worker_id: r.worker_id,
+        name: r.full_name,
+        role: r.member_role === 'admin' ? 'admin' : 'worker',
+        position: r.member_position ?? null,
+        avatar_url: r.avatar_url ?? null,
+        worker_status: r.member_role === 'admin' ? null : r.worker_status ?? 'active',
+      }))
+      // Admin first, then everyone else A→Z.
+      return ok(members.sort((a, b) => (a.role === b.role ? a.name.localeCompare(b.name) : a.role === 'admin' ? -1 : 1)))
+    }
+    if (rpc.error && !isMissingDbFunction(rpc.error as { code?: string; message?: string }, 'workspace_members')) {
+      return fail((rpc.error as { code?: string; message?: string }).message ?? 'Could not load the member list.')
+    }
+    // Fallback for databases that have not applied supabase/chat-messages.sql:
+    // build the list from what this role is allowed to read.
+    const [workers, settingsRes, adminId] = await Promise.all([
+      this.listWorkers(),
+      client().from('settings').select('avatar_url').maybeSingle(),
+      getAdminUserId(),
+    ])
+    const adminMember: ChatMember = {
+      id: `admin:${adminId ?? 'workspace'}`,
+      user_id: adminId,
+      worker_id: null,
+      name: ADMIN_CHAT_NAME,
+      role: 'admin',
+      position: ADMIN_CHAT_POSITION,
+      avatar_url: (settingsRes.data as { avatar_url: string | null } | null)?.avatar_url ?? null,
+      worker_status: null,
+    }
+    const workerMembers: ChatMember[] = (workers.data ?? []).map((w) => ({
+      id: w.id,
+      user_id: null,
+      worker_id: w.id,
+      name: w.name,
+      role: 'worker' as Role,
+      position: w.position ?? null,
+      avatar_url: w.avatar_url ?? null,
+      worker_status: w.status,
+    }))
+    return ok([adminMember, ...workerMembers])
+  },
+
   async listNotifications() {
+
     const me = await requireUser()
     if (me.error) return fail(me.error)
     const { data, error } = await client().from('notifications').select('*').eq('user_id', me.data!.id).order('created_at', { ascending: false })
@@ -841,6 +1009,10 @@ export const supabaseBackend: DataBackend = {
 
     await client().from('time_entries').delete().neq('id', '')
     await client().from('active_timers').delete().neq('id', '')
+    // Worker rows (and their chat messages, via the FK) go with the data. The
+    // admin's own chat lines are cleared here, matching demo mode's reset.
+    const chat = await client().from('chat_messages').delete().neq('id', '')
+    if (chat.error) console.warn('[chat] could not clear chat messages on reset:', chat.error.message)
     await client().from('workers').delete().neq('id', '')
     return ok(null)
   },
@@ -851,9 +1023,11 @@ export const supabaseBackend: DataBackend = {
     if (me.data!.role !== 'admin') return fail('Only the admin can load sample data.')
     const sb = client()
     const { workers, entries, settings } = (await import('./demoSeed')).buildDemoSeed()
+    const realIdBySeedId = new Map<string, string>()
     for (const w of workers) {
       const { data } = await sb.from('workers').insert({ name: w.name, email: w.email, hourly_rate: w.hourly_rate, status: w.status }).select().single()
       const wid = data?.id as string
+      if (wid) realIdBySeedId.set(w.id, wid)
       for (const e of entries) {
         if (e.worker_id === w.id) {
           await sb.from('time_entries').insert({
@@ -865,6 +1039,25 @@ export const supabaseBackend: DataBackend = {
       }
     }
     await sb.from('settings').insert({ business_name: settings.business_name, currency: settings.currency, timezone: settings.timezone, default_hourly_rate: settings.default_hourly_rate })
+    // A short starter conversation in the team chat, credited to the seeded
+    // workers (the sample data has no login accounts to author it otherwise).
+    const { data: sampleWorkers } = await sb.from('workers').select('id, name, position, avatar_url')
+    const byId = new Map<string, { id: string; name: string; position: string | null; avatar_url: string | null }>()
+    for (const w of (sampleWorkers as Array<{ id: string; name: string; position: string | null; avatar_url: string | null }>) ?? []) byId.set(w.id, w)
+    for (const line of (await import('./demoSeed')).buildDemoChat()) {
+      const worker = line.worker_id ? byId.get(realIdBySeedId.get(line.worker_id) ?? '') ?? null : null
+      await sb.from('chat_messages').insert({
+        user_id: me.data!.id,
+        author_id: me.data!.id,
+        worker_id: worker?.id ?? null,
+        author_name: worker?.name ?? ADMIN_CHAT_NAME,
+        author_role: worker ? 'worker' : 'admin',
+        author_position: worker ? worker.position ?? null : ADMIN_CHAT_POSITION,
+        author_avatar_url: worker?.avatar_url ?? null,
+        body: line.body,
+        created_at: new Date(Date.now() - line.minutes_ago * 60_000).toISOString(),
+      })
+    }
     return ok(null)
   },
 }

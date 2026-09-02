@@ -15,6 +15,8 @@ import type {
   Settings,
   AuthUser,
   TimeEntryComment,
+  ChatMessage,
+  ChatMember,
   AppNotification,
   Payment,
   PaymentStatus,
@@ -86,6 +88,13 @@ interface StoreValue {
   listEntryComments: (entryId: string) => Promise<TimeEntryComment[]>
   addEntryComment: (entryId: string, body: string) => Promise<TimeEntryComment | null>
   markNotificationsRead: () => Promise<void>
+
+  /** Team chat: the shared room for the admin and every worker. Reads report the
+   * backend error (not just an empty list) so the page can explain, for example,
+   * that a Supabase database still needs the chat migration. */
+  listChatMessages: (limit?: number) => Promise<{ messages: ChatMessage[]; error: string | null }>
+  sendChatMessage: (body: string) => Promise<{ message: ChatMessage | null; error: string | null }>
+  listChatMembers: () => Promise<{ members: ChatMember[]; error: string | null }>
 
   settleWorker: (workerId: string, note?: string) => Promise<Payment | null>
   updatePaymentStatus: (id: string, status: PaymentStatus) => Promise<Payment | null>
@@ -402,6 +411,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })))
   }, [backend])
 
+  const listChatMessages = useCallback(async (limit?: number) => {
+    const res = await backend.listChatMessages(limit)
+    return { messages: res.data || [], error: res.error }
+  }, [backend])
+
+  const sendChatMessage = useCallback(async (body: string) => {
+    const res = await backend.sendChatMessage(body)
+    if (res.error || !res.data) return { message: null, error: res.error || 'Failed to send message.' }
+    return { message: res.data, error: null }
+  }, [backend])
+
+  const listChatMembers = useCallback(async () => {
+    const res = await backend.listChatMembers()
+    return { members: res.data || [], error: res.error }
+  }, [backend])
+
   const settleWorker = useCallback(async (workerId: string, note?: string) => {
     const res = await backend.settleWorker(workerId, note)
     if (res.error || !res.data) return null
@@ -472,6 +497,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     listEntryComments,
     addEntryComment,
     markNotificationsRead,
+    listChatMessages,
+    sendChatMessage,
+    listChatMembers,
     settleWorker,
     updatePaymentStatus,
     updatePaymentNote,

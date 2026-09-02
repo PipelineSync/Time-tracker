@@ -8,6 +8,7 @@ import { EntriesPage } from '@/pages/EntriesPage'
 import { WorkersPage } from '@/pages/WorkersPage'
 import { ReportsPage } from '@/pages/ReportsPage'
 import { SettingsPage } from '@/pages/SettingsPage'
+import { ChatPage } from '@/pages/ChatPage'
 import { PaymentsPage } from '@/pages/PaymentsPage'
 import { FullScreenLoader } from '@/components/FullScreenLoader'
 
@@ -39,6 +40,7 @@ export function App() {
           {/* Shared */}
           <Route path="/entries" element={<EntriesPage />} />
           <Route path="/payments" element={<PaymentsPage />} />
+          <Route path="/chat" element={<ChatPage />} />
           <Route path="/settings" element={<SettingsPage />} />
 
           {/* Admin-only */}

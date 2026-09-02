@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "verify:deletion": "tsx scripts/verify-delete-local.ts && tsx scripts/verify-delete-supabase.ts",
-    "verify:active-workers": "tsx scripts/verify-active-workers-local.ts"
+    "verify:active-workers": "tsx scripts/verify-active-workers-local.ts",
+    "verify:chat": "tsx scripts/verify-chat-local.ts && tsx scripts/verify-chat-supabase.ts"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.2",

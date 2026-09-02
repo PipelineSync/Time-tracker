@@ -13,6 +13,7 @@ import {
   Moon,
   Sun,
   Monitor,
+  MessagesSquare,
 } from 'lucide-react'
 import { useStore } from '@/lib/store'
 import { useTheme } from '@/lib/theme'
@@ -31,19 +32,21 @@ import {
 } from '@/components/ui/dropdown-menu'
 
 const adminNav = [
-  { to: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/entries', label: 'Time Entries', icon: ListChecks },
-  { to: '/payments', label: 'Payments', icon: Wallet },
-  { to: '/workers', label: 'Workers', icon: Users },
-  { to: '/reports', label: 'Reports', icon: BarChart3 },
-  { to: '/settings', label: 'Settings', icon: Settings },
+  { to: '/', label: 'Dashboard', shortLabel: 'Home', icon: LayoutDashboard },
+  { to: '/entries', label: 'Time Entries', shortLabel: 'Time', icon: ListChecks },
+  { to: '/payments', label: 'Payments', shortLabel: 'Pay', icon: Wallet },
+  { to: '/workers', label: 'Workers', shortLabel: 'Workers', icon: Users },
+  { to: '/reports', label: 'Reports', shortLabel: 'Reports', icon: BarChart3 },
+  { to: '/chat', label: 'Chat', shortLabel: 'Chat', icon: MessagesSquare },
+  { to: '/settings', label: 'Settings', shortLabel: 'Settings', icon: Settings },
 ]
 
 const workerNav = [
-  { to: '/tracker', label: 'Clock In / Out', icon: Timer },
-  { to: '/entries', label: 'My Time', icon: ListChecks },
-  { to: '/payments', label: 'Payments', icon: Wallet },
-  { to: '/settings', label: 'Settings', icon: Settings },
+  { to: '/tracker', label: 'Clock In / Out', shortLabel: 'Clock', icon: Timer },
+  { to: '/entries', label: 'My Time', shortLabel: 'Time', icon: ListChecks },
+  { to: '/payments', label: 'Payments', shortLabel: 'Pay', icon: Wallet },
+  { to: '/chat', label: 'Chat', shortLabel: 'Chat', icon: MessagesSquare },
+  { to: '/settings', label: 'Settings', shortLabel: 'Settings', icon: Settings },
 ]
 
 export function AppLayout() {
@@ -179,13 +182,14 @@ export function AppLayout() {
               end={item.to === '/'}
               className={({ isActive }) =>
                 cn(
-                  'flex flex-col items-center gap-0.5 py-2 text-[11px] font-medium',
+                  // Tight labels keep seven destinations readable on a phone width.
+                  'flex flex-col items-center gap-0.5 overflow-hidden px-0.5 py-2 text-[10px] font-medium',
                   isActive ? 'text-primary' : 'text-muted-foreground'
                 )
               }
             >
               <item.icon className="h-5 w-5" />
-              {item.label}
+              <span className="w-full truncate text-center">{item.shortLabel}</span>
             </NavLink>
           ))}
         </div>
