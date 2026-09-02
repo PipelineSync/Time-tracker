@@ -402,3 +402,8 @@ create trigger trg_time_entries_updated before update on public.time_entries
 drop trigger if exists trg_settings_updated on public.settings;
 create trigger trg_settings_updated before update on public.settings
   for each row execute function public.set_updated_at();
+
+-- Account customization fields (safe migration for existing installations)
+alter table public.workers add column if not exists position text;
+alter table public.workers add column if not exists avatar_url text;
+alter table public.settings add column if not exists avatar_url text;

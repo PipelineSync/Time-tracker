@@ -20,9 +20,9 @@ export function buildDemoSeed() {
   const nowIso = () => new Date().toISOString()
 
   const workers: Worker[] = [
-    { id: 'w-seed-1', name: 'John Smith', email: 'john@example.com', hourly_rate: 20, status: 'active', created_at: daysAgo(40).toISOString(), updated_at: daysAgo(40).toISOString() },
-    { id: 'w-seed-2', name: 'Sarah Johnson', email: 'sarah@example.com', hourly_rate: 25, status: 'active', created_at: daysAgo(30).toISOString(), updated_at: daysAgo(30).toISOString() },
-    { id: 'w-seed-3', name: 'Mike Brown', email: 'mike@example.com', hourly_rate: 18, status: 'inactive', created_at: daysAgo(20).toISOString(), updated_at: daysAgo(20).toISOString() },
+    { id: 'w-seed-1', name: 'John Smith', email: 'john@example.com', hourly_rate: 20, status: 'active', position: 'Team member', avatar_url: null, created_at: daysAgo(40).toISOString(), updated_at: daysAgo(40).toISOString() },
+    { id: 'w-seed-2', name: 'Sarah Johnson', email: 'sarah@example.com', hourly_rate: 25, status: 'active', position: 'Team member', avatar_url: null, created_at: daysAgo(30).toISOString(), updated_at: daysAgo(30).toISOString() },
+    { id: 'w-seed-3', name: 'Mike Brown', email: 'mike@example.com', hourly_rate: 18, status: 'inactive', position: 'Team member', avatar_url: null, created_at: daysAgo(20).toISOString(), updated_at: daysAgo(20).toISOString() },
   ]
 
   function entry(worker_id: string, start: Date, end: Date, project: string | null, break_minutes: number, notes: string | null, hourly_rate: number): TimeEntry {
@@ -67,6 +67,7 @@ export function buildDemoSeed() {
     currency: 'USD',
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
     default_hourly_rate: 20,
+    avatar_url: null,
   }
 
   return { workers, entries, settings }

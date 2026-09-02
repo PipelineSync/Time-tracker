@@ -91,10 +91,11 @@ export function WorkersPage() {
                   <div className="flex items-start justify-between">
                     <div className="flex items-center gap-3">
                       <div className="flex h-11 w-11 items-center justify-center rounded-full bg-primary/10 text-primary">
-                        <UserRound className="h-5 w-5" />
+                        {w.avatar_url ? <img src={w.avatar_url} alt="" className="h-11 w-11 rounded-full object-cover" /> : <UserRound className="h-5 w-5" />}
                       </div>
                       <div>
                         <p className="font-semibold">{w.name}</p>
+                        {w.position && <p className="text-xs font-medium text-primary">{w.position}</p>}
                         {w.email && <p className="text-xs text-muted-foreground">{w.email}</p>}
                       </div>
                     </div>
