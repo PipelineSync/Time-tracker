@@ -624,6 +624,7 @@ export const localBackend: DataBackend = {
         currency: 'USD',
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
         default_hourly_rate: 20,
+        avatar_url: null,
       }
       save(c.data)
     }
@@ -634,7 +635,7 @@ export const localBackend: DataBackend = {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
     if (c.user.role !== 'admin') return { data: null, error: 'Only the admin can change settings.' }
-    if (!c.data.settings) c.data.settings = { id: 'settings-1', business_name: 'My Business', currency: 'USD', timezone: 'UTC', default_hourly_rate: 20 }
+    if (!c.data.settings) c.data.settings = { id: 'settings-1', business_name: 'My Business', currency: 'USD', timezone: 'UTC', default_hourly_rate: 20, avatar_url: null }
     c.data.settings = { ...c.data.settings, ...patch }
     save(c.data)
     return { data: c.data.settings, error: null }

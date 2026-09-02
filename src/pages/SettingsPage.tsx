@@ -76,13 +76,14 @@ export function SettingsPage() {
     <div className="space-y-6">
       <PageHeader title="Settings" description="Manage your workspace preferences." />
 
-      <Tabs defaultValue="general">
+      <Tabs defaultValue={isAdmin ? 'general' : 'appearance'}>
         <TabsList>
-          <TabsTrigger value="general">General</TabsTrigger>
+          {isAdmin && <TabsTrigger value="general">General</TabsTrigger>}
           <TabsTrigger value="appearance">Appearance</TabsTrigger>
-          <TabsTrigger value="data">Data</TabsTrigger>
+          {isAdmin && <TabsTrigger value="data">Data</TabsTrigger>}
         </TabsList>
 
+        {isAdmin && (
         <TabsContent value="general" className="mt-4">
           <Card>
             <CardHeader>
@@ -126,6 +127,7 @@ export function SettingsPage() {
             </CardContent>
           </Card>
         </TabsContent>
+        )}
 
         <TabsContent value="appearance" className="mt-4">
           <Card>
@@ -154,6 +156,7 @@ export function SettingsPage() {
           </Card>
         </TabsContent>
 
+        {isAdmin && (
         <TabsContent value="data" className="mt-4">
           <Card>
             <CardHeader>
@@ -178,6 +181,7 @@ export function SettingsPage() {
             </CardContent>
           </Card>
         </TabsContent>
+        )}
       </Tabs>
 
       <ConfirmDialog
