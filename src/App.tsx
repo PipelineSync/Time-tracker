@@ -39,6 +39,7 @@ export function App() {
           {/* Shared */}
           <Route path="/entries" element={<EntriesPage />} />
           <Route path="/payments" element={<PaymentsPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
 
           {/* Admin-only */}
           {isAdmin && (
@@ -46,7 +47,6 @@ export function App() {
               <Route path="/" element={<DashboardPage />} />
               <Route path="/workers" element={<WorkersPage />} />
               <Route path="/reports" element={<ReportsPage />} />
-              <Route path="/settings" element={<SettingsPage />} />
             </>
           )}
 

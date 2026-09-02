@@ -133,7 +133,6 @@ export function AppLayout() {
           <div className="flex items-center gap-2">
             <div className="min-w-0 flex-1">{UserMenu}</div>
             <div className="flex shrink-0 items-center gap-1 rounded-lg bg-white/5 p-1">
-              <NotificationsBell onNavy />
               <ThemeToggle onNavy />
             </div>
           </div>
