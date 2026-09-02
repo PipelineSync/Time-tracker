@@ -152,14 +152,26 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [backend])
 
-  // Load initial session
+  // Load initial session. The Supabase backend restores/refreshes the stored
+  // session here, so a reload keeps the user signed in.
   useEffect(() => {
-    backend.getSession().then(async (res) => {
-      if (res.data) {
-        setUser(res.data)
-      }
-      setAuthLoading(false)
-    })
+    let cancelled = false
+    backend
+      .getSession()
+      .then((res) => {
+        if (cancelled) return
+        if (res.data) setUser(res.data)
+      })
+      .catch((err) => {
+        // Never let a session hiccup block the app on the loading screen.
+        console.warn('[work-tracker] could not load the session:', err)
+      })
+      .finally(() => {
+        if (!cancelled) setAuthLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [backend])
 
   // Load data when user changes
@@ -176,34 +188,42 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // entries, notes, and unread notifications without requiring a reload. The
   // session is re-validated on each tick so an account that the admin deletes
   // (or a token that stops being valid) is signed out without a reload. A
-  // transient network error must NOT sign the user out — it just retries.
+  // transient network error must NOT sign the user out — it just retries, and
+  // the backend restores a valid session (via its refresh token) whenever the
+  // stored session briefly disappears.
   useEffect(() => {
     if (!user) return
     let stopped = false
     const tick = async () => {
       if (document.visibilityState === 'hidden' || stopped) return
-      const session = await backend.getSession()
-      if (stopped) return
-      if (!userRef.current) return
-      if (session.data) {
-        if (session.data.id !== userRef.current.id) setUser(session.data)
+      try {
+        const session = await backend.getSession()
+        if (stopped) return
+        if (!userRef.current) return
+        if (session.data) {
+          if (session.data.id !== userRef.current.id) setUser(session.data)
+          void refreshData()
+          return
+        }
+        // No user data. Distinguish why:
+        if (session.error === ACCOUNT_DEACTIVATED_MESSAGE) {
+          // The admin deleted this account — sign out with a specific notice.
+          toast.error('You were signed out because your account is no longer active. If this was unexpected, please contact the administrator.')
+          setUser(null)
+          return
+        }
+        if (!session.error) {
+          // A real sign-out: the user logged out, or the backend confirmed the
+          // session can no longer be refreshed (revoked/expired for good).
+          setUser(null)
+          return
+        }
+        // Transient error — keep the session and let the next tick retry.
         void refreshData()
-        return
+      } catch (err) {
+        // A thrown error must never be treated as a sign-out.
+        console.warn('[work-tracker] session check failed; will retry:', err)
       }
-      // No user data. Distinguish why:
-      if (session.error === ACCOUNT_DEACTIVATED_MESSAGE) {
-        // The admin deleted this account — sign out with a specific notice.
-        toast.error('You were signed out because your account is no longer active. If this was unexpected, please contact the administrator.')
-        setUser(null)
-        return
-      }
-      if (!session.error) {
-        // Clean sign-out (e.g. an expired token that could not refresh).
-        setUser(null)
-        return
-      }
-      // Transient error — keep the session and let the next tick retry.
-      void refreshData()
     }
     const interval = window.setInterval(tick, 15000)
     window.addEventListener('focus', tick)
