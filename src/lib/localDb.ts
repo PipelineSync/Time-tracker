@@ -308,6 +308,8 @@ export const localBackend: DataBackend = {
       email: input.email || input.accountEmail || null,
       hourly_rate: input.hourly_rate,
       status: input.status || 'active',
+      position: input.position || null,
+      avatar_url: null,
       created_at: now,
       updated_at: now,
     }

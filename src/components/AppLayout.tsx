@@ -43,6 +43,7 @@ const workerNav = [
   { to: '/tracker', label: 'Clock In / Out', icon: Timer },
   { to: '/entries', label: 'My Time', icon: ListChecks },
   { to: '/payments', label: 'Payments', icon: Wallet },
+  { to: '/settings', label: 'Settings', icon: Settings },
 ]
 
 export function AppLayout() {
@@ -152,6 +153,7 @@ export function AppLayout() {
       {/* Main content */}
       <main className="px-4 pb-24 pt-6 sm:px-6 lg:ml-64 lg:pb-10">
         <div className="mx-auto max-w-6xl">
+          <div className="mb-2 hidden justify-end lg:flex"><NotificationsBell /></div>
           <Outlet />
         </div>
       </main>

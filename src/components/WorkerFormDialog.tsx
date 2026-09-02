@@ -28,6 +28,7 @@ export function WorkerFormDialog({
   const [email, setEmail] = useState('')
   const [rate, setRate] = useState('')
   const [status, setStatus] = useState<'active' | 'inactive'>('active')
+  const [position, setPosition] = useState('')
   const [accountEmail, setAccountEmail] = useState('')
   const [password, setPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
@@ -52,6 +53,7 @@ export function WorkerFormDialog({
     setEmail(worker?.email || '')
     setRate(String(worker?.hourly_rate ?? settings?.default_hourly_rate ?? 20))
     setStatus(worker?.status || 'active')
+    setPosition(worker?.position || '')
     setAccountEmail(worker?.email || '')
     setPassword('')
     setNewPassword('')
@@ -83,6 +85,7 @@ export function WorkerFormDialog({
         email: email.trim() || accountEmail.trim() || null,
         hourly_rate: parsedRate,
         status,
+        position: position.trim(),
         newPassword: newPassword || undefined,
       })
       if (!res) toast.error('Failed to update worker.')
@@ -93,6 +96,7 @@ export function WorkerFormDialog({
         email: accountEmail.trim() || undefined,
         hourly_rate: parsedRate,
         status,
+        position: position.trim(),
         accountEmail: accountEmail.trim(),
         accountPassword: password,
       })
@@ -139,6 +143,11 @@ export function WorkerFormDialog({
               </div>
             </>
           )}
+
+          <div className="space-y-2">
+            <Label htmlFor="w-position">Position / role *</Label>
+            <Input id="w-position" value={position} onChange={(e) => setPosition(e.target.value)} placeholder="e.g. Designer, Developer" required />
+          </div>
 
           <div className="space-y-2">
             <Label htmlFor="w-rate">Hourly rate * <span className="font-normal text-muted-foreground">(admin-only)</span></Label>

@@ -12,13 +12,14 @@ import { toast } from 'sonner'
 import { Sun, Moon, Monitor, Download, Trash2, Loader2 } from 'lucide-react'
 
 export function SettingsPage() {
-  const { settings, saveSettings, resetAllData, workers, entries, backend } = useStore()
+  const { settings, saveSettings, resetAllData, workers, entries, backend, user, isAdmin } = useStore()
   const { theme, setTheme } = useTheme()
   const [businessName, setBusinessName] = useState(settings?.business_name || '')
   const [currency, setCurrency] = useState(settings?.currency || 'USD')
   const [timezone, setTimezone] = useState(settings?.timezone || '')
   const [defaultRate, setDefaultRate] = useState(String(settings?.default_hourly_rate ?? 20))
   const [saving, setSaving] = useState(false)
+  const [avatar, setAvatar] = useState(settings?.avatar_url || '')
   const [confirmReset, setConfirmReset] = useState(false)
   const [resetting, setResetting] = useState(false)
 
@@ -28,6 +29,7 @@ export function SettingsPage() {
       setCurrency(settings.currency)
       setTimezone(settings.timezone)
       setDefaultRate(String(settings.default_hourly_rate ?? 20))
+      setAvatar(settings.avatar_url || '')
     }
   }, [settings])
 
@@ -46,6 +48,7 @@ export function SettingsPage() {
       currency: currency || 'USD',
       timezone: timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
       default_hourly_rate: rate,
+      avatar_url: avatar || null,
     })
     setSaving(false)
     if (!res) toast.error('Failed to save settings.')
@@ -88,6 +91,14 @@ export function SettingsPage() {
             </CardHeader>
             <CardContent>
               <form onSubmit={handleSave} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="s-avatar">Profile picture</Label>
+                  <div className="flex items-center gap-3">
+                    {avatar ? <img src={avatar} alt="Profile" className="h-12 w-12 rounded-full object-cover" /> : <div className="h-12 w-12 rounded-full bg-muted" />}
+                    <Input id="s-avatar" type="file" accept="image/*" onChange={(e) => { const file = e.target.files?.[0]; if (file) { const reader = new FileReader(); reader.onload = () => setAvatar(String(reader.result)); reader.readAsDataURL(file) } }} />
+                  </div>
+                  <p className="text-xs text-muted-foreground">Upload a picture to personalize your account.</p>
+                </div>
                 <div className="space-y-2">
                   <Label htmlFor="s-name">Company / business name</Label>
                   <Input id="s-name" value={businessName} onChange={(e) => setBusinessName(e.target.value)} placeholder="My Business" />

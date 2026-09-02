@@ -25,6 +25,7 @@ export interface CreateWorkerInput {
   email?: string
   hourly_rate: number
   status?: Worker['status']
+  position?: string
   // Login details for the worker's account (admin-created).
   accountEmail?: string
   accountPassword?: string

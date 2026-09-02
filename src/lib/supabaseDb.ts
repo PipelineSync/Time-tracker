@@ -296,6 +296,7 @@ export const supabaseBackend: DataBackend = {
           email: input.email?.trim() || accountEmail,
           hourly_rate: input.hourly_rate,
           status: input.status || 'active',
+          position: input.position?.trim() || null,
           accountEmail,
           accountPassword: input.accountPassword,
         }),

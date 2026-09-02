@@ -8,6 +8,8 @@ export interface Worker {
   email: string | null
   hourly_rate: number
   status: WorkerStatus
+  position: string | null
+  avatar_url: string | null
   created_at: string
   updated_at: string
 }
@@ -46,6 +48,7 @@ export interface Settings {
   currency: string
   timezone: string
   default_hourly_rate: number
+  avatar_url: string | null
 }
 
 export interface AuthUser {
