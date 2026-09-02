@@ -73,5 +73,28 @@ export function buildDemoSeed() {
   return { workers, entries, settings }
 }
 
+/**
+ * A demo chat line. `worker_id` refers to the *seed* worker ids above (or null
+ * for a message from the admin); each backend maps it to the real worker row it
+ * created, so the message carries that member's name, role and picture.
+ */
+export interface DemoChatSeed {
+  worker_id: string | null
+  body: string
+  minutes_ago: number
+}
+
+/** A short starter conversation so the demo Chat section isn't empty. */
+export function buildDemoChat(): DemoChatSeed[] {
+  return [
+    { worker_id: null, body: 'Morning team — remember we close out the inventory audit today. Drop any questions here.', minutes_ago: 260 },
+    { worker_id: 'w-seed-1', body: 'Noted. I am on the landing page build this morning, should be done before lunch.', minutes_ago: 245 },
+    { worker_id: 'w-seed-2', body: 'Client call moved to 2pm, so I will start the marketing content earlier.', minutes_ago: 232 },
+    { worker_id: null, body: 'Thanks for the heads up Sarah. John, log your break time when you take lunch.', minutes_ago: 210 },
+    { worker_id: 'w-seed-1', body: 'Will do. Takeaway for me too?', minutes_ago: 205 },
+    { worker_id: 'w-seed-3', body: 'Stock count is 90% done — two shelves left to check.', minutes_ago: 95 },
+  ]
+}
+
 // Re-export uid for convenience
 export { uid }

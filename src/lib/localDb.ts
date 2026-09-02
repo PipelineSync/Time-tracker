@@ -5,14 +5,16 @@ import type {
   Settings,
   AuthUser,
   TimeEntryComment,
+  ChatMessage,
+  ChatMember,
   AppNotification,
   Payment,
   PaymentStatus,
   Role,
 } from './types'
 import type { BackendResult, DataBackend, CreateWorkerInput } from './backend'
-import { ACCOUNT_DEACTIVATED_MESSAGE } from './backend'
-import { buildDemoSeed } from './demoSeed'
+import { ACCOUNT_DEACTIVATED_MESSAGE, CHAT_MAX_LENGTH } from './backend'
+import { buildDemoChat, buildDemoSeed } from './demoSeed'
 import { uid, computeEarnings, computeTotalMinutes, formatMinutes, formatDate } from './utils'
 import { storage } from './storage'
 
@@ -36,6 +38,8 @@ interface UserData {
   activeTimer?: ActiveTimer | null
   settings: Settings | null
   comments: TimeEntryComment[]
+  /** Workspace-wide team chat (admin + every worker, one shared room). */
+  chat: ChatMessage[]
   notifications: AppNotification[]
   payments: Payment[]
 }
@@ -67,7 +71,7 @@ function writeUsers(users: StoredUser[]) {
 }
 
 function emptyData(): UserData {
-  return { workers: [], entries: [], activeTimers: [], settings: null, comments: [], notifications: [], payments: [] }
+  return { workers: [], entries: [], activeTimers: [], settings: null, comments: [], chat: [], notifications: [], payments: [] }
 }
 
 function readData(userId: string): UserData {
@@ -82,6 +86,8 @@ function readData(userId: string): UserData {
   }
   d.settings = d.settings || null
   d.comments = d.comments || []
+  // Workspaces saved before the team chat section existed have no chat log yet.
+  d.chat = d.chat || []
   d.notifications = d.notifications || []
   d.payments = d.payments || []
   return d
@@ -183,6 +189,85 @@ function workerName(data: UserData, workerId: string): string {
   return data.workers.find((w) => w.id === workerId)?.name || 'A worker'
 }
 
+/** How the admin is identified in the team chat (their picture comes from settings). */
+const ADMIN_CHAT_NAME = 'Admin'
+const ADMIN_CHAT_POSITION = 'Owner'
+
+/** The identity a team-chat message is stamped with. */
+function chatAuthor(
+  data: UserData,
+  user: AuthUser
+): { name: string; role: Role; workerId: string | null; position: string | null; avatarUrl: string | null } | null {
+  if (user.role === 'admin') {
+    return {
+      name: ADMIN_CHAT_NAME,
+      role: 'admin',
+      workerId: null,
+      position: ADMIN_CHAT_POSITION,
+      avatarUrl: data.settings?.avatar_url ?? null,
+    }
+  }
+  const me = data.workers.find((w) => w.id === user.workerId)
+  if (!me) return null
+  return {
+    name: me.name,
+    role: 'worker',
+    workerId: me.id,
+    position: me.position ?? null,
+    avatarUrl: me.avatar_url ?? null,
+  }
+}
+
+/**
+ * Every member of the workspace chat — the admin first, then workers A→Z.
+ * Deliberately not scoped to the caller: a worker sees the whole team here
+ * (including the admin) even though `listWorkers` only returns their own row.
+ */
+function chatMembers(data: UserData, adminUserId: string): ChatMember[] {
+  const admin: ChatMember = {
+    id: `admin:${adminUserId}`,
+    user_id: adminUserId,
+    worker_id: null,
+    name: ADMIN_CHAT_NAME,
+    role: 'admin',
+    position: ADMIN_CHAT_POSITION,
+    avatar_url: data.settings?.avatar_url ?? null,
+    worker_status: null,
+  }
+  const workers: ChatMember[] = [...data.workers]
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((w) => ({
+      id: w.id,
+      user_id: workerUserId(w.id),
+      worker_id: w.id,
+      name: w.name,
+      role: 'worker' as Role,
+      position: w.position ?? null,
+      avatar_url: w.avatar_url ?? null,
+      worker_status: w.status,
+    }))
+  return [admin, ...workers]
+}
+
+/** Demo chat lines, mapped onto the seeded workers so each one has a real author. */
+function seedChat(data: UserData, adminUserId: string, idMap: Map<string, string>) {
+  for (const line of buildDemoChat()) {
+    const workerId = line.worker_id ? idMap.get(line.worker_id) ?? null : null
+    const worker = workerId ? data.workers.find((w) => w.id === workerId) ?? null : null
+    data.chat.push({
+      id: uid(),
+      author_id: (worker ? workerUserId(worker.id) : null) || adminUserId,
+      worker_id: worker?.id ?? null,
+      author_name: worker?.name ?? ADMIN_CHAT_NAME,
+      author_role: worker ? 'worker' : 'admin',
+      author_position: worker ? worker.position ?? null : ADMIN_CHAT_POSITION,
+      author_avatar_url: worker ? worker.avatar_url ?? null : data.settings?.avatar_url ?? null,
+      body: line.body,
+      created_at: new Date(Date.now() - line.minutes_ago * 60_000).toISOString(),
+    })
+  }
+}
+
 function formatMoney(amount: number, currency: string): string {
   try {
     return new Intl.NumberFormat(undefined, { style: 'currency', currency: currency || 'USD' }).format(amount)
@@ -214,6 +299,8 @@ function maybeAutoSeed(data: UserData) {
     data.workers = seededWorkers
     data.entries = seed.entries.map((e) => ({ ...e, worker_id: idMap.get(e.worker_id) || e.worker_id, id: uid() }))
     data.settings = seed.settings
+    data.chat = []
+    seedChat(data, getAdmin().id, idMap)
   }
 }
 
@@ -393,6 +480,9 @@ export const localBackend: DataBackend = {
     c.data.activeTimers = c.data.activeTimers.filter((t) => t.worker_id !== id)
     const entryIds = new Set(c.data.entries.map((e) => e.id))
     c.data.comments = c.data.comments.filter((cm) => entryIds.has(cm.entry_id))
+    // Their team-chat messages go with them (the worker row no longer exists to
+    // describe the author, and the account is deleted too).
+    c.data.chat = c.data.chat.filter((m) => m.worker_id !== id)
     // Delete the worker's login account.
     const users = readUsers()
     writeUsers(users.filter((u) => u.workerId !== id))
@@ -709,6 +799,50 @@ export const localBackend: DataBackend = {
     return { data: comment, error: null }
   },
 
+  async listChatMessages(limit) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    // Same shared room for everyone — unlike entries, chat is not scoped down
+    // for workers, so the admin and every worker read the identical timeline.
+    const max = Math.max(1, Math.min(Math.floor(limit ?? 200), 500))
+    const messages = [...c.data.chat]
+      .sort((a, b) => a.created_at.localeCompare(b.created_at))
+      .slice(-max)
+    return { data: messages, error: null }
+  },
+
+  async sendChatMessage(body) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    const text = body.trim()
+    if (!text) return { data: null, error: 'Write a message first.' }
+    if (text.length > CHAT_MAX_LENGTH) {
+      return { data: null, error: `Message is too long (${CHAT_MAX_LENGTH} characters max).` }
+    }
+    const me = chatAuthor(c.data, c.user)
+    if (!me) return { data: null, error: 'No worker profile linked to this account.' }
+    const message: ChatMessage = {
+      id: uid(),
+      author_id: c.user.id,
+      worker_id: me.workerId,
+      author_name: me.name,
+      author_role: me.role,
+      author_position: me.position,
+      author_avatar_url: me.avatarUrl,
+      body: text,
+      created_at: new Date().toISOString(),
+    }
+    c.data.chat.push(message)
+    save(c.data)
+    return { data: message, error: null }
+  },
+
+  async listChatMembers() {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    return { data: chatMembers(c.data, c.admin.id), error: null }
+  },
+
   async listNotifications() {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
@@ -847,15 +981,18 @@ export const localBackend: DataBackend = {
       }
     }
     writeUsers(users)
-    save({
+    const next: UserData = {
       workers: seededWorkers,
       entries: seed.entries.map((e) => ({ ...e, worker_id: idMap.get(e.worker_id) || e.worker_id, id: uid() })),
       activeTimers: [],
       settings: seed.settings,
       comments: [],
+      chat: [],
       notifications: [],
       payments: [],
-    })
+    }
+    seedChat(next, c.admin.id, idMap)
+    save(next)
     return { data: null, error: null }
   },
 }

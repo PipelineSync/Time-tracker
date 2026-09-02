@@ -24,6 +24,8 @@ The app has two roles with clearly separated permissions:
 | View own time | ✅ (all) | ✅ (own only) |
 | Dashboard / Reports / Settings | ✅ | ❌ |
 | Notes / chat on entries | ✅ (reply) | ✅ (add notes) |
+| Team chat (Chat section) | ✅ (post as Admin) | ✅ (post as themselves) |
+| See all members of the chat | ✅ | ✅ (same roster, admin included) |
 | Settle & reset time → payments | ✅ | ❌ |
 | Payments view | ✅ (all, full control) | ✅ (own, read-only) |
 | Change own password | ✅ | ✅ |
@@ -37,10 +39,11 @@ Workers **clock in, take breaks, and clock out** — their rate is set by the ad
 - **Clock In / Out** *(worker)* — big clock-in button, then break/pause/resume and clock-out; survives a page refresh. At clock-out the worker can attach an **optional note** that is saved on the time entry (the admin's clock-out notification flags that a note was added).
 - **Manual entry** *(admin)* — date, start/end time, break, project, notes, auto-calculated hours & earnings (this is how the admin adds time to workers)
 - **Time Entries** — table on desktop / cards on mobile, filters, sorting; admin can edit/delete/duplicate, workers see their own
-- **Notes / chat** — every entry has a conversation thread: workers add notes, the admin replies (and vice versa), both sides are notified
+- **Notes / chat on entries** — every entry has a conversation thread: workers add notes, the admin replies (and vice versa), both sides are notified
+- **Chat** *(admin & worker, right before Settings in the navigation)* — one shared **team room** for the whole workspace. Every message is shown with the sender's **profile picture, name and role** (the admin appears as **Admin**; a worker's role is their position, e.g. *Foreman*, falling back to *Worker*), plus a time stamp and day separators. A **See all members** button opens the roster — **the admin first, then every worker**, with each member's picture, role and whether their account is active; workers get the same roster including the admin, even though the rest of their access is limited to their own records. New messages arrive on their own (the room refreshes while the tab is open), Enter sends, Shift+Enter adds a line
 - **Reports** *(admin)* — today/week/month/custom range, totals & averages, charts, **CSV export**
 - **Settings** *(admin)* — business name, currency, timezone, default rate, theme, export & delete all data
-- **Settings → Profile** *(worker)* — workers upload their own **profile picture** from their account settings. The picture is saved to their worker profile and shows up **for the admin** next to their name on the Workers page, the Dashboard, and the "On the clock now" panel — not just a bare name.
+- **Settings → Profile** *(worker)* — workers upload their own **profile picture** from their account settings. The picture is saved to their worker profile and shows up **for the admin** next to their name on the Workers page, the Dashboard, the "On the clock now" panel, and in every **Chat** message — not just a bare name.
 - **Payments** — the admin turns a worker's tracked time & earnings into a **settlement**: a **Reset & settle** action on a worker creates an **unpaid** payment and zeroes that worker's tracked time. The admin then drives the status **unpaid → pending → paid** (with a "Back to unpaid" option) and can delete payments. The **worker** sees their own payments **read-only**, with no edit controls.
 - **Auth** — sign in with admin or worker credentials. Only the admin can create worker login accounts.
 - **Change password** — available from the account menu (top-right) for both roles: enter your current password and a new one. Admins can also **reset a worker's password** from the Workers page. In demo mode the new password is set directly; with Supabase, a password reset link is emailed to the worker (the anon key cannot set another user's password).
@@ -72,7 +75,7 @@ npm run dev
 Open `http://localhost:5173`. Without Supabase credentials the app uses **browser-local storage** as the database. A single admin is auto-created on first run.
 
 **Demo credentials**
-- Admin: `admin` / `admin.pipelinesync` — the admin workspace is auto-seeded with sample workers and entries on first login.
+- Admin: `admin` / `admin.pipelinesync` — the admin workspace is auto-seeded with sample workers, entries and a short team-chat conversation on first login.
 - Sample workers: `john@example.com`, `sarah@example.com`, `mike@example.com` — password `worker123`.
 
 Log in as admin to manage workers, set rates, and create worker accounts. Log in as a sample worker to see the limited clock-in/out experience.
@@ -96,6 +99,8 @@ This creates the `workers`, `time_entries`, `active_timers`, `settings`, and `pa
 
 > **Upgrading an existing database?** Run `supabase/fix-multiple-active-workers.sql` once — it makes the timer uniqueness rule *one per worker* (older databases allowed only one clocked-in worker per workspace, so the admin dashboard could only ever show a single worker) and allows the new `break_start` / `break_end` notification types.
 >
+> **For the team chat**, run `supabase/chat-messages.sql` once. It creates the `chat_messages` table with RLS (so the admin and every worker of the workspace read the same room), plus two SECURITY DEFINER functions: `post_chat_message()` (stamps the author's name, role and profile picture from the signed-in user, so nobody can post as somebody else) and `workspace_members()` (the "See all members" roster, which a worker cannot build from the raw tables because RLS limits them to their own rows). Fresh installs get this automatically from `schema.sql`.
+
 > If your database predates the worker-login fix, also run `supabase/fix-deleted-worker-login.sql` once. It adds the `profiles_delete` policy and permanently removes the leftover logins of workers that were deleted before the fix (so those workers can no longer sign in).
 >
 > To let workers upload their **own profile picture** from their account settings, run `supabase/worker-profile-picture.sql` once. It adds a SECURITY DEFINER RPC (`update_own_avatar`) so a worker can change only the avatar on their own worker row (they still can't edit their hourly rate, status, or other admin-managed fields). Fresh installs get this automatically from `schema.sql`.
@@ -142,7 +147,7 @@ This is already handled by `supabase/schema.sql` (it runs `alter table ... enabl
 ```sql
 select relname, relrowsecurity
 from pg_class
-where relname in ('workers','time_entries','active_timers','settings','payments','profiles');
+where relname in ('workers','time_entries','active_timers','settings','payments','profiles','chat_messages');
 ```
 
 The RLS model:
@@ -196,11 +201,12 @@ Free-tier Supabase projects are **paused after ~7 days of no API/database activi
 
 ```
 time-tracker/
-├─ supabase/schema.sql          # Database tables, RLS, triggers
+├─ supabase/schema.sql          # Database tables, RLS, triggers (incl. team chat)
+├─ supabase/chat-messages.sql   # One-time migration for the team chat on existing databases
 ├─ src/
-│  ├─ lib/                      # types, utils, stats, backend (local + supabase), store, theme
-│  ├─ components/               # shared UI + app components (shadcn-style)
-│  ├─ pages/                    # Dashboard, Tracker, Entries, Workers, Reports, Settings, Auth
+│  ├─ lib/                      # types, utils, stats, backend (local + supabase), store, theme, chat helpers
+│  ├─ components/               # shared UI + app components (shadcn-style), incl. AvatarBubble + ChatMembersDialog
+│  ├─ pages/                    # Dashboard, Tracker, Entries, Workers, Reports, Chat, Settings, Auth
 │  ├─ App.tsx                   # Routing + auth gate
 │  └─ main.tsx
 ├─ .env.example
@@ -216,6 +222,7 @@ time-tracker/
 - `user_id` is set server-side via triggers, never trusted from the client.
 - **Calculated values** (`total_minutes`, `earnings`) are recomputed in the backend/local layer where possible, and stored on the entry so history is stable.
 - Input is trimmed and validated before writing.
+- **Team chat** is one shared room per workspace: `chat_messages` rows are owned by the workspace admin and readable by every member of that workspace. `post_chat_message()` resolves the author (name, role, profile picture) from `auth.uid()` rather than from the request, so a worker cannot post as the admin or as another teammate; the client-side 2000-character limit mirrors the table's `check` constraint.
 
 ---
 
