@@ -276,6 +276,21 @@ function formatMoney(amount: number, currency: string): string {
   }
 }
 
+/**
+ * Maps the demo seed's worker ids onto the workspace's rows, or null unless
+ * every sample worker is still there under the same name and email. Used to
+ * recognize an untouched demo workspace.
+ */
+function demoSeedIdMap(data: UserData): Map<string, string> | null {
+  const map = new Map<string, string>()
+  for (const seeded of buildDemoSeed().workers) {
+    const real = data.workers.find((w) => w.name === seeded.name && w.email === seeded.email)
+    if (!real) return null
+    map.set(seeded.id, real.id)
+  }
+  return map
+}
+
 // Auto-seed the admin workspace on first login so the app isn't empty.
 function maybeAutoSeed(data: UserData) {
   if (data.workers.length === 0 && data.entries.length === 0 && !data.settings) {
@@ -301,6 +316,12 @@ function maybeAutoSeed(data: UserData) {
     data.settings = seed.settings
     data.chat = []
     seedChat(data, getAdmin().id, idMap)
+  } else if (data.chat.length === 0) {
+    // A demo workspace created before the Chat section existed gets the starter
+    // conversation once — but only if it is still the untouched sample team, so
+    // a workspace the admin has edited is left alone.
+    const idMap = demoSeedIdMap(data)
+    if (idMap) seedChat(data, getAdmin().id, idMap)
   }
 }
 

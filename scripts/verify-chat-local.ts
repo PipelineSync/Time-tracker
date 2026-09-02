@@ -110,7 +110,29 @@ async function main() {
   const withPic = await localBackend.sendChatMessage('Picture updated.')
   assert(withPic.data?.author_avatar_url === 'data:image/png;base64,johnpic', 'new messages carry the new picture')
 
-  // 7) Chronological order and a bounded window.
+  // 7) A demo workspace seeded before the Chat section existed gets the starter
+  //    conversation once — but only while it is still the untouched sample team.
+  const adminDataKey = [...mem.keys()].find((k) => k.startsWith('wt_data_'))
+  if (!adminDataKey) throw new Error(`no wt_data_ key in demo storage: ${JSON.stringify([...mem.keys()])}`)
+  const wipeChat = () => {
+    const workspace = JSON.parse(mem.get(adminDataKey)!)
+    workspace.chat = []
+    mem.set(adminDataKey, JSON.stringify(workspace))
+  }
+  wipeChat()
+  // The check runs while the admin's session is read (that is what seeds demo data).
+  await localBackend.signIn('admin', 'admin.pipelinesync')
+  const backfilled = await localBackend.listChatMessages(500)
+  assert(
+    (backfilled.data?.length ?? 0) >= 5,
+    `an older demo workspace is backfilled with the starter chat (${backfilled.data?.length} messages)`
+  )
+  assert(
+    (backfilled.data ?? []).every((m) => m.author_name && m.author_role),
+    'backfilled messages still carry a name and role'
+  )
+
+  // 8) Chronological order and a bounded window.
   const tail = await localBackend.listChatMessages(3)
   assert(tail.data?.length === 3, 'limit returns the newest window')
   const times = (tail.data ?? []).map((m) => m.created_at)
@@ -119,13 +141,23 @@ async function main() {
     'messages come back oldest first'
   )
 
-  // 8) Deleting a worker removes their messages and their member row.
+  // A workspace the admin has edited is no longer the sample team: leave it alone.
+  const someWorker = (await localBackend.listWorkers()).data![0]
+  await localBackend.updateWorker(someWorker.id, { name: 'Renamed Worker' })
+  wipeChat()
+  await localBackend.getSession()
+  const afterEdit = (await localBackend.listChatMessages(500)).data?.length ?? 0
+  assert(afterEdit === 0, `a customized workspace is not stuffed with demo messages (${afterEdit})`)
+  const postedAfterWipe = await localBackend.sendChatMessage('Our own first message.')
+  assert(!postedAfterWipe.error, 'posting works normally in a customized workspace')
+
+  // 9) Deleting a worker removes their messages and their member row.
   await localBackend.signIn('admin', 'admin.pipelinesync')
   const johnId = workerLogin.data!.workerId!
   const deleted = await localBackend.deleteWorker(johnId)
   assert(!deleted.error, 'admin can delete the worker')
   const afterDelete = await localBackend.listChatMessages(500)
-  assert(!afterDelete.data?.some((m) => m.worker_id === johnId), 'the deleted worker’s chat messages are gone')
+  assert(!afterDelete.data?.some((m) => m.worker_id === johnId), 'the deleted worker\u2019s chat messages are gone')
   const membersAfter = await localBackend.listChatMembers()
   assert(!membersAfter.data?.some((m) => m.worker_id === johnId), 'the deleted worker is no longer a member')
   assert(membersAfter.data?.some((m) => m.role === 'admin'), 'the admin is still a member')
