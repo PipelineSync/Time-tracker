@@ -15,6 +15,7 @@ import type {
 import type { BackendResult, DataBackend, CreateWorkerInput } from './backend'
 import { ACCOUNT_DEACTIVATED_MESSAGE, CHAT_MAX_LENGTH } from './backend'
 import { buildDemoChat, buildDemoSeed } from './demoSeed'
+import { chatNotificationText } from './chat'
 import { uid, computeEarnings, computeTotalMinutes, formatMinutes, formatDate } from './utils'
 import { storage } from './storage'
 
@@ -854,6 +855,15 @@ export const localBackend: DataBackend = {
       created_at: new Date().toISOString(),
     }
     c.data.chat.push(message)
+    // Everyone else in the room gets a notification about the new message.
+    for (const member of chatMembers(c.data, c.admin.id)) {
+      if (!member.user_id || member.user_id === c.user.id) continue
+      pushNotification(c.data, member.user_id, {
+        entry_id: null,
+        type: 'chat',
+        message: chatNotificationText(message),
+      })
+    }
     save(c.data)
     return { data: message, error: null }
   },
@@ -899,12 +909,23 @@ export const localBackend: DataBackend = {
     if (c.user.role !== 'admin') return { data: null, error: 'Only the admin can settle worker time.' }
     const worker = c.data.workers.find((w) => w.id === workerId)
     if (!worker) return { data: null, error: 'Worker not found.' }
-    const workerEntries = c.data.entries.filter((e) => e.worker_id === workerId)
+    // Settling never deletes time entries. It pays out the worker's unsettled
+    // entries and stamps them, so they stay in Time Entries (with their notes)
+    // until someone deletes one by hand, and the next settlement only covers
+    // time worked since.
+    const unsettled = c.data.entries.filter((e) => e.worker_id === workerId && !e.settled_at)
+    if (unsettled.length === 0) {
+      return { data: null, error: 'This worker has no unsettled time to settle.' }
+    }
     let totalMinutes = 0
     let earnings = 0
-    for (const e of workerEntries) {
+    let periodStart = unsettled[0].start_time
+    let periodEnd = unsettled[0].end_time
+    for (const e of unsettled) {
       totalMinutes += e.total_minutes
       earnings += e.earnings
+      if (e.start_time < periodStart) periodStart = e.start_time
+      if (e.end_time > periodEnd) periodEnd = e.end_time
     }
     const now = new Date()
     const payment: Payment = {
@@ -913,16 +934,19 @@ export const localBackend: DataBackend = {
       amount: Math.round(earnings * 100) / 100,
       hours: Math.round((totalMinutes / 60) * 100) / 100,
       status: 'unpaid',
-      period_start: new Date(now.getTime() - (workerEntries.length ? 0 : 0)).toISOString(),
-      period_end: now.toISOString(),
+      period_start: periodStart,
+      period_end: periodEnd,
       created_at: now.toISOString(),
       paid_at: null,
       note: note || null,
     }
     c.data.payments.push(payment)
-    // Reset the worker's tracked time by clearing their entries.
-    c.data.entries = c.data.entries.filter((e) => e.worker_id !== workerId)
-    c.data.comments = c.data.comments.filter((cm) => !workerEntries.some((e) => e.id === cm.entry_id))
+    // Mark the paid-for time as settled — the rows themselves are kept.
+    const settledAt = now.toISOString()
+    for (const e of unsettled) {
+      e.settled_at = settledAt
+      e.updated_at = settledAt
+    }
     // Notify the worker.
     const wid = workerUserId(workerId)
     if (wid) {

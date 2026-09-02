@@ -32,14 +32,20 @@ export function SettleWorkerDialog({
     let minutes = 0
     let earnings = 0
     let count = 0
+    let settled = 0
     for (const e of entries) {
-      if (e.worker_id === worker.id) {
-        minutes += e.total_minutes
-        earnings += e.earnings
-        count++
+      if (e.worker_id !== worker.id) continue
+      // Settling never deletes entries: it stamps the ones it paid for, so only
+      // the unsettled ones are up for settlement now.
+      if (e.settled_at) {
+        settled++
+        continue
       }
+      minutes += e.total_minutes
+      earnings += e.earnings
+      count++
     }
-    return { minutes, earnings, count }
+    return { minutes, earnings, count, settled }
   }, [entries, worker.id])
 
   useEffect(() => {
@@ -48,7 +54,7 @@ export function SettleWorkerDialog({
 
   async function handleSettle() {
     if (stats.count === 0) {
-      toast.error('This worker has no tracked time to settle.')
+      toast.error('This worker has no unsettled time to settle.')
       return
     }
     setSaving(true)
@@ -58,7 +64,9 @@ export function SettleWorkerDialog({
       toast.error('Failed to settle.')
       return
     }
-    toast.success(`Settled ${formatMinutes(payment.hours * 60)} · ${money(payment.amount, currency)}. Payment created as unpaid.`)
+    toast.success(
+      `Settled ${formatMinutes(payment.hours * 60)} · ${money(payment.amount, currency)}. Payment created as unpaid — the time entries were kept.`
+    )
     onOpenChange(false)
   }
 
@@ -68,15 +76,25 @@ export function SettleWorkerDialog({
         <DialogHeader>
           <DialogTitle>Reset & settle {worker.name}</DialogTitle>
           <DialogDescription>
-            This creates an <b>unpaid</b> payment from the worker's current tracked time, then resets their time & earnings to zero.
+            This creates an <b>unpaid</b> payment from the worker's <b>unsettled</b> time. Their time entries stay in
+            Time Entries — settling never deletes them, they are only marked as settled.
           </DialogDescription>
         </DialogHeader>
 
         <div className="rounded-lg bg-muted p-4 text-sm">
-          <div className="flex justify-between py-0.5"><span className="text-muted-foreground">Tracked hours</span><span className="font-semibold">{formatMinutes(stats.minutes)}</span></div>
-          <div className="flex justify-between py-0.5"><span className="text-muted-foreground">Total earnings</span><span className="font-semibold">{money(stats.earnings, currency)}</span></div>
-          <div className="flex justify-between py-0.5"><span className="text-muted-foreground">Time entries</span><span>{stats.count}</span></div>
-          {stats.count === 0 && <p className="mt-2 text-xs text-destructive">No tracked time for this worker.</p>}
+          <div className="flex justify-between py-0.5"><span className="text-muted-foreground">Unsettled hours</span><span className="font-semibold">{formatMinutes(stats.minutes)}</span></div>
+          <div className="flex justify-between py-0.5"><span className="text-muted-foreground">Unsettled earnings</span><span className="font-semibold">{money(stats.earnings, currency)}</span></div>
+          <div className="flex justify-between py-0.5"><span className="text-muted-foreground">Entries to settle</span><span>{stats.count}</span></div>
+          {stats.settled > 0 && (
+            <div className="flex justify-between py-0.5 text-muted-foreground"><span>Already settled (kept)</span><span>{stats.settled}</span></div>
+          )}
+          {stats.count === 0 && (
+            <p className="mt-2 text-xs text-destructive">
+              {stats.settled > 0
+                ? 'All of this worker’s time is already settled. New entries can be settled again.'
+                : 'No tracked time for this worker.'}
+            </p>
+          )}
         </div>
 
         <div className="space-y-2">

@@ -38,18 +38,20 @@ Workers **clock in, take breaks, and clock out** — their rate is set by the ad
 - **Workers** *(admin)* — add/edit/delete workers, create each worker's login account, set hourly rate & active/inactive status. Each worker card shows their **live clock status** (Working / On break, with elapsed time) while they are on the clock. **Deleting a worker also permanently disables their login account** (the Supabase Auth user is removed server-side, and any open session of theirs is signed out) — they can no longer sign in.
 - **Clock In / Out** *(worker)* — big clock-in button, then break/pause/resume and clock-out; survives a page refresh. At clock-out the worker can attach an **optional note** that is saved on the time entry (the admin's clock-out notification flags that a note was added).
 - **Manual entry** *(admin)* — date, start/end time, break, project, notes, auto-calculated hours & earnings (this is how the admin adds time to workers)
-- **Time Entries** — table on desktop / cards on mobile, filters, sorting; admin can edit/delete/duplicate, workers see their own
+- **Time Entries** — table on desktop / cards on mobile, filters (including **settled / unsettled**), sorting; admin can edit/delete/duplicate, workers see their own. Entries that a settlement paid for carry a **Settled** badge and stay here as history; the summary line also shows the **unsettled** earnings still waiting to be paid out
 - **Notes / chat on entries** — every entry has a conversation thread: workers add notes, the admin replies (and vice versa), both sides are notified
 - **Chat** *(admin & worker, right before Settings in the navigation)* — one shared **team room** for the whole workspace. Every message is shown with the sender's **profile picture, name and role** (the admin appears as **Admin**; a worker's role is their position, e.g. *Foreman*, falling back to *Worker*), plus a time stamp and day separators. A **See all members** button opens the roster — **the admin first, then every worker**, with each member's picture, role and whether their account is active; workers get the same roster including the admin, even though the rest of their access is limited to their own records. New messages arrive on their own (the room refreshes while the tab is open), Enter sends, Shift+Enter adds a line
 - **Reports** *(admin)* — today/week/month/custom range, totals & averages, charts, **CSV export**
 - **Settings** *(admin)* — business name, currency, timezone, default rate, theme, export & delete all data
 - **Settings → Profile** *(worker)* — workers upload their own **profile picture** from their account settings. The picture is saved to their worker profile and shows up **for the admin** next to their name on the Workers page, the Dashboard, the "On the clock now" panel, and in every **Chat** message — not just a bare name.
-- **Payments** — the admin turns a worker's tracked time & earnings into a **settlement**: a **Reset & settle** action on a worker creates an **unpaid** payment and zeroes that worker's tracked time. The admin then drives the status **unpaid → pending → paid** (with a "Back to unpaid" option) and can delete payments. The **worker** sees their own payments **read-only**, with no edit controls.
+- **Payments** — the admin turns a worker's unsettled time & earnings into a **settlement**: a **Reset & settle** action on a worker creates an **unpaid** payment for the time that has not been settled yet. **Time entries are never deleted by a settlement** — the entries it paid for are marked **Settled** (their hours, notes and comments all stay in Time Entries), so the next settlement only covers time worked since. An entry only disappears when the admin **deletes it by hand**. The admin then drives the status **unpaid → pending → paid** (with a "Back to unpaid" option) and can delete payments. The **worker** sees their own payments **read-only**, with no edit controls.
 - **Auth** — sign in with admin or worker credentials. Only the admin can create worker login accounts.
 - **Change password** — available from the account menu (top-right) for both roles: enter your current password and a new one. Admins can also **reset a worker's password** from the Workers page. In demo mode the new password is set directly; with Supabase, a password reset link is emailed to the worker (the anon key cannot set another user's password).
 
 ### Notifications
 A notification bell (with an unread badge) appears for both roles. The admin is notified when a worker **clocks in**, **starts a break**, **comes back from a break**, **clocks out**, or **adds a note**. Workers are notified when the **admin replies to a note**, **adds time** for them, creates a **payment**, or changes a **payment status**. Clicking a notification opens the related entry.
+
+**Team chat messages notify everyone else in the room** — never the sender. A new message raises a **toast** (unless you are already in the Chat section), bumps the **bell badge**, and shows an unread count **on the Chat item** in the sidebar / bottom navigation. The notification reads *"John Smith: On site now."* (long messages are clipped) and clicking it opens the Chat section.
 
 All entries **snapshot the hourly rate** at record time, so historical earnings don't change when a worker's rate changes later. Sessions that cross midnight are handled correctly.
 
@@ -104,6 +106,10 @@ This creates the `workers`, `time_entries`, `active_timers`, `settings`, and `pa
 > If your database predates the worker-login fix, also run `supabase/fix-deleted-worker-login.sql` once. It adds the `profiles_delete` policy and permanently removes the leftover logins of workers that were deleted before the fix (so those workers can no longer sign in).
 >
 > To let workers upload their **own profile picture** from their account settings, run `supabase/worker-profile-picture.sql` once. It adds a SECURITY DEFINER RPC (`update_own_avatar`) so a worker can change only the avatar on their own worker row (they still can't edit their hourly rate, status, or other admin-managed fields). Fresh installs get this automatically from `schema.sql`.
+>
+> For **settlements that keep time entries**, run `supabase/settle-keeps-entries.sql` once. It adds `time_entries.settled_at`, the column "Settle & reset" stamps instead of deleting the entries it paid for (without it the app still keeps the entries, but falls back to the previous payment's `period_end` as the paid-up-to boundary). Fresh installs get this automatically from `schema.sql`.
+>
+> For **chat message notifications**, run `supabase/chat-notifications.sql` once (after `chat-messages.sql`). It allows `'chat'` as a notification type and adds the SECURITY DEFINER function `notify_chat_message()`, which writes a notification for every member of the workspace except the author — something a worker cannot do directly, because RLS only lets them notify themselves and the admin. Fresh installs get this automatically from `schema.sql`.
 
 ---
 
@@ -203,6 +209,8 @@ Free-tier Supabase projects are **paused after ~7 days of no API/database activi
 time-tracker/
 ├─ supabase/schema.sql          # Database tables, RLS, triggers (incl. team chat)
 ├─ supabase/chat-messages.sql   # One-time migration for the team chat on existing databases
+├─ supabase/chat-notifications.sql      # One-time migration: notifications for chat messages
+├─ supabase/settle-keeps-entries.sql    # One-time migration: settlements keep time entries
 ├─ src/
 │  ├─ lib/                      # types, utils, stats, backend (local + supabase), store, theme, chat helpers
 │  ├─ components/               # shared UI + app components (shadcn-style), incl. AvatarBubble + ChatMembersDialog

@@ -1,8 +1,10 @@
 /**
- * Minimal mock of @supabase/supabase-js for the team-chat verification script.
- * It only implements the query shapes src/lib/supabaseDb.ts uses for chat, but
- * it evaluates them for real (filters, ordering, limits, the workspace-owner
- * trigger, and the two chat RPCs) so the client code is exercised, not stubbed.
+ * Minimal mock of @supabase/supabase-js for the team-chat / settlement
+ * verification scripts. It only implements the query shapes
+ * src/lib/supabaseDb.ts uses for chat, notifications, time entries and payments,
+ * but it evaluates them for real (filters, ordering, limits, the workspace-owner
+ * trigger, per-table RLS, and the chat/settlement RPCs) so the client code is
+ * exercised, not stubbed.
  *
  * State is a plain object the test script edits between scenarios.
  */
@@ -13,8 +15,12 @@ export const state = {
   workers: [], // { id, user_id, name, email, position, avatar_url, status, hourly_rate }
   settings: [], // { id, user_id, business_name, currency, timezone, avatar_url }
   chat: [], // chat_messages rows, oldest first
+  notifications: [], // { id, user_id, entry_id, type, message, read, created_at }
+  timeEntries: [], // time_entries rows
+  payments: [], // payments rows
   missingFunctions: [], // RPC names that behave as "not in this database yet"
   missingTables: [], // table names that behave as "relation does not exist"
+  missingColumns: [], // columns that behave as "not in this database yet"
   calls: [], // { table, op } / { rpc } — what the client actually did
 }
 
@@ -24,8 +30,12 @@ export function resetState() {
   state.workers = []
   state.settings = []
   state.chat = []
+  state.notifications = []
+  state.timeEntries = []
+  state.payments = []
   state.missingFunctions = []
   state.missingTables = []
+  state.missingColumns = []
   state.calls = []
 }
 
@@ -41,6 +51,10 @@ const missingTableError = (table) => ({
 const missingFunctionError = (fn) => ({
   code: 'PGRST202',
   message: `Could not find the function public.${fn} within the schema's specifications`,
+})
+const missingColumnError = (table, column) => ({
+  code: '42703',
+  message: `Could not find the '${table}.${column}' column of '${table}' in the schema cache`,
 })
 
 /** The caller's workspace owner, mirroring public.workspace_owner_id(). */
@@ -127,17 +141,59 @@ function postChatMessage(body) {
   return { data: row }
 }
 
-/** The client queries `chat_messages`; state keeps it under the shorter `chat`. */
-function rowsOf(table) {
-  return table === 'chat_messages' ? state.chat : state[table] ?? []
+/**
+ * public.notify_chat_message(chat_id) — one notification row per member of the
+ * workspace except the author (see supabase/chat-notifications.sql).
+ */
+function notifyChatMessage(chatId) {
+  const me = state.authUser?.id
+  if (!me) return { error: { message: 'Not signed in.' } }
+  const msg = state.chat.find((m) => m.id === chatId)
+  if (!msg) return { error: { message: 'Chat message not found.' } }
+  if (msg.author_id !== me) return { error: { message: 'You can only notify about your own message.' } }
+  let preview = String(msg.body).replace(/\s+/g, ' ').trim()
+  if (preview.length > 120) preview = `${preview.slice(0, 119)}…`
+  let inserted = 0
+  for (const member of workspaceMembers()) {
+    if (!member.user_id || member.user_id === msg.author_id) continue
+    state.notifications.push({
+      id: id('notif'),
+      user_id: member.user_id,
+      entry_id: null,
+      type: 'chat',
+      message: `${msg.author_name}: ${preview}`,
+      read: false,
+      created_at: nowIso(),
+    })
+    inserted += 1
+  }
+  return { data: inserted }
 }
-function clearRows(table) {
-  if (table === 'chat_messages') state.chat = []
-  else state[table] = []
+
+/** The client queries `chat_messages` / `time_entries`; state uses short keys. */
+const tableKey = (table) => (table === 'chat_messages' ? 'chat' : table === 'time_entries' ? 'timeEntries' : table)
+function rowsOf(table) {
+  return state[tableKey(table)] ?? []
+}
+function setRows(table, rows) {
+  state[tableKey(table)] = rows
 }
 
 function applyEq(rows, filters) {
-  return rows.filter((r) => filters.every(([col, val]) => r[col] === val))
+  return rows.filter((r) =>
+    filters.every(([col, val]) => {
+      if (val && typeof val === 'object' && val.kind === 'is') return (r[col] ?? null) === val.val
+      if (val && typeof val === 'object' && val.kind === 'in') return val.vals.includes(r[col])
+      if (typeof val === 'string' && val.startsWith('ANY_NOT_')) return r[col] !== val.slice('ANY_NOT_'.length)
+      return r[col] === val
+    })
+  )
+}
+
+/** First filter that names a column this "database" does not have. */
+function missingColumnOf(table, columns) {
+  const found = columns.find((c) => state.missingColumns.includes(c))
+  return found ? missingColumnError(table, found) : null
 }
 
 function tableApi(table, ctx) {
@@ -148,6 +204,8 @@ function tableApi(table, ctx) {
 
   const read = () => {
     if (state.missingTables.includes(table)) return { error: missingTableError(table) }
+    const missingCol = missingColumnOf(table, filters.map(([c]) => c))
+    if (missingCol) return { data: null, error: missingCol }
     let rows = applyEq(rowsOf(table), filters)
     if (orderCol) {
       rows = [...rows].sort((a, b) => {
@@ -167,6 +225,14 @@ function tableApi(table, ctx) {
     },
     neq: (col, val) => {
       filters.push([col, 'ANY_NOT_' + val])
+      return api
+    },
+    is: (col, val) => {
+      filters.push([col, { kind: 'is', val }])
+      return api
+    },
+    in: (col, vals) => {
+      filters.push([col, { kind: 'in', vals }])
       return api
     },
     order: (col, opts) => {
@@ -203,25 +269,104 @@ function tableApi(table, ctx) {
       state.calls.push({ table, op: 'insert' })
       const finish = (result) => ({ select: () => ({ single: async () => result }) })
       if (state.missingTables.includes(table)) return finish({ data: null, error: missingTableError(table) })
-      // RLS: only the admin may insert directly, and only for themselves.
+      const missingCol = missingColumnOf(table, Object.keys(values))
+      if (missingCol) return finish({ data: null, error: missingCol })
+      // Row Level Security, per table (see supabase/schema.sql).
       const owner = workspaceOwnerId()
-      const isAdmin = roleOf(state.authUser?.id) === 'admin'
-      if (!isAdmin || values.author_id !== state.authUser?.id || values.user_id !== owner) {
-        return finish({ data: null, error: { message: 'new row violates row-level security policy' } })
+      const me = state.authUser?.id
+      const isAdmin = roleOf(me) === 'admin'
+      let allowed
+      if (table === 'chat_messages') {
+        allowed = isAdmin && values.author_id === me && values.user_id === owner
+      } else if (table === 'notifications') {
+        // A worker may only notify themselves or the workspace admin.
+        allowed = isAdmin || values.user_id === me || values.user_id === owner
+      } else if (table === 'payments') {
+        allowed = isAdmin && values.user_id === me
+      } else {
+        allowed = isAdmin
       }
-      const row = { id: id('chat'), created_at: nowIso(), ...values }
+      if (!allowed) return finish({ data: null, error: { message: 'new row violates row-level security policy' } })
+      const row = { id: id(tableKey(table)), created_at: nowIso(), ...values }
+      // set_user_id() trigger: workspace-owned tables get the owner stamped.
+      if (table !== 'chat_messages' && row.user_id == null) row.user_id = owner
       rowsOf(table).push(row)
       return finish({ data: clone(row), error: null })
     },
-    delete: () => ({
-      neq: () => {
-        state.calls.push({ table, op: 'delete' })
-        if (roleOf(state.authUser?.id) !== 'admin') return { error: { message: 'row-level security' } }
-        clearRows(table)
-        ctx.deleted.push(table)
-        return { error: null }
-      },
-    }),
+    update: (values) => {
+      const apply = () => {
+        state.calls.push({ table, op: 'update' })
+        if (state.missingTables.includes(table)) return { data: null, error: missingTableError(table) }
+        const missingCol =
+          missingColumnOf(table, Object.keys(values)) ?? missingColumnOf(table, filters.map(([c]) => c))
+        if (missingCol) return { data: null, error: missingCol }
+        if (roleOf(state.authUser?.id) !== 'admin') {
+          return { data: null, error: { message: 'new row violates row-level security policy' } }
+        }
+        const targets = applyEq(rowsOf(table), filters)
+        for (const t of targets) Object.assign(t, values)
+        return { data: targets.map(clone), error: null }
+      }
+      const chain = {
+        eq: (col, val) => {
+          filters.push([col, val])
+          return chain
+        },
+        is: (col, val) => {
+          filters.push([col, { kind: 'is', val }])
+          return chain
+        },
+        in: (col, vals) => {
+          filters.push([col, { kind: 'in', vals }])
+          return chain
+        },
+        select: () => ({
+          single: async () => {
+            const r = apply()
+            if (r.error) return { data: null, error: r.error }
+            if (!r.data.length) return { data: null, error: { message: 'no rows returned by single()' } }
+            return { data: r.data[0], error: null }
+          },
+        }),
+        then: (resolve, reject) => {
+          try {
+            resolve(apply())
+          } catch (e) {
+            reject(e)
+          }
+        },
+      }
+      return chain
+    },
+    delete: () => {
+      const chain = {
+        eq: (col, val) => {
+          filters.push([col, val])
+          return chain
+        },
+        neq: (col, val) => {
+          filters.push([col, 'ANY_NOT_' + val])
+          return chain
+        },
+        then: (resolve, reject) => {
+          try {
+            state.calls.push({ table, op: 'delete' })
+            if (roleOf(state.authUser?.id) !== 'admin') {
+              resolve({ error: { message: 'row-level security' } })
+              return
+            }
+            const rows = rowsOf(table)
+            const doomed = new Set(applyEq(rows, filters).map((r) => r.id))
+            setRows(table, rows.filter((r) => !doomed.has(r.id)))
+            ctx.deleted.push(table)
+            resolve({ error: null })
+          } catch (e) {
+            reject(e)
+          }
+        },
+      }
+      return chain
+    },
   }
   return api
 }
@@ -258,9 +403,14 @@ export function createClient() {
         const r = postChatMessage(args?.message_body)
         return r.error ? { data: null, error: r.error } : { data: r.data, error: null }
       }
+      if (fn === 'notify_chat_message') {
+        if (state.missingTables.includes('chat_messages')) return { data: null, error: missingTableError('chat_messages') }
+        const r = notifyChatMessage(args?.p_chat_id)
+        return r.error ? { data: null, error: r.error } : { data: r.data, error: null }
+      }
       return { data: null, error: { message: `unexpected rpc ${fn}` } }
     },
   }
 }
 
-export { workspaceMembers, postChatMessage, workspaceOwnerId }
+export { workspaceMembers, postChatMessage, notifyChatMessage, workspaceOwnerId }

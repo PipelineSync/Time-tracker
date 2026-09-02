@@ -27,6 +27,14 @@ export interface TimeEntry {
   earnings: number
   created_at: string
   updated_at: string
+  /**
+   * When this entry was included in a settlement ("Settle & reset"), or null
+   * while it is still waiting to be settled. Settling never deletes time
+   * entries — it stamps the ones it paid for, so the next settlement only
+   * covers time worked since. An entry disappears only when someone deletes it
+   * by hand.
+   */
+  settled_at?: string | null
 }
 
 export interface ActiveTimer {
@@ -135,6 +143,8 @@ export type NotificationType =
   | 'payment'
   | 'break_start'
   | 'break_end'
+  /** A teammate posted in the team chat. */
+  | 'chat'
 
 export interface AppNotification {
   id: string

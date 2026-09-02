@@ -98,8 +98,32 @@ async function main() {
   const adminPost2 = await localBackend.sendChatMessage('My picture comes from settings.')
   assert(adminPost2.data?.author_avatar_url === 'data:image/png;base64,adminpic', 'admin picture comes from the business/settings avatar')
 
+  // 5b) A message notifies everyone else in the room — never the sender.
+  const adminNotifs = await localBackend.listNotifications()
+  assert(
+    adminNotifs.data?.some((n) => n.type === 'chat' && n.message === 'John Smith: On my way to the site.'),
+    `the admin is notified about the worker's message`
+  )
+  assert(
+    (adminNotifs.data ?? []).every((n) => n.type !== 'chat' || !n.message.startsWith('Admin:')),
+    'the admin is not notified about their own messages'
+  )
+  assert(
+    (adminNotifs.data ?? []).some((n) => n.type === 'chat' && !n.read),
+    'the chat notification arrives unread'
+  )
+
   // 6) A new profile picture shows up on the member list (and therefore the chat).
   await localBackend.signIn('john@example.com', 'worker123')
+  const johnNotifs = await localBackend.listNotifications()
+  assert(
+    johnNotifs.data?.some((n) => n.type === 'chat' && n.message === 'Admin: Thanks John — clock out when the site is done.'),
+    'the worker is notified about the admin message'
+  )
+  assert(
+    (johnNotifs.data ?? []).every((n) => n.type !== 'chat' || !n.message.startsWith('John Smith:')),
+    'a worker is not notified about their own messages'
+  )
   const avatared = await localBackend.updateOwnProfile({ avatar_url: 'data:image/png;base64,johnpic' })
   assert(!avatared.error && avatared.data?.avatar_url === 'data:image/png;base64,johnpic', 'worker can set their profile picture')
   const membersNow = await localBackend.listChatMembers()
