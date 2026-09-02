@@ -40,6 +40,7 @@ Workers **clock in, take breaks, and clock out** — their rate is set by the ad
 - **Notes / chat** — every entry has a conversation thread: workers add notes, the admin replies (and vice versa), both sides are notified
 - **Reports** *(admin)* — today/week/month/custom range, totals & averages, charts, **CSV export**
 - **Settings** *(admin)* — business name, currency, timezone, default rate, theme, export & delete all data
+- **Settings → Profile** *(worker)* — workers upload their own **profile picture** from their account settings. The picture is saved to their worker profile and shows up **for the admin** next to their name on the Workers page, the Dashboard, and the "On the clock now" panel — not just a bare name.
 - **Payments** — the admin turns a worker's tracked time & earnings into a **settlement**: a **Reset & settle** action on a worker creates an **unpaid** payment and zeroes that worker's tracked time. The admin then drives the status **unpaid → pending → paid** (with a "Back to unpaid" option) and can delete payments. The **worker** sees their own payments **read-only**, with no edit controls.
 - **Auth** — sign in with admin or worker credentials. Only the admin can create worker login accounts.
 - **Change password** — available from the account menu (top-right) for both roles: enter your current password and a new one. Admins can also **reset a worker's password** from the Workers page. In demo mode the new password is set directly; with Supabase, a password reset link is emailed to the worker (the anon key cannot set another user's password).
@@ -96,6 +97,8 @@ This creates the `workers`, `time_entries`, `active_timers`, `settings`, and `pa
 > **Upgrading an existing database?** Run `supabase/fix-multiple-active-workers.sql` once — it makes the timer uniqueness rule *one per worker* (older databases allowed only one clocked-in worker per workspace, so the admin dashboard could only ever show a single worker) and allows the new `break_start` / `break_end` notification types.
 >
 > If your database predates the worker-login fix, also run `supabase/fix-deleted-worker-login.sql` once. It adds the `profiles_delete` policy and permanently removes the leftover logins of workers that were deleted before the fix (so those workers can no longer sign in).
+>
+> To let workers upload their **own profile picture** from their account settings, run `supabase/worker-profile-picture.sql` once. It adds a SECURITY DEFINER RPC (`update_own_avatar`) so a worker can change only the avatar on their own worker row (they still can't edit their hourly rate, status, or other admin-managed fields). Fresh installs get this automatically from `schema.sql`.
 
 ---
 

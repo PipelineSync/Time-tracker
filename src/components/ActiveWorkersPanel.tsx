@@ -95,8 +95,12 @@ export function ActiveWorkersPanel() {
                     />
                     <span className={cn('relative inline-flex h-3 w-3 rounded-full', r.onBreak ? 'bg-[#36B7C9]' : 'bg-[#F77A0A]')} />
                   </span>
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
-                    {initials(r.worker?.name)}
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary/10 text-xs font-semibold text-primary">
+                    {r.worker?.avatar_url ? (
+                      <img src={r.worker.avatar_url} alt="" className="h-full w-full object-cover" />
+                    ) : (
+                      initials(r.worker?.name)
+                    )}
                   </div>
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">

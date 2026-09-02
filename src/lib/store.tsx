@@ -58,6 +58,8 @@ interface StoreValue {
   resetPassword: (email: string) => Promise<string | null>
   changePassword: (currentPassword: string, newPassword: string) => Promise<string | null>
   resetWorkerPassword: (workerId: string, newPassword: string) => Promise<string | null>
+  /** Worker self-service: update the signed-in worker's own profile picture. */
+  updateOwnProfile: (avatarUrl: string | null) => Promise<Worker | null>
 
   refreshData: () => Promise<void>
 
@@ -231,6 +233,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const res = await backend.resetWorkerPassword(workerId, newPassword)
     return res.error
   }, [backend])
+
+  const updateOwnProfile = useCallback(async (avatarUrl: string | null) => {
+    const res = await backend.updateOwnProfile({ avatar_url: avatarUrl })
+    if (res.error || !res.data) return null
+    await refreshData()
+    return res.data
+  }, [backend, refreshData])
 
   const createWorker = useCallback(async (input: CreateWorkerInput) => {
     const res = await backend.createWorker(input)
@@ -442,6 +451,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     resetPassword,
     changePassword,
     resetWorkerPassword,
+    updateOwnProfile,
     refreshData,
     createWorker,
     updateWorker,

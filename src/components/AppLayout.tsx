@@ -47,11 +47,19 @@ const workerNav = [
 ]
 
 export function AppLayout() {
-  const { user, signOut, isAdmin } = useStore()
+  const { user, signOut, isAdmin, workers, settings } = useStore()
   const { setTheme } = useTheme()
   const navigate = useNavigate()
   const navItems = isAdmin ? adminNav : workerNav
   const [changePwOpen, setChangePwOpen] = useState(false)
+
+  // The signed-in user's avatar, if they have uploaded one. Workers see their
+  // own worker row in `workers`; the admin's avatar is the business/account
+  // picture stored in settings. Falls back to their initial.
+  const accountAvatar = isAdmin
+    ? settings?.avatar_url ?? null
+    : workers.find((w) => w.id === user?.workerId)?.avatar_url ?? null
+  const accountInitial = user?.email?.[0]?.toUpperCase() || 'U'
 
   const ThemeToggle = ({ onNavy }: { onNavy?: boolean }) => {
     const { theme } = useTheme()
@@ -79,9 +87,13 @@ export function AppLayout() {
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="outline" size="sm" className="min-w-0 gap-2">
-          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
-            {user?.email?.[0]?.toUpperCase() || 'U'}
-          </span>
+          {accountAvatar ? (
+            <img src={accountAvatar} alt="Your profile" className="h-6 w-6 shrink-0 rounded-full object-cover" />
+          ) : (
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
+              {accountInitial}
+            </span>
+          )}
           <span className="hidden max-w-[120px] truncate sm:inline">{user?.email}</span>
         </Button>
       </DropdownMenuTrigger>

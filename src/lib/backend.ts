@@ -46,6 +46,11 @@ export interface DataBackend {
   // Admin-only: reset a worker's account password.
   resetWorkerPassword(workerId: string, newPassword: string): Promise<BackendResult<null>>
 
+  // Worker self-service: the signed-in worker updates their own public profile
+  // (their profile picture). Only ever touches the worker's own row and only
+  // profile fields — never their rate, status, or other admin-managed data.
+  updateOwnProfile(patch: { avatar_url?: string | null }): Promise<BackendResult<Worker>>
+
   // Data (scoped to current user + role)
   listWorkers(): Promise<BackendResult<Worker[]>>
   createWorker(input: CreateWorkerInput): Promise<BackendResult<Worker>>

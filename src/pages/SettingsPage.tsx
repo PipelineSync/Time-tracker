@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '@/lib/store'
 import { useTheme } from '@/lib/theme'
 import { PageHeader } from '@/components/PageHeader'
@@ -9,10 +9,11 @@ import { Label } from '@/components/ui/label'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { toast } from 'sonner'
-import { Sun, Moon, Monitor, Download, Trash2, Loader2 } from 'lucide-react'
+import { Sun, Moon, Monitor, Download, Trash2, Loader2, Upload, X } from 'lucide-react'
+import { initials } from '@/lib/utils'
 
 export function SettingsPage() {
-  const { settings, saveSettings, resetAllData, workers, entries, backend, user, isAdmin } = useStore()
+  const { settings, saveSettings, resetAllData, workers, entries, backend, user, isAdmin, updateOwnProfile } = useStore()
   const { theme, setTheme } = useTheme()
   const [businessName, setBusinessName] = useState(settings?.business_name || '')
   const [currency, setCurrency] = useState(settings?.currency || 'USD')
@@ -22,6 +23,21 @@ export function SettingsPage() {
   const [avatar, setAvatar] = useState(settings?.avatar_url || '')
   const [confirmReset, setConfirmReset] = useState(false)
   const [resetting, setResetting] = useState(false)
+
+  // Worker self-service profile picture. A worker only ever sees their own
+  // worker row (both backends scope listWorkers to the signed-in user), so this
+  // is the current worker record whose avatar the admin will see.
+  const myWorker = useMemo(
+    () => workers.find((w) => w.id === user?.workerId) ?? null,
+    [workers, user?.workerId]
+  )
+  const [profileAvatar, setProfileAvatar] = useState<string | null>(null)
+  const [savingProfile, setSavingProfile] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  // Seed the avatar editor whenever the loaded worker row changes.
+  useEffect(() => {
+    setProfileAvatar(myWorker?.avatar_url ?? null)
+  }, [myWorker?.id, myWorker?.avatar_url])
 
   useEffect(() => {
     if (settings) {
@@ -55,6 +71,26 @@ export function SettingsPage() {
     else toast.success('Settings saved.')
   }
 
+  function onPickPicture(file?: File | null) {
+    if (!file) return
+    if (!file.type.startsWith('image/')) {
+      toast.error('Please choose an image file.')
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = () => setProfileAvatar(String(reader.result))
+    reader.readAsDataURL(file)
+  }
+
+  async function handleSaveProfile() {
+    if (savingProfile) return
+    setSavingProfile(true)
+    const res = await updateOwnProfile(profileAvatar || null)
+    setSavingProfile(false)
+    if (!res) toast.error('Failed to save your profile picture.')
+    else toast.success('Profile picture updated.')
+  }
+
   function exportAll() {
     const data = {
       exportedAt: new Date().toISOString(),
@@ -72,16 +108,83 @@ export function SettingsPage() {
     toast.success('All data exported.')
   }
 
+  const workerTabVisible = !isAdmin && myWorker
+
   return (
     <div className="space-y-6">
-      <PageHeader title="Settings" description="Manage your workspace preferences." />
+      <PageHeader title="Settings" description="Manage your account and preferences." />
 
-      <Tabs defaultValue={isAdmin ? 'general' : 'appearance'}>
+      <Tabs defaultValue={workerTabVisible ? 'profile' : isAdmin ? 'general' : 'appearance'}>
         <TabsList>
+          {workerTabVisible && <TabsTrigger value="profile">Profile</TabsTrigger>}
           {isAdmin && <TabsTrigger value="general">General</TabsTrigger>}
           <TabsTrigger value="appearance">Appearance</TabsTrigger>
           {isAdmin && <TabsTrigger value="data">Data</TabsTrigger>}
         </TabsList>
+
+        {workerTabVisible && (
+          <TabsContent value="profile" className="mt-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Profile</CardTitle>
+                <CardDescription>Add a profile picture so your manager and the rest of the team can recognize you.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-5">
+                {/* Account info (read-only; set by your manager) */}
+                <div className="rounded-lg border p-4">
+                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Your account</p>
+                  <div className="mt-2 flex flex-wrap gap-x-8 gap-y-1 text-sm">
+                    <div><span className="text-muted-foreground">Name:</span> <span className="font-medium">{myWorker.name}</span></div>
+                    {myWorker.position && <div><span className="text-muted-foreground">Position:</span> <span className="font-medium">{myWorker.position}</span></div>}
+                    {myWorker.email && <div><span className="text-muted-foreground">Email:</span> <span className="font-medium">{myWorker.email}</span></div>}
+                  </div>
+                </div>
+
+                {/* Profile picture upload */}
+                <div className="space-y-2">
+                  <Label>Profile picture</Label>
+                  <div className="flex items-center gap-4">
+                    <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary/10 text-xl font-semibold text-primary">
+                      {profileAvatar ? (
+                        <img src={profileAvatar} alt="Profile preview" className="h-full w-full object-cover" />
+                      ) : (
+                        initials(myWorker.name)
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap gap-2">
+                        <Button type="button" variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>
+                          <Upload className="mr-1 h-4 w-4" /> {profileAvatar ? 'Change picture' : 'Upload picture'}
+                        </Button>
+                        {profileAvatar && (
+                          <Button type="button" variant="ghost" size="sm" onClick={() => { setProfileAvatar(null); if (fileInputRef.current) fileInputRef.current.value = '' }}>
+                            <X className="mr-1 h-4 w-4" /> Remove
+                          </Button>
+                        )}
+                      </div>
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => { onPickPicture(e.target.files?.[0]); e.target.value = '' }}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        {profileAvatar
+                          ? 'Save to apply your new picture. Your manager will see it next to your name.'
+                          : 'Upload a JPG, PNG or GIF so you have a face next to your name.'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <Button type="button" disabled={savingProfile} onClick={handleSaveProfile}>
+                  {savingProfile && <Loader2 className="mr-1 animate-spin" />} Save picture
+                </Button>
+              </CardContent>
+            </Card>
+          </TabsContent>
+        )}
 
         {isAdmin && (
         <TabsContent value="general" className="mt-4">

@@ -68,8 +68,12 @@ export function DashboardPage() {
               byWorker.map((w) => (
                 <div key={w.worker.id} className="flex items-center justify-between text-sm">
                   <div className="flex items-center gap-2">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
-                      {w.worker.name.split(' ').map((n) => n[0]).slice(0, 2).join('')}
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary/10 text-xs font-semibold text-primary">
+                      {w.worker.avatar_url ? (
+                        <img src={w.worker.avatar_url} alt="" className="h-full w-full object-cover" />
+                      ) : (
+                        w.worker.name.split(' ').map((n) => n[0]).slice(0, 2).join('')
+                      )}
                     </div>
                     <span className="font-medium">{w.worker.name}</span>
                   </div>
@@ -101,8 +105,12 @@ export function DashboardPage() {
                   return (
                     <div key={e.id} className="flex items-center justify-between py-2.5 text-sm">
                       <div className="flex items-center gap-3">
-                        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-muted text-xs font-semibold">
-                          {w?.name?.split(' ').map((n) => n[0]).slice(0, 2).join('') || '?'}
+                        <div className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted text-xs font-semibold">
+                          {w?.avatar_url ? (
+                            <img src={w.avatar_url} alt="" className="h-full w-full object-cover" />
+                          ) : (
+                            w?.name?.split(' ').map((n) => n[0]).slice(0, 2).join('') || '?'
+                          )}
                         </div>
                         <div>
                           <p className="font-medium">{w?.name || 'Unknown'}</p>
