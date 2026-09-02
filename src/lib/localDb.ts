@@ -287,6 +287,25 @@ export const localBackend: DataBackend = {
     return { data: null, error: null }
   },
 
+  async updateOwnProfile(patch) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (c.user.role !== 'worker') return { data: null, error: 'Only workers can update their own profile here.' }
+    if (!c.user.workerId) return { data: null, error: 'No worker account is linked to this user.' }
+    const idx = c.data.workers.findIndex((w) => w.id === c.user.workerId)
+    if (idx === -1) return { data: null, error: 'Worker not found.' }
+    const next: Worker = {
+      ...c.data.workers[idx],
+      // Only ever touch the profile picture — never the worker's rate, status,
+      // name, etc., which are managed by the admin.
+      avatar_url: patch.avatar_url === undefined ? c.data.workers[idx].avatar_url : patch.avatar_url,
+      updated_at: new Date().toISOString(),
+    }
+    c.data.workers[idx] = next
+    save(c.data)
+    return { data: next, error: null }
+  },
+
   async listWorkers() {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }

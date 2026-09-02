@@ -258,6 +258,29 @@ export const supabaseBackend: DataBackend = {
     return ok(null)
   },
 
+  async updateOwnProfile(patch) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (me.data!.role !== 'worker') return fail('Only workers can update their own profile here.')
+    if (!me.data!.workerId) return fail('No worker account is linked to this user.')
+    const avatarUrl = patch.avatar_url === undefined ? null : patch.avatar_url
+    // The worker cannot UPDATE their own workers row under RLS (that would let
+    // them change their hourly rate/status). Instead a SECURITY DEFINER RPC
+    // (see supabase/worker-profile-picture.sql) updates only the profile
+    // picture on the worker's own row.
+    const { error: rpcErr } = await client().rpc('update_own_avatar', { new_avatar: avatarUrl })
+    if (rpcErr) {
+      // Give a friendly hint when the RPC is missing (database not migrated).
+      if (/function update_own_avatar/.test(rpcErr.message) || rpcErr.code === 'PGRST202') {
+        return fail('Saving your profile picture requires the database migration supabase/worker-profile-picture.sql to be applied.')
+      }
+      return fail(rpcErr.message)
+    }
+    const { data, error } = await client().from('workers').select('*').eq('id', me.data!.workerId).single()
+    if (error) return fail(error.message)
+    return ok(data as Worker)
+  },
+
   async listWorkers() {
     const me = await requireUser()
     if (me.error) return fail(me.error)
