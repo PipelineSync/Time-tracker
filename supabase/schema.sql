@@ -82,7 +82,7 @@ create table if not exists public.notifications (
   id         uuid primary key default gen_random_uuid(),
   user_id    uuid not null references auth.users (id) on delete cascade,
   entry_id   uuid references public.time_entries (id) on delete cascade,
-  type       text not null default 'note' check (type in ('note','time_in','time_out','time_added','payment')),
+  type       text not null default 'note' check (type in ('note','time_in','time_out','time_added','payment','break_start','break_end')),
   message    text not null,
   read       boolean not null default false,
   created_at timestamptz not null default now()

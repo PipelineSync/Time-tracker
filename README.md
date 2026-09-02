@@ -29,11 +29,11 @@ The app has two roles with clearly separated permissions:
 | Change own password | ✅ | ✅ |
 | Reset other accounts' passwords | ✅ | ❌ (own only) |
 
-Workers **clock in, take breaks, and clock out** — their rate is set by the admin and shown read-only. The admin has **no start-timer**; instead the admin **adds time to workers** via manual entries (Time Entries → Manual entry, or Dashboard → Add time).
+Workers **clock in, take breaks, and clock out** — their rate is set by the admin and shown read-only. **Any number of workers can be on the clock at the same time**; the admin sees all of them live, including who is currently on a break. The admin has **no start-timer**; instead the admin **adds time to workers** via manual entries (Time Entries → Manual entry, or Dashboard → Add time).
 
 ### Pages
-- **Dashboard** *(admin)* — today's & this week's hours and earnings, active-worker banner, per-worker summary, recent entries, "Add time"
-- **Workers** *(admin)* — add/edit/delete workers, create each worker's login account, set hourly rate & active/inactive status. **Deleting a worker also permanently disables their login account** (the Supabase Auth user is removed server-side, and any open session of theirs is signed out) — they can no longer sign in.
+- **Dashboard** *(admin)* — today's & this week's hours and earnings, a live **"On the clock now"** panel listing **every** worker currently clocked in (with a **Working** / **On break** badge, time worked and break time, updated every second), per-worker summary, recent entries, "Add time"
+- **Workers** *(admin)* — add/edit/delete workers, create each worker's login account, set hourly rate & active/inactive status. Each worker card shows their **live clock status** (Working / On break, with elapsed time) while they are on the clock. **Deleting a worker also permanently disables their login account** (the Supabase Auth user is removed server-side, and any open session of theirs is signed out) — they can no longer sign in.
 - **Clock In / Out** *(worker)* — big clock-in button, then break/pause/resume and clock-out; survives a page refresh. At clock-out the worker can attach an **optional note** that is saved on the time entry (the admin's clock-out notification flags that a note was added).
 - **Manual entry** *(admin)* — date, start/end time, break, project, notes, auto-calculated hours & earnings (this is how the admin adds time to workers)
 - **Time Entries** — table on desktop / cards on mobile, filters, sorting; admin can edit/delete/duplicate, workers see their own
@@ -45,7 +45,7 @@ Workers **clock in, take breaks, and clock out** — their rate is set by the ad
 - **Change password** — available from the account menu (top-right) for both roles: enter your current password and a new one. Admins can also **reset a worker's password** from the Workers page. In demo mode the new password is set directly; with Supabase, a password reset link is emailed to the worker (the anon key cannot set another user's password).
 
 ### Notifications
-A notification bell (with an unread badge) appears for both roles. The admin is notified when a worker **clocks in**, **clocks out**, or **adds a note**. Workers are notified when the **admin replies to a note**, **adds time** for them, creates a **payment**, or changes a **payment status**. Clicking a notification opens the related entry.
+A notification bell (with an unread badge) appears for both roles. The admin is notified when a worker **clocks in**, **starts a break**, **comes back from a break**, **clocks out**, or **adds a note**. Workers are notified when the **admin replies to a note**, **adds time** for them, creates a **payment**, or changes a **payment status**. Clicking a notification opens the related entry.
 
 All entries **snapshot the hourly rate** at record time, so historical earnings don't change when a worker's rate changes later. Sessions that cross midnight are handled correctly.
 
@@ -93,7 +93,9 @@ In the Supabase dashboard, open **SQL Editor** → **New query**, paste the enti
 
 This creates the `workers`, `time_entries`, `active_timers`, `settings`, and `payments` tables with foreign keys, indexes, **Row Level Security policies**, and triggers that auto-set `user_id` and `updated_at`.
 
-> **Upgrading an existing database?** If your database predates the worker-login fix, also run `supabase/fix-deleted-worker-login.sql` once. It adds the `profiles_delete` policy and permanently removes the leftover logins of workers that were deleted before the fix (so those workers can no longer sign in).
+> **Upgrading an existing database?** Run `supabase/fix-multiple-active-workers.sql` once — it makes the timer uniqueness rule *one per worker* (older databases allowed only one clocked-in worker per workspace, so the admin dashboard could only ever show a single worker) and allows the new `break_start` / `break_end` notification types.
+>
+> If your database predates the worker-login fix, also run `supabase/fix-deleted-worker-login.sql` once. It adds the `profiles_delete` policy and permanently removes the leftover logins of workers that were deleted before the fix (so those workers can no longer sign in).
 
 ---
 

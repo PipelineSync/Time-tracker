@@ -57,10 +57,18 @@ export interface DataBackend {
   updateEntry(id: string, patch: Partial<TimeEntry>): Promise<BackendResult<TimeEntry>>
   deleteEntry(id: string): Promise<BackendResult<null>>
 
+  /** The signed-in user's own running timer (admin: the most recent one). */
   getActiveTimer(): Promise<BackendResult<ActiveTimer | null>>
+  /**
+   * Every timer currently running: the admin gets all workers that are on the
+   * clock (working or on break), a worker only gets their own.
+   */
+  listActiveTimers(): Promise<BackendResult<ActiveTimer[]>>
   startTimer(input: { worker_id: string; project?: string; notes?: string; start_time?: string; hourly_rate?: number }): Promise<BackendResult<ActiveTimer>>
-  pauseTimer(): Promise<BackendResult<ActiveTimer>>
-  resumeTimer(): Promise<BackendResult<ActiveTimer>>
+  /** Start a break. Without `timerId` the caller's own timer is used. */
+  pauseTimer(timerId?: string): Promise<BackendResult<ActiveTimer>>
+  /** End a break. Without `timerId` the caller's own timer is used. */
+  resumeTimer(timerId?: string): Promise<BackendResult<ActiveTimer>>
   stopTimer(timerId: string, note?: string): Promise<BackendResult<TimeEntry>>
   deleteTimer(timerId: string): Promise<BackendResult<null>>
 

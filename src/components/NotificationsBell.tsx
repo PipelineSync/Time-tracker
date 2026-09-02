@@ -10,7 +10,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { Bell, BellOff, Check, Clock, LogIn, LogOut, MessageSquare, Plus, Wallet, type LucideIcon } from 'lucide-react'
+import { Bell, BellOff, Check, Clock, Coffee, LogIn, LogOut, MessageSquare, Play, Plus, Wallet, type LucideIcon } from 'lucide-react'
 import { formatDateTime } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import type { NotificationType } from '@/lib/types'
@@ -21,6 +21,8 @@ const typeMeta: Record<NotificationType, { icon: LucideIcon; color: string }> = 
   time_out: { icon: LogOut, color: 'text-[#F77A0A]' },
   time_added: { icon: Plus, color: 'text-[#36B7C9]' },
   payment: { icon: Wallet, color: 'text-emerald-600' },
+  break_start: { icon: Coffee, color: 'text-[#36B7C9]' },
+  break_end: { icon: Play, color: 'text-[#F77A0A]' },
 }
 
 export function NotificationsBell({ onNavy }: { onNavy?: boolean }) {
