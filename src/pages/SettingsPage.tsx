@@ -6,14 +6,18 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
+import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { toast } from 'sonner'
-import { Sun, Moon, Monitor, Download, Trash2, Loader2, Upload, X } from 'lucide-react'
+import { Sun, Moon, Monitor, Download, Trash2, Loader2, Upload, X, Banknote, QrCode } from 'lucide-react'
 import { initials } from '@/lib/utils'
+import { imageFileToDataUrl, isImageFile } from '@/lib/image'
+import type { PaymentMethod } from '@/lib/types'
 
 export function SettingsPage() {
-  const { settings, saveSettings, resetAllData, workers, entries, backend, user, isAdmin, updateOwnProfile } = useStore()
+  const { settings, saveSettings, resetAllData, workers, entries, backend, user, isAdmin, updateOwnProfile, updateOwnPaymentMethods } = useStore()
   const { theme, setTheme } = useTheme()
   const [businessName, setBusinessName] = useState(settings?.business_name || '')
   const [currency, setCurrency] = useState(settings?.currency || 'USD')
@@ -38,6 +42,56 @@ export function SettingsPage() {
   useEffect(() => {
     setProfileAvatar(myWorker?.avatar_url ?? null)
   }, [myWorker?.id, myWorker?.avatar_url])
+
+  // Worker self-service payment methods: which ways they can be paid (cash
+  // and/or QR code), plus the QR code image required when QR is enabled.
+  const [methods, setMethods] = useState<PaymentMethod[]>([])
+  const [qrCode, setQrCode] = useState<string | null>(null)
+  const [savingPayment, setSavingPayment] = useState(false)
+  const qrInputRef = useRef<HTMLInputElement | null>(null)
+  // Seed the editor whenever the loaded worker row changes.
+  useEffect(() => {
+    setMethods(myWorker?.payment_methods ?? [])
+    setQrCode(myWorker?.payment_methods?.includes('qr') ? (myWorker.qr_code_url ?? null) : null)
+  }, [myWorker?.id, myWorker?.payment_methods, myWorker?.qr_code_url])
+
+  function toggleMethod(method: PaymentMethod, enabled: boolean) {
+    setMethods((prev) => {
+      const has = prev.includes(method)
+      if (enabled && !has) return [...prev, method]
+      if (!enabled && has) return prev.filter((m) => m !== method)
+      return prev
+    })
+  }
+
+  function onPickQr(file?: File | null) {
+    if (!file) return
+    if (!isImageFile(file)) {
+      toast.error('Please choose an image file.')
+      return
+    }
+    imageFileToDataUrl(file)
+      .then((url) => setQrCode(url))
+      .catch(() => toast.error('That image could not be read. Please try another file.'))
+  }
+
+  async function handleSavePayment() {
+    if (savingPayment) return
+    if (methods.length === 0) {
+      toast.error('Choose at least one payment method.')
+      return
+    }
+    if (methods.includes('qr') && !qrCode) {
+      toast.error('Upload your QR code image to accept QR Code payments.')
+      return
+    }
+    setSavingPayment(true)
+    // Turn QR off (and clear its image server-side) unless it is enabled.
+    const res = await updateOwnPaymentMethods(methods, methods.includes('qr') ? qrCode : null)
+    setSavingPayment(false)
+    if (!res) toast.error('Failed to save payment methods.')
+    else toast.success('Payment methods updated.')
+  }
 
   useEffect(() => {
     if (settings) {
@@ -117,6 +171,7 @@ export function SettingsPage() {
       <Tabs defaultValue={workerTabVisible ? 'profile' : isAdmin ? 'general' : 'appearance'}>
         <TabsList>
           {workerTabVisible && <TabsTrigger value="profile">Profile</TabsTrigger>}
+          {workerTabVisible && <TabsTrigger value="payment">Payment methods</TabsTrigger>}
           {isAdmin && <TabsTrigger value="general">General</TabsTrigger>}
           <TabsTrigger value="appearance">Appearance</TabsTrigger>
           {isAdmin && <TabsTrigger value="data">Data</TabsTrigger>}
@@ -181,6 +236,125 @@ export function SettingsPage() {
                 <Button type="button" disabled={savingProfile} onClick={handleSaveProfile}>
                   {savingProfile && <Loader2 className="mr-1 animate-spin" />} Save picture
                 </Button>
+              </CardContent>
+            </Card>
+          </TabsContent>
+        )}
+
+        {workerTabVisible && (
+          <TabsContent value="payment" className="mt-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Payment methods</CardTitle>
+                <CardDescription>
+                  Choose how you can be paid. Your manager sees the methods you accept on the Payments page — including your QR code when you enable QR Code payments.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-5">
+                {/* Cash */}
+                <div className="flex items-start justify-between gap-4 rounded-lg border p-4">
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+                      <Banknote className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium">Cash</p>
+                      <p className="text-xs text-muted-foreground">Paid in cash when your manager settles your time.</p>
+                    </div>
+                  </div>
+                  <Switch
+                    checked={methods.includes('cash')}
+                    onCheckedChange={(v) => toggleMethod('cash', v)}
+                    aria-label="Accept cash payments"
+                  />
+                </div>
+
+                {/* QR Code */}
+                <div className="rounded-lg border p-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+                        <QrCode className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium">QR Code</p>
+                        <p className="text-xs text-muted-foreground">
+                          Paid by scanning your QR code (GCash, Maya, bank app, etc.). Upload the QR image so your manager can scan it.
+                        </p>
+                      </div>
+                    </div>
+                    <Switch
+                      checked={methods.includes('qr')}
+                      onCheckedChange={(v) => toggleMethod('qr', v)}
+                      aria-label="Accept QR code payments"
+                    />
+                  </div>
+
+                  {methods.includes('qr') && (
+                    <div className="mt-4 space-y-3 border-t pt-4">
+                      <Label>Your QR code image</Label>
+                      <div className="flex items-center gap-4">
+                        <div className="flex h-28 w-28 shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-white">
+                          {qrCode ? (
+                            <img src={qrCode} alt="Your payment QR code" className="h-full w-full object-contain" />
+                          ) : (
+                            <QrCode className="h-8 w-8 text-muted-foreground/50" />
+                          )}
+                        </div>
+                        <div className="space-y-2">
+                          <div className="flex flex-wrap gap-2">
+                            <Button type="button" variant="outline" size="sm" onClick={() => qrInputRef.current?.click()}>
+                              <Upload className="mr-1 h-4 w-4" /> {qrCode ? 'Change image' : 'Upload QR code'}
+                            </Button>
+                            {qrCode && (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => { setQrCode(null); if (qrInputRef.current) qrInputRef.current.value = '' }}
+                              >
+                                <X className="mr-1 h-4 w-4" /> Remove
+                              </Button>
+                            )}
+                          </div>
+                          <input
+                            ref={qrInputRef}
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            onChange={(e) => { onPickQr(e.target.files?.[0]); e.target.value = '' }}
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            {qrCode
+                              ? 'Save to apply. Your manager can view and scan this QR code on the Payments page.'
+                              : 'A screenshot or photo of your payment QR code (JPG or PNG).'}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {methods.length === 0 && (
+                  <p className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
+                    Enable at least one payment method so your manager knows how to pay you.
+                  </p>
+                )}
+
+                <div className="flex items-center gap-2">
+                  <Button type="button" disabled={savingPayment} onClick={handleSavePayment}>
+                    {savingPayment && <Loader2 className="mr-1 animate-spin" />} Save payment methods
+                  </Button>
+                  {methods.length > 0 && (
+                    <div className="flex gap-1.5">
+                      {methods.map((m) => (
+                        <Badge key={m} variant="secondary" className="capitalize">
+                          {m === 'qr' ? 'QR Code' : 'Cash'}
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </CardContent>
             </Card>
           </TabsContent>

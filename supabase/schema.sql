@@ -456,6 +456,22 @@ alter table public.workers add column if not exists position text;
 alter table public.workers add column if not exists avatar_url text;
 alter table public.settings add column if not exists avatar_url text;
 
+-- Worker-chosen payment methods ('cash' and/or 'qr') plus the QR code image
+-- (data URL) a worker uploads when they accept QR Code payments.
+alter table public.workers add column if not exists payment_methods text[] not null default '{}';
+alter table public.workers add column if not exists qr_code_url text;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'workers_payment_methods_check'
+  ) then
+    alter table public.workers
+      add constraint workers_payment_methods_check
+      check (payment_methods <@ array['cash','qr']::text[]);
+  end if;
+end $$;
+
 -- Worker self-service profile picture.
 -- Workers cannot UPDATE their own `workers` row directly (the RLS update policy
 -- is admin-only so they cannot tamper with their hourly rate / status). This
@@ -488,6 +504,71 @@ $$;
 
 revoke all on function public.update_own_avatar(text) from public, anon;
 grant execute on function public.update_own_avatar(text) to authenticated;
+
+-- Worker self-service payment methods. Workers cannot UPDATE their own
+-- `workers` row directly (the RLS update policy is admin-only). This SECURITY
+-- DEFINER RPC lets the signed-in worker change ONLY the payment fields (which
+-- methods they accept and their QR code image) on their own row. QR Code
+-- requires the image; turning QR off clears it.
+create or replace function public.update_own_payment_methods(
+  p_methods text[],
+  p_qr_code text
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  wid      uuid;
+  methods  text[];
+  qr_url   text;
+begin
+  select worker_id into wid
+    from public.profiles
+   where user_id = auth.uid();
+  if wid is null then
+    raise exception 'No worker account is linked to this user.';
+  end if;
+
+  methods := array(
+    select distinct m
+      from unnest(coalesce(p_methods, '{}'::text[])) as m
+     where m in ('cash', 'qr')
+     order by 1
+  );
+
+  if array_length(methods, 1) is null then
+    raise exception 'Choose at least one payment method.';
+  end if;
+
+  if 'qr' = any(methods) then
+    qr_url := nullif(btrim(coalesce(p_qr_code, '')), '');
+    if qr_url is null then
+      select qr_code_url into qr_url
+        from public.workers
+       where id = wid;
+    end if;
+    if qr_url is null then
+      raise exception 'Upload your QR code image to accept QR Code payments.';
+    end if;
+  else
+    qr_url := null;
+  end if;
+
+  update public.workers
+     set payment_methods = methods,
+         qr_code_url = qr_url,
+         updated_at = now()
+   where id = wid;
+  if not found then
+    raise exception 'Worker not found.';
+  end if;
+end;
+$$;
+
+revoke all on function public.update_own_payment_methods(text[], text) from public, anon;
+grant execute on function public.update_own_payment_methods(text[], text) to authenticated;
 
 -- ============================================================
 -- Team chat helpers

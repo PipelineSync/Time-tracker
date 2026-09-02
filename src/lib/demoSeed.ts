@@ -2,6 +2,40 @@ import type { Worker, TimeEntry, Settings } from './types'
 import { uid } from './utils'
 
 /**
+ * A tiny fake QR-code image for demo data. It is not a scannable QR code —
+ * just a deterministic QR-looking square so the admin payments page has a
+ * picture to display in local demo mode (real uploads happen via Settings).
+ */
+export function demoQrDataUrl(seed: string): string {
+  const n = 21 // QR-version-1 style grid
+  let h = 0
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0
+  const cell = (x: number, y: number) => {
+    h = (h * 1103515245 + 12345 + x * 131 + y * 17) >>> 0
+    return (h >> 8) & 1
+  }
+  const inFinder = (x: number, y: number) =>
+    (x < 7 && y < 7) || (x >= n - 7 && y < 7) || (x < 7 && y >= n - 7)
+  let rects = ''
+  for (let y = 0; y < n; y++) {
+    for (let x = 0; x < n; x++) {
+      if (inFinder(x, y)) continue
+      if (cell(x, y)) rects += `<rect x="${x}" y="${y}" width="1" height="1"/>`
+    }
+  }
+  const finder = (fx: number, fy: number) =>
+    `<rect x="${fx}" y="${fy}" width="7" height="7" fill="black"/>` +
+    `<rect x="${fx + 1}" y="${fy + 1}" width="5" height="5" fill="white"/>` +
+    `<rect x="${fx + 2}" y="${fy + 2}" width="3" height="3" fill="black"/>`
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${n} ${n}" shape-rendering="crispEdges">` +
+    `<rect width="${n}" height="${n}" fill="white"/>` +
+    `<g fill="black">${rects}${finder(0, 0)}${finder(n - 7, 0)}${finder(0, n - 7)}</g>` +
+    `</svg>`
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
+}
+
+/**
  * Builds a deterministic-ish set of demo data relative to "today" so the
  * dashboard and reports look populated. All hours are reasonable daytimes.
  */
@@ -20,9 +54,9 @@ export function buildDemoSeed() {
   const nowIso = () => new Date().toISOString()
 
   const workers: Worker[] = [
-    { id: 'w-seed-1', name: 'John Smith', email: 'john@example.com', hourly_rate: 20, status: 'active', position: 'Team member', avatar_url: null, created_at: daysAgo(40).toISOString(), updated_at: daysAgo(40).toISOString() },
-    { id: 'w-seed-2', name: 'Sarah Johnson', email: 'sarah@example.com', hourly_rate: 25, status: 'active', position: 'Team member', avatar_url: null, created_at: daysAgo(30).toISOString(), updated_at: daysAgo(30).toISOString() },
-    { id: 'w-seed-3', name: 'Mike Brown', email: 'mike@example.com', hourly_rate: 18, status: 'inactive', position: 'Team member', avatar_url: null, created_at: daysAgo(20).toISOString(), updated_at: daysAgo(20).toISOString() },
+    { id: 'w-seed-1', name: 'John Smith', email: 'john@example.com', hourly_rate: 20, status: 'active', position: 'Team member', avatar_url: null, payment_methods: ['cash'], qr_code_url: null, created_at: daysAgo(40).toISOString(), updated_at: daysAgo(40).toISOString() },
+    { id: 'w-seed-2', name: 'Sarah Johnson', email: 'sarah@example.com', hourly_rate: 25, status: 'active', position: 'Team member', avatar_url: null, payment_methods: ['cash', 'qr'], qr_code_url: demoQrDataUrl('sarah@example.com'), created_at: daysAgo(30).toISOString(), updated_at: daysAgo(30).toISOString() },
+    { id: 'w-seed-3', name: 'Mike Brown', email: 'mike@example.com', hourly_rate: 18, status: 'inactive', position: 'Team member', avatar_url: null, payment_methods: ['qr'], qr_code_url: demoQrDataUrl('mike@example.com'), created_at: daysAgo(20).toISOString(), updated_at: daysAgo(20).toISOString() },
   ]
 
   function entry(worker_id: string, start: Date, end: Date, project: string | null, break_minutes: number, notes: string | null, hourly_rate: number): TimeEntry {

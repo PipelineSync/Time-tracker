@@ -2,6 +2,13 @@ export type WorkerStatus = 'active' | 'inactive'
 
 export type Role = 'admin' | 'worker'
 
+/**
+ * How a worker can be paid. Workers enable the methods they accept in their
+ * Settings: cash always works, and enabling QR code requires uploading the
+ * image of their QR code so the admin can scan it when settling up.
+ */
+export type PaymentMethod = 'cash' | 'qr'
+
 export interface Worker {
   id: string
   name: string
@@ -10,6 +17,10 @@ export interface Worker {
   status: WorkerStatus
   position: string | null
   avatar_url: string | null
+  /** Payment methods the worker accepts (cash and/or QR code). */
+  payment_methods: PaymentMethod[]
+  /** Uploaded QR code image (data URL), required while 'qr' is enabled. */
+  qr_code_url: string | null
   created_at: string
   updated_at: string
 }

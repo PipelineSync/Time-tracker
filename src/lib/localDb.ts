@@ -10,6 +10,7 @@ import type {
   AppNotification,
   Payment,
   PaymentStatus,
+  PaymentMethod,
   Role,
 } from './types'
 import type { BackendResult, DataBackend, CreateWorkerInput } from './backend'
@@ -75,9 +76,26 @@ function emptyData(): UserData {
   return { workers: [], entries: [], activeTimers: [], settings: null, comments: [], chat: [], notifications: [], payments: [] }
 }
 
+/** Payment methods a worker accepts — normalized for rows saved before this feature. */
+function normalizePaymentMethods(methods: unknown): PaymentMethod[] {
+  if (!Array.isArray(methods)) return []
+  return methods.filter((m): m is PaymentMethod => m === 'cash' || m === 'qr')
+}
+
+/** Normalize a worker row loaded from storage (or the demo seed) to the current shape. */
+function normalizeWorker(w: Worker): Worker {
+  const payment_methods = normalizePaymentMethods(w.payment_methods)
+  return {
+    ...w,
+    payment_methods,
+    // A QR image only makes sense while the worker accepts QR payments.
+    qr_code_url: payment_methods.includes('qr') ? (w.qr_code_url ?? null) : null,
+  }
+}
+
 function readData(userId: string): UserData {
   const d = read<UserData>(dataKey(userId), emptyData())
-  d.workers = d.workers || []
+  d.workers = (d.workers || []).map(normalizeWorker)
   d.entries = d.entries || []
   d.activeTimers = d.activeTimers || []
   // Migrate workspaces saved before multi-worker timers existed.
@@ -415,6 +433,33 @@ export const localBackend: DataBackend = {
     return { data: next, error: null }
   },
 
+  async updateOwnPaymentMethods(patch) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (c.user.role !== 'worker') return { data: null, error: 'Only workers can update their payment methods here.' }
+    if (!c.user.workerId) return { data: null, error: 'No worker account is linked to this user.' }
+    const idx = c.data.workers.findIndex((w) => w.id === c.user.workerId)
+    if (idx === -1) return { data: null, error: 'Worker not found.' }
+    // Only ever touch payment fields — never the worker's rate, status,
+    // name, avatar, etc., which are managed by the admin.
+    const methods = normalizePaymentMethods(patch.payment_methods)
+    if (methods.length === 0) return { data: null, error: 'Choose at least one payment method.' }
+    const qrEnabled = methods.includes('qr')
+    const qrCodeUrl = qrEnabled ? (patch.qr_code_url === undefined ? c.data.workers[idx].qr_code_url : patch.qr_code_url) : null
+    if (qrEnabled && !qrCodeUrl) {
+      return { data: null, error: 'Upload your QR code image to accept QR Code payments.' }
+    }
+    const next: Worker = {
+      ...c.data.workers[idx],
+      payment_methods: methods,
+      qr_code_url: qrCodeUrl,
+      updated_at: new Date().toISOString(),
+    }
+    c.data.workers[idx] = next
+    save(c.data)
+    return { data: normalizeWorker(next), error: null }
+  },
+
   async listWorkers() {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
@@ -438,6 +483,8 @@ export const localBackend: DataBackend = {
       status: input.status || 'active',
       position: input.position || null,
       avatar_url: null,
+      payment_methods: [],
+      qr_code_url: null,
       created_at: now,
       updated_at: now,
     }

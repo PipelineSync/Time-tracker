@@ -18,9 +18,10 @@ import {
 import { Textarea } from '@/components/ui/textarea'
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { Wallet, Trash2, Pencil } from 'lucide-react'
-import type { Payment, PaymentStatus } from '@/lib/types'
+import { Wallet, Trash2, Pencil, Banknote, QrCode, CreditCard } from 'lucide-react'
+import type { Payment, PaymentStatus, Worker } from '@/lib/types'
 import { money, formatMinutes, formatDate } from '@/lib/utils'
+import { AvatarBubble } from '@/components/AvatarBubble'
 
 const statusBadge: Record<PaymentStatus, 'muted' | 'success' | 'outline'> = {
   unpaid: 'muted',
@@ -36,8 +37,21 @@ export function PaymentsPage() {
   const [editing, setEditing] = useState<Payment | null>(null)
   const [editNote, setEditNote] = useState('')
   const [editSaving, setEditSaving] = useState(false)
+  // QR code the admin is viewing full-size from the payment-methods section.
+  const [qrViewer, setQrViewer] = useState<{ worker: Worker; url: string } | null>(null)
 
   const workerName = (id: string) => workers.find((w) => w.id === id)?.name || 'Worker'
+
+  // The payment methods each worker has enabled (sorted A→Z; inactive last).
+  const methodWorkers = useMemo(
+    () =>
+      [...workers]
+        .filter((w) => (w.payment_methods ?? []).length > 0 || w.status === 'active')
+        .sort((a, b) =>
+          a.status === b.status ? a.name.localeCompare(b.name) : a.status === 'active' ? -1 : 1
+        ),
+    [workers]
+  )
 
   const filtered = useMemo(() => {
     const list = statusFilter === 'all' ? payments : payments.filter((p) => p.status === statusFilter)
@@ -69,6 +83,127 @@ export function PaymentsPage() {
         title="Payments"
         description={isAdmin ? 'Settlements from worker time, with payment status.' : 'Your payment history.'}
       />
+
+      {/* Payment methods enabled by the workers (how they can be paid) */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <CreditCard className="h-4 w-4" />
+            {isAdmin ? 'Worker payment methods' : 'Your payment methods'}
+          </CardTitle>
+          <p className="text-sm text-muted-foreground">
+            {isAdmin
+              ? 'How each worker has asked to be paid. Click a QR code to view it full-size and scan it.'
+              : 'Manage how you get paid from Settings → Payment methods.'}
+          </p>
+        </CardHeader>
+        <CardContent>
+          {isAdmin ? (
+            methodWorkers.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No workers yet.</p>
+            ) : (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {methodWorkers.map((w) => {
+                  const methods = w.payment_methods ?? []
+                  const acceptsCash = methods.includes('cash')
+                  const acceptsQr = methods.includes('qr')
+                  return (
+                    <div
+                      key={w.id}
+                      className={`flex items-start gap-3 rounded-lg border p-3 ${w.status === 'inactive' ? 'opacity-60' : ''}`}
+                    >
+                      {acceptsQr && w.qr_code_url ? (
+                        <button
+                          type="button"
+                          onClick={() => setQrViewer({ worker: w, url: w.qr_code_url! })}
+                          className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-white transition-transform hover:scale-[1.03]"
+                          aria-label={`View ${w.name}'s QR code`}
+                          title="View QR code"
+                        >
+                          <img src={w.qr_code_url} alt={`${w.name}'s payment QR code`} className="h-full w-full object-contain" />
+                        </button>
+                      ) : (
+                        <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-lg border bg-muted/50">
+                          <AvatarBubble name={w.name} avatarUrl={w.avatar_url} size="lg" />
+                        </div>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <p className="truncate text-sm font-medium">{w.name}</p>
+                          {w.status === 'inactive' && (
+                            <Badge variant="muted" className="shrink-0 text-[10px]">Inactive</Badge>
+                          )}
+                        </div>
+                        {methods.length === 0 ? (
+                          <p className="mt-1 text-xs text-muted-foreground">No payment method set up yet.</p>
+                        ) : (
+                          <div className="mt-1.5 flex flex-wrap gap-1.5">
+                            {acceptsCash && (
+                              <Badge variant="success" className="gap-1">
+                                <Banknote className="h-3 w-3" /> Cash
+                              </Badge>
+                            )}
+                            {acceptsQr && (
+                              <Badge variant="secondary" className="gap-1">
+                                <QrCode className="h-3 w-3" /> QR Code
+                              </Badge>
+                            )}
+                          </div>
+                        )}
+                        {acceptsQr && !w.qr_code_url && (
+                          <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">QR enabled — image missing</p>
+                        )}
+                        {acceptsQr && w.qr_code_url && (
+                          <button
+                            type="button"
+                            onClick={() => setQrViewer({ worker: w, url: w.qr_code_url! })}
+                            className="mt-1 text-xs text-primary hover:underline"
+                          >
+                            View QR code
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )
+          ) : (
+            (() => {
+              const me = workers[0]
+              if (!me) return <p className="text-sm text-muted-foreground">Your profile is not available.</p>
+              const methods = me.payment_methods ?? []
+              if (methods.length === 0) {
+                return <p className="text-sm text-muted-foreground">You have not set up a payment method yet. Open Settings → Payment methods.</p>
+              }
+              return (
+                <div className="flex flex-wrap items-center gap-3">
+                  {methods.includes('cash') && (
+                    <Badge variant="success" className="gap-1"><Banknote className="h-3.5 w-3.5" /> Cash</Badge>
+                  )}
+                  {methods.includes('qr') && me.qr_code_url && (
+                    <button
+                      type="button"
+                      onClick={() => setQrViewer({ worker: me, url: me.qr_code_url! })}
+                      className="flex items-center gap-2 rounded-lg border p-1.5 pr-3 hover:bg-muted/50"
+                    >
+                      <span className="flex h-14 w-14 items-center justify-center overflow-hidden rounded-md border bg-white">
+                        <img src={me.qr_code_url} alt="Your payment QR code" className="h-full w-full object-contain" />
+                      </span>
+                      <span className="flex items-center gap-1 text-xs font-medium text-primary">
+                        <QrCode className="h-3.5 w-3.5" /> View your QR code
+                      </span>
+                    </button>
+                  )}
+                  {methods.includes('qr') && !me.qr_code_url && (
+                    <p className="text-xs text-amber-600 dark:text-amber-400">QR Code is enabled but your image is missing — re-upload it in Settings.</p>
+                  )}
+                </div>
+              )
+            })()
+          )}
+        </CardContent>
+      </Card>
 
       {/* Summary by status */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -225,6 +360,40 @@ export function PaymentsPage() {
               {editSaving ? 'Saving…' : 'Save note'}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Full-size QR code viewer — scan to pay that worker */}
+      <Dialog open={!!qrViewer} onOpenChange={(v) => { if (!v) setQrViewer(null) }}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <QrCode className="h-5 w-5" />
+              {qrViewer?.worker.name}'s QR code
+            </DialogTitle>
+            <DialogDescription>
+              Scan this code with your payment app to pay {qrViewer?.worker.name}.
+            </DialogDescription>
+          </DialogHeader>
+          {qrViewer && (
+            <div className="flex flex-col items-center gap-3">
+              <div className="flex w-full items-center justify-center rounded-xl border bg-white p-4">
+                <img
+                  src={qrViewer.url}
+                  alt={`${qrViewer.worker.name}'s payment QR code`}
+                  className="max-h-[320px] w-auto max-w-full object-contain"
+                />
+              </div>
+              <div className="flex flex-wrap items-center justify-center gap-1.5">
+                {(qrViewer.worker.payment_methods ?? []).includes('cash') && (
+                  <Badge variant="success" className="gap-1"><Banknote className="h-3 w-3" /> Cash</Badge>
+                )}
+                {(qrViewer.worker.payment_methods ?? []).includes('qr') && (
+                  <Badge variant="secondary" className="gap-1"><QrCode className="h-3 w-3" /> QR Code</Badge>
+                )}
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>
