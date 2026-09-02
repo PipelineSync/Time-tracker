@@ -66,7 +66,7 @@ interface StoreValue {
   /** Worker self-service: choose accepted payment methods (+ QR code image). */
   updateOwnPaymentMethods: (paymentMethods: PaymentMethod[], qrCodeUrl?: string | null) => Promise<Worker | null>
 
-  refreshData: () => Promise<void>
+  refreshData: (opts?: { background?: boolean; light?: boolean }) => Promise<void>
 
   createWorker: (input: CreateWorkerInput) => Promise<Worker | null>
   updateWorker: (id: string, patch: Partial<Worker> & { newPassword?: string }) => Promise<Worker | null>
@@ -120,25 +120,45 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [payments, setPayments] = useState<Payment[]>([])
   const [dataLoading, setDataLoading] = useState(false)
   const dataVersion = useRef(0)
+  // Suppress stacking background refreshes (see refreshData).
+  const refreshInFlight = useRef(false)
   const userRef = useRef(user)
   useEffect(() => { userRef.current = user }, [user])
 
   const isAdmin = user?.role === 'admin'
 
-  const refreshData = useCallback(async () => {
+  /** A BackendResult-shaped "don't refetch this" placeholder for light refreshes. */
+  function skipped<T>(): { data: T | null; error: null } {
+    return { data: null, error: null }
+  }
+
+  // What a refresh refetches. Timers and notifications need to stay near
+  // real-time (who is on the clock, the unread badge); the heavy lists
+  // (workers, entries, payments, settings) change rarely but are the bulk of
+  // the database traffic, so background polls fetch them far less often.
+  // `background` marks opportunistic refreshes (poll tick / tab focus) which
+  // must never stack on a refresh that is already running — focus and
+  // visibilitychange fire as a burst, and letting each of them fire the whole
+  // query set multiplied database load for every open tab. Refreshes triggered
+  // by the user's own actions always run.
+  const refreshData = useCallback(async (opts?: { background?: boolean; light?: boolean }) => {
     const uid = userRef.current
     if (!uid) return
+    if (opts?.background && refreshInFlight.current) return
+    refreshInFlight.current = true
+    const light = !!opts?.light
     const token = ++dataVersion.current
     setDataLoading(true)
     try {
-      const [w, e, s, t, at, n, p] = await Promise.all([
-        backend.listWorkers(),
-        backend.listEntries(),
-        backend.getSettings(),
-        backend.getActiveTimer(),
+      const [w, e, s, at, n, p] = await Promise.all([
+        light ? skipped<Worker[]>() : backend.listWorkers(),
+        light ? skipped<TimeEntry[]>() : backend.listEntries(),
+        light ? skipped<Settings>() : backend.getSettings(),
+        // One query covers both "everyone on the clock" and the signed-in
+        // worker's own timer — getActiveTimer() re-runs this exact query.
         backend.listActiveTimers(),
         backend.listNotifications(),
-        backend.listPayments(),
+        light ? skipped<Payment[]>() : backend.listPayments(),
       ])
       if (token !== dataVersion.current) return
       if (w.data) setWorkers(w.data)
@@ -146,11 +166,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (s.data) setSettings(s.data)
       // Clear on a clean empty result (someone clocked out elsewhere); keep the
       // previous value when the backend errored so a blip doesn't hide a timer.
-      if (!t.error) setActiveTimer(t.data ?? null)
-      if (!at.error) setActiveTimers(at.data ?? [])
+      if (!at.error) {
+        const timers = at.data ?? []
+        setActiveTimers(timers)
+        // The backend scopes the list to the signed-in worker (self-healing
+        // stale rows), so their own timer is the first row. The admin has no
+        // personal timer.
+        setActiveTimer(userRef.current?.role === 'worker' ? timers[0] ?? null : null)
+      }
       if (n.data) setNotifications(n.data)
       if (p.data) setPayments(p.data)
     } finally {
+      refreshInFlight.current = false
       if (token === dataVersion.current) setDataLoading(false)
     }
   }, [backend])
@@ -194,48 +221,60 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // transient network error must NOT sign the user out — it just retries, and
   // the backend restores a valid session (via its refresh token) whenever the
   // stored session briefly disappears.
+  //
+  // Tick budget: every 15s tick fetches only timers + notifications (cheap,
+  // near-real-time). The heavy lists (workers, entries, payments, settings)
+  // refetch on every 4th tick (~once a minute) and on any full refresh
+  // triggered by the user's own actions or on returning to the tab. This keeps
+  // per-tab database load roughly constant as the workspace grows instead of
+  // scaling with the entry history.
   useEffect(() => {
     if (!user) return
     let stopped = false
-    const tick = async () => {
+    let ticks = 0
+    const tick = (full: boolean) => {
       if (document.visibilityState === 'hidden' || stopped) return
-      try {
-        const session = await backend.getSession()
-        if (stopped) return
-        if (!userRef.current) return
-        if (session.data) {
-          if (session.data.id !== userRef.current.id) setUser(session.data)
-          void refreshData()
-          return
+      void (async () => {
+        try {
+          const session = await backend.getSession()
+          if (stopped) return
+          if (!userRef.current) return
+          if (session.data) {
+            if (session.data.id !== userRef.current.id) setUser(session.data)
+            void refreshData({ background: true, light: !full && ++ticks % 4 !== 0 })
+            return
+          }
+          // No user data. Distinguish why:
+          if (session.error === ACCOUNT_DEACTIVATED_MESSAGE) {
+            // The admin deleted this account — sign out with a specific notice.
+            toast.error('You were signed out because your account is no longer active. If this was unexpected, please contact the administrator.')
+            setUser(null)
+            return
+          }
+          if (!session.error) {
+            // A real sign-out: the user logged out, or the backend confirmed the
+            // session can no longer be refreshed (revoked/expired for good).
+            setUser(null)
+            return
+          }
+          // Transient error — keep the session and let the next tick retry.
+          void refreshData({ background: true, light: true })
+        } catch (err) {
+          // A thrown error must never be treated as a sign-out.
+          console.warn('[work-tracker] session check failed; will retry:', err)
         }
-        // No user data. Distinguish why:
-        if (session.error === ACCOUNT_DEACTIVATED_MESSAGE) {
-          // The admin deleted this account — sign out with a specific notice.
-          toast.error('You were signed out because your account is no longer active. If this was unexpected, please contact the administrator.')
-          setUser(null)
-          return
-        }
-        if (!session.error) {
-          // A real sign-out: the user logged out, or the backend confirmed the
-          // session can no longer be refreshed (revoked/expired for good).
-          setUser(null)
-          return
-        }
-        // Transient error — keep the session and let the next tick retry.
-        void refreshData()
-      } catch (err) {
-        // A thrown error must never be treated as a sign-out.
-        console.warn('[work-tracker] session check failed; will retry:', err)
-      }
+      })()
     }
-    const interval = window.setInterval(tick, 15000)
-    window.addEventListener('focus', tick)
-    document.addEventListener('visibilitychange', tick)
+    const interval = window.setInterval(() => tick(false), 15000)
+    const onFocus = () => tick(true)
+    const onVisibility = () => tick(true)
+    window.addEventListener('focus', onFocus)
+    document.addEventListener('visibilitychange', onVisibility)
     return () => {
       stopped = true
       window.clearInterval(interval)
-      window.removeEventListener('focus', tick)
-      document.removeEventListener('visibilitychange', tick)
+      window.removeEventListener('focus', onFocus)
+      document.removeEventListener('visibilitychange', onVisibility)
     }
   }, [user, refreshData, backend])
 
@@ -346,9 +385,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [backend, refreshData])
 
   async function refreshTimer() {
-    const [t, at] = await Promise.all([backend.getActiveTimer(), backend.listActiveTimers()])
-    if (!t.error) setActiveTimer(t.data ?? null)
-    if (!at.error) setActiveTimers(at.data ?? [])
+    // One query for both lists — getActiveTimer() re-runs listActiveTimers().
+    const at = await backend.listActiveTimers()
+    if (!at.error) {
+      const timers = at.data ?? []
+      setActiveTimers(timers)
+      setActiveTimer(userRef.current?.role === 'worker' ? timers[0] ?? null : null)
+    }
   }
 
   /** Keep the running-timer list in sync after a local timer change. */

@@ -18,4 +18,17 @@ export default defineConfig({
     // Allow the sandboxed preview host and any custom domain to connect.
     allowedHosts: true,
   },
+  build: {
+    rollupOptions: {
+      output: {
+        // Stable vendor chunks: framework and Supabase change rarely, so
+        // browsers keep reusing them from cache across deploys instead of
+        // re-downloading the whole app bundle.
+        manualChunks: {
+          react: ['react', 'react-dom', 'react-router-dom'],
+          supabase: ['@supabase/supabase-js'],
+        },
+      },
+    },
+  },
 })

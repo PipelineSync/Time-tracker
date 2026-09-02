@@ -1,16 +1,22 @@
+import { lazy, Suspense } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useStore } from '@/lib/store'
 import { AppLayout } from '@/components/AppLayout'
 import { AuthPage } from '@/pages/AuthPage'
-import { DashboardPage } from '@/pages/DashboardPage'
-import { TrackerPage } from '@/pages/TrackerPage'
-import { EntriesPage } from '@/pages/EntriesPage'
-import { WorkersPage } from '@/pages/WorkersPage'
-import { ReportsPage } from '@/pages/ReportsPage'
-import { SettingsPage } from '@/pages/SettingsPage'
-import { ChatPage } from '@/pages/ChatPage'
-import { PaymentsPage } from '@/pages/PaymentsPage'
 import { FullScreenLoader } from '@/components/FullScreenLoader'
+
+// Route-level code splitting: each page downloads as its own chunk, so a
+// worker opening the clock-in page on a phone doesn't also download the
+// reports charts, the admin dashboard, chat, etc. (Pages use named exports,
+// so map them onto the default export React.lazy expects.)
+const DashboardPage = lazy(() => import('@/pages/DashboardPage').then((m) => ({ default: m.DashboardPage })))
+const TrackerPage = lazy(() => import('@/pages/TrackerPage').then((m) => ({ default: m.TrackerPage })))
+const EntriesPage = lazy(() => import('@/pages/EntriesPage').then((m) => ({ default: m.EntriesPage })))
+const WorkersPage = lazy(() => import('@/pages/WorkersPage').then((m) => ({ default: m.WorkersPage })))
+const ReportsPage = lazy(() => import('@/pages/ReportsPage').then((m) => ({ default: m.ReportsPage })))
+const SettingsPage = lazy(() => import('@/pages/SettingsPage').then((m) => ({ default: m.SettingsPage })))
+const ChatPage = lazy(() => import('@/pages/ChatPage').then((m) => ({ default: m.ChatPage })))
+const PaymentsPage = lazy(() => import('@/pages/PaymentsPage').then((m) => ({ default: m.PaymentsPage })))
 
 export function App() {
   const { user, authLoading, isAdmin } = useStore()
@@ -25,7 +31,8 @@ export function App() {
 
   return (
     <BrowserRouter>
-      <Routes>
+      <Suspense fallback={<FullScreenLoader />}>
+        <Routes>
         <Route element={<AppLayout />}>
           {/* Workers clock in/out */}
           {!isAdmin && <Route path="/tracker" element={<TrackerPage />} />}
@@ -56,6 +63,7 @@ export function App() {
           <Route path="*" element={<Navigate to={isAdmin ? '/' : '/tracker'} replace />} />
         </Route>
       </Routes>
+      </Suspense>
     </BrowserRouter>
   )
 }
