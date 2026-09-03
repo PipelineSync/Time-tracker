@@ -180,4 +180,9 @@ export interface Payment {
   created_at: string
   paid_at: string | null
   note: string | null
+  /**
+   * How the admin paid this settlement (chosen from the worker's accepted
+   * methods when marking it paid). Null until the payment is marked paid.
+   */
+  payment_method?: PaymentMethod | null
 }

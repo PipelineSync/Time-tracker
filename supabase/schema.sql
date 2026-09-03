@@ -129,8 +129,14 @@ create table if not exists public.payments (
   period_end   timestamptz not null default now(),
   paid_at      timestamptz,
   note         text,
+  -- How the admin paid (cash / qr), chosen from the worker's accepted methods
+  -- when the payment is marked paid. Null until then.
+  payment_method text check (payment_method is null or payment_method in ('cash','qr')),
   created_at   timestamptz not null default now()
 );
+-- Databases created before payment_method existed.
+alter table public.payments add column if not exists payment_method text
+  check (payment_method is null or payment_method in ('cash','qr'));
 
 create index if not exists payments_user_idx on public.payments (user_id);
 create index if not exists payments_worker_idx on public.payments (worker_id);

@@ -76,6 +76,15 @@ function emptyData(): UserData {
   return { workers: [], entries: [], activeTimers: [], settings: null, comments: [], chat: [], notifications: [], payments: [] }
 }
 
+/** The method the admin paid a settlement with, or null when unknown/invalid. */
+function normalizePaidMethod(method: unknown): PaymentMethod | null {
+  return method === 'cash' || method === 'qr' ? method : null
+}
+
+function paymentMethodLabel(method: PaymentMethod): string {
+  return method === 'cash' ? 'Cash' : 'QR Code'
+}
+
 /** Payment methods a worker accepts — normalized for rows saved before this feature. */
 function normalizePaymentMethods(methods: unknown): PaymentMethod[] {
   if (!Array.isArray(methods)) return []
@@ -1007,21 +1016,29 @@ export const localBackend: DataBackend = {
     return { data: payment, error: null }
   },
 
-  async updatePaymentStatus(id, status) {
+  async updatePaymentStatus(id, status, paymentMethod) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
     if (c.user.role !== 'admin') return { data: null, error: 'Only the admin can update payment status.' }
     const p = c.data.payments.find((x) => x.id === id)
     if (!p) return { data: null, error: 'Payment not found.' }
+    const method = normalizePaidMethod(paymentMethod)
+    if (status === 'paid' && paymentMethod && !method) {
+      return { data: null, error: 'Choose Cash or QR Code as the payment method.' }
+    }
     p.status = status
     p.paid_at = status === 'paid' ? new Date().toISOString() : null
+    // The method only describes a completed payment.
+    p.payment_method = status === 'paid' ? method : null
     // Notify the worker on status change.
     const wid = workerUserId(p.worker_id)
     if (wid) {
       pushNotification(c.data, wid, {
         entry_id: null,
         type: 'payment',
-        message: `Your payment of ${formatMoney(p.amount, c.data.settings?.currency || 'USD')} is now ${status}`,
+        message:
+          `Your payment of ${formatMoney(p.amount, c.data.settings?.currency || 'USD')} is now ${status}` +
+          (status === 'paid' && method ? ` (${paymentMethodLabel(method)})` : ''),
       })
     }
     save(c.data)

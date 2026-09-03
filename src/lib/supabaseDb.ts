@@ -1348,15 +1348,37 @@ export const supabaseBackend: DataBackend = {
     return ok(data as Payment)
   },
 
-  async updatePaymentStatus(id, status: PaymentStatus) {
+  async updatePaymentStatus(id, status: PaymentStatus, paymentMethod?: PaymentMethod | null) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
     if (me.data!.role !== 'admin') return fail('Only the admin can update payment status.')
-    const { data, error } = await client().from('payments').update({ status, paid_at: status === 'paid' ? new Date().toISOString() : null }).eq('id', id).select().single()
-    if (error) return fail(error.message)
-    const p = data as Payment
+    const method: PaymentMethod | null =
+      paymentMethod === 'cash' || paymentMethod === 'qr' ? paymentMethod : null
+    if (status === 'paid' && paymentMethod && !method) {
+      return fail('Choose Cash or QR Code as the payment method.')
+    }
+    const sb = client()
+    const base = { status, paid_at: status === 'paid' ? new Date().toISOString() : null }
+    // The method only describes a completed payment; other statuses clear it.
+    // `payment_method` needs supabase/payment-paid-method.sql — a database
+    // without the column still gets the status change, just without the method.
+    let res = await sb
+      .from('payments')
+      .update({ ...base, payment_method: status === 'paid' ? method : null })
+      .eq('id', id)
+      .select()
+      .single()
+    if (res.error && isMissingColumn(res.error as { code?: string; message?: string }, 'payment_method')) {
+      console.warn('[payments] payments.payment_method is missing — run supabase/payment-paid-method.sql to record how workers were paid.')
+      res = await sb.from('payments').update(base).eq('id', id).select().single()
+    }
+    if (res.error) return fail(res.error.message)
+    const p = res.data as Payment
     const wid = await getWorkerUserId(p.worker_id)
-    if (wid) await pushNotification(wid, { entry_id: null, type: 'payment', message: `Your payment is now ${status}` })
+    if (wid) {
+      const via = status === 'paid' && method ? ` (${method === 'cash' ? 'Cash' : 'QR Code'})` : ''
+      await pushNotification(wid, { entry_id: null, type: 'payment', message: `Your payment is now ${status}${via}` })
+    }
     return ok(p)
   },
 

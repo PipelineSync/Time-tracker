@@ -100,7 +100,7 @@ interface StoreValue {
   listChatMembers: () => Promise<{ members: ChatMember[]; error: string | null }>
 
   settleWorker: (workerId: string, note?: string) => Promise<Payment | null>
-  updatePaymentStatus: (id: string, status: PaymentStatus) => Promise<Payment | null>
+  updatePaymentStatus: (id: string, status: PaymentStatus, paymentMethod?: PaymentMethod | null) => Promise<Payment | null>
   updatePaymentNote: (id: string, note: string | null) => Promise<Payment | null>
   deletePayment: (id: string) => Promise<boolean>
 }
@@ -507,8 +507,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return res.data
   }, [backend, refreshData])
 
-  const updatePaymentStatus = useCallback(async (id: string, status: PaymentStatus) => {
-    const res = await backend.updatePaymentStatus(id, status)
+  const updatePaymentStatus = useCallback(async (id: string, status: PaymentStatus, paymentMethod?: PaymentMethod | null) => {
+    const res = await backend.updatePaymentStatus(id, status, paymentMethod)
     if (res.error || !res.data) return null
     await refreshData()
     return res.data

@@ -113,7 +113,11 @@ export interface DataBackend {
   // Payments / settlements
   listPayments(): Promise<BackendResult<Payment[]>>
   settleWorker(workerId: string, note?: string): Promise<BackendResult<Payment>>
-  updatePaymentStatus(id: string, status: PaymentStatus): Promise<BackendResult<Payment>>
+  /**
+   * Change a payment's status. When marking it `paid`, `paymentMethod` records
+   * how the admin paid (cash or QR code); other statuses clear it.
+   */
+  updatePaymentStatus(id: string, status: PaymentStatus, paymentMethod?: PaymentMethod | null): Promise<BackendResult<Payment>>
   updatePaymentNote(id: string, note: string | null): Promise<BackendResult<Payment>>
   deletePayment(id: string): Promise<BackendResult<null>>
 

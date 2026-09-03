@@ -124,6 +124,19 @@ async function main() {
     'the deleted entry is the one that disappeared'
   )
 
+  // 6b) Marking paid records the method the admin chose from the worker's
+  //     accepted methods; leaving "paid" clears it again.
+  const paidCash = await localBackend.updatePaymentStatus(second.data!.id, 'paid', 'cash')
+  assert(!paidCash.error && paidCash.data?.status === 'paid', 'the admin can mark a payment paid')
+  assert(paidCash.data?.payment_method === 'cash', 'the chosen payment method (cash) is stored on the payment')
+  assert(Boolean(paidCash.data?.paid_at), 'paid_at is stamped')
+  const badMethod = await localBackend.updatePaymentStatus(second.data!.id, 'paid', 'wire' as never)
+  assert(Boolean(badMethod.error), 'an unknown payment method is rejected')
+  const backToUnpaid = await localBackend.updatePaymentStatus(second.data!.id, 'unpaid')
+  assert(backToUnpaid.data?.payment_method === null, 'moving away from paid clears the payment method')
+  const paidNoMethod = await localBackend.updatePaymentStatus(second.data!.id, 'paid')
+  assert(paidNoMethod.data?.status === 'paid' && paidNoMethod.data?.payment_method === null, 'a payment can still be marked paid without a method')
+
   // 7) Deleting a payment does not resurrect or remove any entry.
   const delPayment = await localBackend.deletePayment(payment.data!.id)
   assert(!delPayment.error, 'the admin can delete a payment')
@@ -136,9 +149,14 @@ async function main() {
   const seenByWorker = await entriesFor(john.id)
   assert(seenByWorker.length === before.length, `john still sees his settled entries (${seenByWorker.length})`)
   const notifs = await localBackend.listNotifications()
+  const paymentNotifs = (notifs.data || []).filter((n) => n.type === 'payment')
   assert(
-    (notifs.data || []).filter((n) => n.type === 'payment').length === 2,
+    paymentNotifs.filter((n) => /has been created/.test(n.message)).length === 2,
     'john was notified about both payments'
+  )
+  assert(
+    paymentNotifs.some((n) => /now paid \(Cash\)/.test(n.message)),
+    'the paid notification tells john how he was paid'
   )
 
   // 9) A worker cannot settle anybody.
