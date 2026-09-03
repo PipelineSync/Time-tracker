@@ -1,0 +1,188 @@
+name: Mobile apps (iOS + Android)
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  group: mobile-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Baked into the WebView bundle at build time. Without them the packaged
+  # app runs in demo mode (on-device storage); with them it talks to your
+  # real Supabase project.
+  VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+  VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
+
+jobs:
+  # ---------------------------------------------------------------- Android --
+  android:
+    name: Android APK + AAB
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build web bundle
+        run: npm run build
+
+      - name: Sync Capacitor (copies dist/ + plugins into android/)
+        run: npx cap sync android
+
+      # Present only when the ANDROID_KEYSTORE_BASE64 secret is configured;
+      # otherwise the release build stays unsigned (debug APK still builds).
+      - name: Restore release keystore
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > android/release.keystore
+          cat > android/key.properties <<EOF
+          storeFile=../release.keystore
+          storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
+          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
+          EOF
+
+      - name: Derive version code/name from tag
+        id: version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          [ "$TAG" = "${GITHUB_REF_NAME}" ] && TAG="1.0.0"
+          CODE=$(echo "$TAG" | awk -F. '{printf "%d%02d%02d", $1, $2, $3}')
+          echo "name=$TAG" >> "$GITHUB_OUTPUT"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+
+      - name: Build APK + AAB
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug
+          ./gradlew assembleRelease bundleRelease \
+            -PversionCode=${{ steps.version.outputs.code }} \
+            -PversionName=${{ steps.version.outputs.name }}
+
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-${{ github.ref_name }}
+          path: |
+            android/app/build/outputs/apk/debug/app-debug.apk
+            android/app/build/outputs/apk/release/app-release-unsigned.apk
+            android/app/build/outputs/apk/release/app-release.apk
+            android/app/build/outputs/bundle/release/app-release.aab
+          if-no-files-found: warn
+          retention-days: 30
+
+  # -------------------------------------------------------------------- iOS --
+  ios:
+    name: iOS archive (+ .ipa when signing secrets exist)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build web bundle
+        run: npm run build
+
+      - name: Sync Capacitor (copies dist/ + plugins into ios/)
+        run: npx cap sync ios
+
+      - name: Import distribution certificate
+        if: ${{ secrets.IOS_CERTIFICATE_P12_BASE64 != '' }}
+        env:
+          P12_BASE64: ${{ secrets.IOS_CERTIFICATE_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+        run: |
+          echo "$P12_BASE64" | base64 -d > /tmp/distribution.p12
+          security create-keychain -p "" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "" build.keychain
+          security set-keychain-settings -t 3600 build.keychain
+          security import /tmp/distribution.p12 -k build.keychain -P "$P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -t private -k "" build.keychain
+
+      - name: Install provisioning profile
+        if: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 != '' }}
+        env:
+          PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          echo "$PROFILE_BASE64" | base64 -d > ~/Library/MobileDevice/Provisioning\ Profiles/pipelinesync.mobileprovision
+
+      - name: Archive (signed when certs are present, unsigned otherwise)
+        working-directory: ios/App
+        run: |
+          if [ -n "${{ secrets.IOS_CERTIFICATE_P12_BASE64 }}" ]; then
+            xcodebuild -project App.xcodeproj -scheme App \
+              -configuration Release -sdk iphoneos \
+              -destination 'generic/platform=iOS' \
+              -archivePath build/App.xcarchive \
+              CODE_SIGN_STYLE=Manual \
+              DEVELOPMENT_TEAM="${{ secrets.IOS_DEVELOPMENT_TEAM }}" \
+              PROVISIONING_PROFILE_SPECIFIER="${{ secrets.IOS_PROVISIONING_PROFILE_NAME }}" \
+              archive
+          else
+            echo "::notice::No iOS signing secrets — building an unsigned archive for validation."
+            xcodebuild -project App.xcodeproj -scheme App \
+              -configuration Release -sdk iphoneos \
+              -destination 'generic/platform=iOS' \
+              -archivePath build/App.xcarchive \
+              CODE_SIGNING_ALLOWED=NO \
+              archive
+          fi
+
+      - name: Export .ipa
+        if: ${{ secrets.IOS_CERTIFICATE_P12_BASE64 != '' }}
+        working-directory: ios/App
+        run: |
+          cat > ExportOptions.plist <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>teamID</key><string>${{ secrets.IOS_DEVELOPMENT_TEAM }}</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>com.pipelinesync.worktracker</key>
+              <string>${{ secrets.IOS_PROVISIONING_PROFILE_NAME }}</string>
+            </dict>
+            <key>uploadSymbols</key><true/>
+          </dict>
+          </plist>
+          EOF
+          xcodebuild -exportArchive -archivePath build/App.xcarchive \
+            -exportPath build/ipa -exportOptionsPlist ExportOptions.plist
+
+      - name: Upload iOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-${{ github.ref_name }}
+          path: |
+            ios/App/build/App.xcarchive
+            ios/App/build/ipa
+          if-no-files-found: warn
+          retention-days: 30
