@@ -14,3 +14,26 @@ dist/
 
 # OS / editor
 .DS_Store
+
+# --- Native app shells (Capacitor iOS / Android) -------------------------
+# The projects themselves are committed (CI signs & ships them); only build
+# output and machine-local state are ignored.
+android/.gradle/
+android/.idea/
+android/build/
+android/app/build/
+android/capacitor-cordova-android-plugins/build/
+android/local.properties
+android/**/*.keystore
+ios/App/build/
+ios/App/Pods/
+ios/App/App.xcworkspace/xcuserdata/
+ios/App/App.xcodeproj/xcuserdata/
+ios/DerivedData/
+ios/**/*.xcarchive
+ios/**/*.ipa
+ios/App/App/Generated.xcconfig.bak
+
+# --- Desktop shell (Tauri) ----------------------------------------------
+src-tauri/target/
+src-tauri/gen/schemas/

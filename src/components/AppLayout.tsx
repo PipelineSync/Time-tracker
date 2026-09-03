@@ -164,13 +164,17 @@ export function AppLayout() {
         </div>
       </aside>
 
-      {/* Mobile header */}
-      <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-border bg-background/95 px-4 backdrop-blur lg:hidden">
-        <BrandLogo className="h-6" />
-        <div className="flex items-center gap-1">
-          <NotificationsBell />
-          <ThemeToggle />
-          {UserMenu}
+      {/* Mobile header — padded out of the notch when installed / native */}
+      <header className="sticky top-0 z-30 border-b border-border bg-background/95 backdrop-blur lg:hidden">
+        <div className="pt-safe">
+          <div className="flex h-14 items-center justify-between px-4">
+            <BrandLogo className="h-6" />
+            <div className="flex items-center gap-1">
+              <NotificationsBell />
+              <ThemeToggle />
+              {UserMenu}
+            </div>
+          </div>
         </div>
       </header>
 
@@ -182,8 +186,8 @@ export function AppLayout() {
         </div>
       </main>
 
-      {/* Mobile bottom nav */}
-      <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/95 backdrop-blur lg:hidden">
+      {/* Mobile bottom nav — sits above the iPhone home indicator */}
+      <nav className="pb-safe fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/95 backdrop-blur lg:hidden">
         <div className="grid" style={{ gridTemplateColumns: `repeat(${navItems.length}, minmax(0,1fr))` }}>
           {navItems.map((item) => (
             <NavLink

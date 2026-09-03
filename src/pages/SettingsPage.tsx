@@ -10,6 +10,7 @@ import { Switch } from '@/components/ui/switch'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { InstallAppCard } from '@/components/InstallAppCard'
 import { toast } from 'sonner'
 import { Sun, Moon, Monitor, Download, Trash2, Loader2, Upload, X, Banknote, QrCode } from 'lucide-react'
 import { initials } from '@/lib/utils'
@@ -201,8 +202,13 @@ export function SettingsPage() {
           {workerTabVisible && <TabsTrigger value="payment">Payment methods</TabsTrigger>}
           {isAdmin && <TabsTrigger value="general">General</TabsTrigger>}
           <TabsTrigger value="appearance">Appearance</TabsTrigger>
+          <TabsTrigger value="apps">Get the app</TabsTrigger>
           {isAdmin && <TabsTrigger value="data">Data</TabsTrigger>}
         </TabsList>
+
+        <TabsContent value="apps" className="mt-4">
+          <InstallAppCard />
+        </TabsContent>
 
         {workerTabVisible && (
           <TabsContent value="profile" className="mt-4">

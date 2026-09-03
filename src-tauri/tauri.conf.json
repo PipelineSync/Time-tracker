@@ -1,0 +1,70 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "PipelineSync Work Tracker",
+  "version": "1.0.0",
+  "identifier": "com.pipelinesync.worktracker",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "PipelineSync Work Tracker",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 960,
+        "minHeight": 640,
+        "center": true,
+        "resizable": true,
+        "fullscreen": false,
+        "transparent": false,
+        "decorations": true,
+        "titleBarStyle": "Visible",
+        "dragDropEnabled": false
+      }
+    ],
+    "security": {
+      "csp": null
+    },
+    "withGlobalTauri": false
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "createUpdaterArtifacts": false,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "Business",
+    "copyright": "© PipelineSync",
+    "shortDescription": "Track worker hours, breaks and payments",
+    "longDescription": "PipelineSync Work Tracker — clock workers in and out, track breaks, notes, hourly rates, settlements and team chat. One account syncs the web, mobile and desktop apps.",
+    "publisher": "PipelineSync",
+    "macOS": {
+      "minimumSystemVersion": "10.15",
+      "category": "public.app-category.business",
+      "frameworks": [],
+      "entitlements": null
+    },
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "",
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false
+      }
+    }
+  }
+}

@@ -4,6 +4,8 @@ A modern, mobile-first web app for tracking workers' time, notes, hourly rates, 
 
 Built with **React + TypeScript + Tailwind CSS + shadcn/ui components + Supabase** (auth & database). It runs on free-tier hosting and works **out of the box in demo mode** (no setup needed) using browser-local storage.
 
+**One codebase, every device.** The same bundle is also an **installable PWA** (iPhone home screen, Android, desktop Chrome/Edge — offline-capable), **native iOS & Android apps** (Capacitor, in `ios/` + `android/`) and **native Windows / macOS / Linux desktop apps** (Tauri, in `src-tauri/`), with GitHub Actions workflows that build and sign all of them. See **[docs/APPS.md](docs/APPS.md)**.
+
 ---
 
 ## Features
@@ -204,6 +206,33 @@ Free-tier Supabase projects are **paused after ~7 days of no API/database activi
 
 ---
 
+## 9. Ship it as phone + desktop apps
+
+The web build is already an **installable PWA**: on iPhone open it in Safari →
+**Share → Add to Home Screen**; on Android/desktop Chrome·Edge accept the
+install prompt. The app gets its own icon, a full-screen window and an
+offline-capable shell. Inside the app, **Settings → “Get the app”** detects the
+platform and walks the user through it (or fires the install prompt directly).
+
+For store-grade builds, the repository contains ready-made native projects:
+
+```bash
+npm run apps:sync           # build dist/ + copy into ios/ & android/
+npm run apps:ios:open       # Xcode        → archive → App Store / TestFlight
+npm run apps:android:open   # Android Studio → signed .aab for the Play Store
+npm run apps:desktop:dev    # Tauri desktop window with hot reload
+npm run apps:desktop:build  # .msi/.exe (Windows), .dmg/.app (macOS), AppImage/deb
+npm run apps:icons          # regenerate every icon/splash from assets/
+```
+
+Tagging a release (`git tag v1.1.0 && git push origin v1.1.0`) makes GitHub
+Actions build **all** installers: Android `.apk`/`.aab`, an iOS archive (`.ipa`
+when signing secrets are configured) and a draft GitHub Release with the
+Windows/macOS/Linux desktop bundles. Full instructions, signing setup and the
+secrets table live in **[docs/APPS.md](docs/APPS.md)**.
+
+---
+
 ## Project structure
 
 ```
@@ -214,10 +243,21 @@ time-tracker/
 ├─ supabase/settle-keeps-entries.sql    # One-time migration: settlements keep time entries
 ├─ src/
 │  ├─ lib/                      # types, utils, stats, backend (local + supabase), store, theme, chat helpers
+│  │                          # + platform.ts (shell detection), native.ts (Capacitor bootstrap), useInstallPrompt.ts
 │  ├─ components/               # shared UI + app components (shadcn-style), incl. AvatarBubble + ChatMembersDialog
+│  │                          # + InstallAppCard.tsx (Settings → “Get the app”)
 │  ├─ pages/                    # Dashboard, Tracker, Entries, Workers, Reports, Chat, Settings, Auth
-│  ├─ App.tsx                   # Routing + auth gate
-│  └─ main.tsx
+│  ├─ App.tsx                   # Routing + auth gate (HashRouter inside native shells)
+│  └─ main.tsx                  # mounts app, registers the PWA service worker (browser shells only)
+├─ ios/                         # Capacitor iOS project (Xcode) — App Store / TestFlight
+├─ android/                     # Capacitor Android project (Gradle) — Play Store
+├─ src-tauri/                   # Tauri desktop shell — Windows / macOS / Linux installers
+├─ assets/                      # icon + splash sources every platform is generated from
+├─ public/pwa/                  # PWA manifest icons (192/512/maskable/apple-touch)
+├─ scripts/apps/                # generate-native-assets.sh (re-renders iOS/Android icons & splashes)
+├─ capacitor.config.ts          # appId, splash/status-bar theming, WebView scheme
+├─ .github/workflows/           # web.yml, mobile.yml, desktop.yml release pipelines
+├─ docs/APPS.md                 # web/PWA/iOS/Android/desktop build + signing guide
 ├─ .env.example
 └─ README.md
 ```
