@@ -62,9 +62,9 @@ style of a meme pack, so the tab is useful on day one:
 | `money-eyes` | payday |
 | `chef-kiss` | perfection |
 | `deal-with-it-cat` | unbothered, sunglasses on |
-| `faceplant-keyboard` | asleep on the keyboard after lunch |
+| `asleep-on-keyboard` | asleep on the keyboard after lunch |
 | `white-flag-ghost` | giving up, quietly |
-| `sprint-dust-cloud` | on the way, at speed |
+| `rushing-over` | on the way, at speed |
 
 Anything of someone's actual face, a copyrighted character, or a private photo
 should only be added with that person's OK — this is a shared work chat, and the
