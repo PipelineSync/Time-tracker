@@ -7,6 +7,7 @@ import type {
   TimeEntryComment,
   ChatMessage,
   ChatMember,
+  ChatReaction,
   AppNotification,
   Payment,
   PaymentStatus,
@@ -399,6 +400,12 @@ const ADMIN_CHAT_POSITION = 'Owner'
 function isMissingDbFunction(error: { code?: string; message?: string } | null, fn: string): boolean {
   if (!error) return false
   return error.code === 'PGRST202' || new RegExp(`function ${fn}`, 'i').test(error.message ?? '')
+}
+
+/** True when PostgREST says a table has not been created yet. */
+function missingRelation(error: { code?: string; message?: string } | null, table: string): boolean {
+  if (!error) return false
+  return error.code === '42P01' && new RegExp(table, 'i').test(error.message ?? '')
 }
 
 /** True when PostgREST says a column is missing (schema not migrated). */
@@ -1238,6 +1245,44 @@ export const supabaseBackend: DataBackend = {
       worker_status: w.status,
     }))
     return ok([adminMember, ...workerMembers])
+  },
+
+  async listChatReactions() {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    // Reactions are read through a SECURITY DEFINER function for the same reason
+    // the member list is: a worker may not select other members' rows directly.
+    const rpc = await client().rpc('list_chat_reactions')
+    if (rpc.error) {
+      const err = rpc.error as { code?: string; message?: string }
+      // A database without supabase/chat-reactions.sql simply has no reactions,
+      // which must not stop the chat itself from loading: no function, or no
+      // relation, both mean "nothing to show".
+      if (isMissingDbFunction(err, 'list_chat_reactions') || missingRelation(err, 'chat_reactions')) return ok([])
+      return fail(err.message ?? 'Could not load reactions.')
+    }
+    return ok((rpc.data as ChatReaction[]) ?? [])
+  },
+
+  async toggleChatReaction(messageId, emoji) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    const glyph = emoji.trim()
+    if (!glyph) return fail('Pick an emoji first.')
+    if (Array.from(glyph).length > 8) return fail('A reaction is a single emoji.')
+    // Add-or-remove is decided in SQL against auth.uid(), so a client can
+    // neither react as somebody else nor react to another workspace's message.
+    const rpc = await client().rpc('toggle_chat_reaction', { message_id: messageId, reaction_emoji: glyph })
+    if (rpc.error) {
+      const err = rpc.error as { code?: string; message?: string }
+      if (isMissingDbFunction(err, 'toggle_chat_reaction') || missingRelation(err, 'chat_reactions')) {
+        return fail(
+          'Reacting to messages needs the supabase/chat-reactions.sql migration. Ask the workspace admin to run it once in the Supabase SQL editor.'
+        )
+      }
+      return fail(err.message ?? 'Could not save the reaction.')
+    }
+    return ok((rpc.data as ChatReaction[]) ?? [])
   },
 
   async listNotifications() {

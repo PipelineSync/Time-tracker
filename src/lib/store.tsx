@@ -17,6 +17,7 @@ import type {
   TimeEntryComment,
   ChatMessage,
   ChatMember,
+  ChatReaction,
   AppNotification,
   Payment,
   PaymentStatus,
@@ -98,6 +99,9 @@ interface StoreValue {
   listChatMessages: (limit?: number) => Promise<{ messages: ChatMessage[]; error: string | null }>
   sendChatMessage: (body: string) => Promise<{ message: ChatMessage | null; error: string | null }>
   listChatMembers: () => Promise<{ members: ChatMember[]; error: string | null }>
+  listChatReactions: () => Promise<{ reactions: ChatReaction[]; error: string | null }>
+  /** Add (or take back) the caller's emoji on a message; resolves with that message's reactions. */
+  toggleChatReaction: (messageId: string, emoji: string) => Promise<{ reactions: ChatReaction[]; error: string | null }>
 
   settleWorker: (workerId: string, note?: string) => Promise<Payment | null>
   updatePaymentStatus: (id: string, status: PaymentStatus, paymentMethod?: PaymentMethod | null) => Promise<Payment | null>
@@ -500,6 +504,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return { members: res.data || [], error: res.error }
   }, [backend])
 
+  const listChatReactions = useCallback(async () => {
+    const res = await backend.listChatReactions()
+    return { reactions: res.data || [], error: res.error }
+  }, [backend])
+
+  const toggleChatReaction = useCallback(async (messageId: string, emoji: string) => {
+    const res = await backend.toggleChatReaction(messageId, emoji)
+    return { reactions: res.data || [], error: res.error }
+  }, [backend])
+
   const settleWorker = useCallback(async (workerId: string, note?: string) => {
     const res = await backend.settleWorker(workerId, note)
     if (res.error || !res.data) return null
@@ -574,6 +588,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     listChatMessages,
     sendChatMessage,
     listChatMembers,
+    listChatReactions,
+    toggleChatReaction,
     settleWorker,
     updatePaymentStatus,
     updatePaymentNote,

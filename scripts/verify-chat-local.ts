@@ -82,6 +82,8 @@ async function main() {
   assert(posted.data?.author_avatar_url === null, 'no profile picture yet')
   assert(posted.data?.worker_id === workerLogin.data?.workerId, 'worker message is linked to the worker row')
 
+  const reacted = await localBackend.toggleChatReaction(posted.data!.id, '👍')
+  assert(!reacted.error && reacted.data?.length === 1, 'the worker can react to a message')
   assert((await localBackend.sendChatMessage('   ')).error !== null, 'empty messages are rejected')
   assert((await localBackend.sendChatMessage('x'.repeat(2001))).error !== null, 'over-long messages are rejected')
 
