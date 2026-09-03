@@ -60,6 +60,14 @@ A notification bell (with an unread badge) appears for both roles. The admin is 
 
 All entries **snapshot the hourly rate** at record time, so historical earnings don't change when a worker's rate changes later. Sessions that cross midnight are handled correctly.
 
+### Performance (why many tabs at once don't slow it down)
+The app is built so a workspace of several users on phones **and** laptops, all open at the same time, stays fast on a free Supabase plan:
+
+- **Incremental entry sync** — every 15 s a visible tab re-fetches only the entries *changed* since its last sync (usually zero rows), not the whole history. The newest-entries window (≈1,200 for the admin, ≈300 for a worker) re-loads on refocus (at most once per 90 s) and every 5 minutes, which is also when entries deleted on another device get reconciled. Per-tab bandwidth therefore stays flat as the workspace's history grows.
+- **Bounded lists** — the notification bell fetches the 20 most recent notifications (its badge is an indexed `COUNT` query, so the exact unread number is free), payments show the 100 most recent, and the team chat the 500 most recent.
+- **Load older, on demand** — the Time Entries page renders 200 rows at a time with a *Show more* button, and Reports shows a *Load older entries* button when you pick a custom range that starts before the oldest loaded entry (one tap pulls in the pages the range needs).
+- **Hidden tabs don't poll** — polling pauses while a tab is in the background or the device sleeps.
+
 ---
 
 ## 1. Install dependencies

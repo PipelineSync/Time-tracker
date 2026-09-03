@@ -819,15 +819,31 @@ export const supabaseBackend: DataBackend = {
     return ok(null)
   },
 
-  async listEntries() {
+  async listEntries(opts) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    if (me.data!.role === 'worker' && me.data!.workerId) {
-      const { data, error } = await client().from('time_entries').select('*').eq('worker_id', me.data!.workerId).order('start_time', { ascending: false })
-      if (error) return fail(error.message)
-      return ok(data as TimeEntry[])
+    // Worker rows are scoped to the worker; admins see the whole workspace.
+    const build = () => {
+      let q = client().from('time_entries').select('*')
+      if (me.data!.role === 'worker' && me.data!.workerId) q = q.eq('worker_id', me.data!.workerId)
+      // Incremental sync: only rows created or updated since the last sync.
+      // (updated_at is kept current by the set_updated_at trigger.)
+      if (opts?.since) q = q.or(`created_at.gte.${opts.since},updated_at.gte.${opts.since}`)
+      q = q.order('start_time', { ascending: false })
+      if (opts?.limit) q = q.limit(opts.limit)
+      return q
     }
-    const { data, error } = await client().from('time_entries').select('*').order('start_time', { ascending: false })
+    const { data, error } = await build()
+    if (error) return fail(error.message)
+    return ok(data as TimeEntry[])
+  },
+
+  async listOlderEntries(before, limit = 500) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    let q = client().from('time_entries').select('*').lte('start_time', before)
+    if (me.data!.role === 'worker' && me.data!.workerId) q = q.eq('worker_id', me.data!.workerId)
+    const { data, error } = await q.order('start_time', { ascending: false }).limit(limit)
     if (error) return fail(error.message)
     return ok(data as TimeEntry[])
   },
@@ -1285,13 +1301,28 @@ export const supabaseBackend: DataBackend = {
     return ok((rpc.data as ChatReaction[]) ?? [])
   },
 
-  async listNotifications() {
-
+  async listNotifications(limit) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    const { data, error } = await client().from('notifications').select('*').eq('user_id', me.data!.id).order('created_at', { ascending: false })
+    let q = client().from('notifications').select('*').eq('user_id', me.data!.id).order('created_at', { ascending: false })
+    if (limit) q = q.limit(limit)
+    const { data, error } = await q
     if (error) return fail(error.message)
     return ok(data as AppNotification[])
+  },
+
+  async countUnreadNotifications() {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    // COUNT only (head request — no rows travel); hits the partial index on
+    // (user_id) where read = false, so it stays ~1 ms no matter the history.
+    const { count, error } = await client()
+      .from('notifications')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', me.data!.id)
+      .eq('read', false)
+    if (error) return fail(error.message)
+    return ok(count ?? 0)
   },
 
   async markNotificationsRead() {
@@ -1302,15 +1333,14 @@ export const supabaseBackend: DataBackend = {
     return ok(null)
   },
 
-  async listPayments() {
+  async listPayments(limit) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    if (me.data!.role === 'worker' && me.data!.workerId) {
-      const { data, error } = await client().from('payments').select('*').eq('worker_id', me.data!.workerId).order('created_at', { ascending: false })
-      if (error) return fail(error.message)
-      return ok(data as Payment[])
-    }
-    const { data, error } = await client().from('payments').select('*').order('created_at', { ascending: false })
+    let q = client().from('payments').select('*')
+    if (me.data!.role === 'worker' && me.data!.workerId) q = q.eq('worker_id', me.data!.workerId)
+    q = q.order('created_at', { ascending: false })
+    if (limit) q = q.limit(limit)
+    const { data, error } = await q
     if (error) return fail(error.message)
     return ok(data as Payment[])
   },
