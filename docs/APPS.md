@@ -183,8 +183,15 @@ Outputs land in `src-tauri/target/release/bundle/`:
 | macOS | `dmg/PipelineSync Work Tracker_1.0.0_aarch64.dmg` (+ `macos/*.app.tar.gz`) |
 | Linux | `appimage/*.AppImage`, `deb/*.deb` |
 
-Distribute the macOS `.dmg` outside the App Store? Sign + notarise it (see
-the secrets table below) or users get a Gatekeeper warning.
+> **GitHub Actions macOS note:** the CI build requests `--bundles app` on the
+> macOS jobs, so releases/artifacts from CI carry `macos/*.app.tar.gz`
+> (unsigned archives containing the `.app`). The DMG is skipped there because
+> GitHub's macOS runners frequently fail Tauri's `bundle_dmg.sh` with
+> `hdiutil: create failed - Resource busy`. Build on a Mac locally with
+> `npm run apps:desktop:build` when you want the `.dmg`.
+
+Distribute the macOS `.app` / `.dmg` outside the App Store? Sign + notarise it
+(see the secrets table below) or users get a Gatekeeper warning.
 
 The desktop window is a single instance: launching a second copy focuses the
 running window instead of opening another one
@@ -266,6 +273,7 @@ committed under `src-tauri/icons/`; PWA icons live in `public/pwa/`.
 | Native app shows demo data | `VITE_SUPABASE_*` were not set **at build time**; rebuild with them (`npm run build` then `npx cap sync`). |
 | Blank screen after deep-linking in a native build | Should not happen (hash routing). If you see it, you are viewing the *web* build inside a WebView that blocks history — check `isNativeShell()` in `src/lib/platform.ts`. |
 | Android build fails on `key.properties` | The file references a keystore path that does not exist; delete both to go back to unsigned builds. |
-| macOS says the app is damaged / unverified | The `.dmg` is unsigned. Sign + notarise via the `APPLE_*` secrets, or right-click → Open for ad-hoc testing. |
+| macOS says the app is damaged / unverified | The `.dmg`/`.app` is unsigned. Sign + notarise via the `APPLE_*` secrets, or right-click → Open for ad-hoc testing. |
+| Desktop CI fails on macOS with `hdiutil: create failed - Resource busy` | Tauri's DMG step hit the flaky `bundle_dmg.sh` on a GitHub runner. The workflow uses `--bundles app` on the macOS jobs, so retry or paste/upload the `.app.tar.gz`; revert the `args` to build a DMG locally. |
 | Windows installer warns “unknown publisher” | Code-sign the `.msi`/`.exe` with an EV/OV certificate (set `tauri.conf.json → bundle.windows.certificateThumbprint` or sign post-build with `signtool`). |
 | `xcodebuild` can’t find scheme `App` | Run `npx cap sync ios` once so `CapApp-SPM` resolves, then reopen Xcode. |

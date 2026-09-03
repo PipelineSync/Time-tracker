@@ -228,7 +228,10 @@ npm run apps:icons          # regenerate every icon/splash from assets/
 Tagging a release (`git tag v1.1.0 && git push origin v1.1.0`) makes GitHub
 Actions build **all** installers: Android `.apk`/`.aab`, an iOS archive (`.ipa`
 when signing secrets are configured) and a draft GitHub Release with the
-Windows/macOS/Linux desktop bundles. The workflow definitions ship in
+Windows/macOS/Linux desktop bundles. GitHub Actions builds macOS as the
+`*.app.tar.gz` archive (skipping the DMG, which is flaky on GitHub's macOS
+runners); `npm run apps:desktop:build` on a Mac still produces the `.dmg`.
+The workflow definitions ship in
 `ci/workflows/`; run `./scripts/apps/enable-ci.sh` once (from an account with
 the GitHub *Workflows* permission) to activate them. Full instructions, signing
 setup and the secrets table live in **[docs/APPS.md](docs/APPS.md)**.
