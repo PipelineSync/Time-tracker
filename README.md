@@ -68,6 +68,8 @@ The app is built so a workspace of several users on phones **and** laptops, all 
 - **Load older, on demand** — the Time Entries page renders 200 rows at a time with a *Show more* button, and Reports shows a *Load older entries* button when you pick a custom range that starts before the oldest loaded entry (one tap pulls in the pages the range needs).
 - **Hidden tabs don't poll** — polling pauses while a tab is in the background or the device sleeps.
 
+**No database migration is required for any of this** — the delta sync uses the existing `created_at` / `updated_at` columns, and the unread badge uses the `notifications_user_unread_idx` index that `supabase/perf-rls-and-indexes.sql` already creates. If your `time_entries` table ever grows into the tens of thousands of rows, `supabase/perf-entries-sync-indexes.sql` (optional, safe to re-run) adds two small indexes so the delta query keeps using them.
+
 ---
 
 ## 1. Install dependencies
