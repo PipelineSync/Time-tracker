@@ -216,7 +216,7 @@ git add .github/workflows && git commit -m "Enable release workflows" && git pus
 |---|---|---|
 | `ci/workflows/web.yml` | push to `main`, PRs, manual | `web-dist` artifact; optional Netlify deploy |
 | `ci/workflows/mobile.yml` | tag `v*`, manual | Android `.apk`/`.aab`; iOS `.xcarchive` (+ `.ipa` when signing secrets exist) |
-| `ci/workflows/desktop.yml` | tag `v*`, manual | draft GitHub Release with `.msi` `.exe` `.dmg` `.app.tar.gz` `.AppImage` `.deb` |
+| `ci/workflows/desktop.yml` | tag `v*`, manual | draft GitHub Release with `.msi` `.exe`, `.app.tar.gz` for macOS, `.AppImage`/`.deb` for Linux |
 
 Release flow:
 
