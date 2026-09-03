@@ -45,7 +45,8 @@ begin
   end if;
 
   -- Same wording as the client's chatNotificationText(): "Name: preview".
-  preview := btrim(regexp_replace(msg.body, '\s+', ' ', 'g'));
+  -- A sticker is a token in the body; announce it as "[sticker]" instead.
+  preview := btrim(regexp_replace(regexp_replace(msg.body, '\[sticker:[a-z0-9-]+\]', '[sticker]', 'g'), '\s+', ' ', 'g'));
   if length(preview) > 120 then
     preview := left(preview, 119) || '…';
   end if;

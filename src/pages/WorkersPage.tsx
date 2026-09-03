@@ -42,16 +42,31 @@ export function WorkersPage() {
     return map
   }, [activeTimers])
 
+  /**
+   * What the next "Settle & reset" would actually pay out. Settling never
+   * deletes entries — it stamps them with `settled_at` — so anything already
+   * stamped is paid for and drops out of these totals. That keeps this card
+   * showing money still owed (it goes back to zero right after a settle) rather
+   * than a lifetime total that only ever grows.
+   */
   const statsFor = (id: string) => {
-    let minutes = 0
-    let earnings = 0
+    let dueMinutes = 0
+    let dueEarnings = 0
+    let dueCount = 0
+    let settledMinutes = 0
+    let settledEarnings = 0
     for (const e of entries) {
-      if (e.worker_id === id) {
-        minutes += e.total_minutes
-        earnings += e.earnings
+      if (e.worker_id !== id) continue
+      if (e.settled_at) {
+        settledMinutes += e.total_minutes
+        settledEarnings += e.earnings
+      } else {
+        dueMinutes += e.total_minutes
+        dueEarnings += e.earnings
+        dueCount++
       }
     }
-    return { minutes, earnings }
+    return { dueMinutes, dueEarnings, dueCount, settledMinutes, settledEarnings }
   }
 
   return (
@@ -131,8 +146,21 @@ export function WorkersPage() {
 
                   <div className="mt-4 space-y-1 rounded-lg bg-muted/60 p-3 text-sm">
                     <div className="flex justify-between"><span className="text-muted-foreground">Rate</span><span className="font-semibold">{money(w.hourly_rate, currency)}/hr</span></div>
-                    <div className="flex justify-between"><span className="text-muted-foreground">Total hours</span><span>{formatMinutes(s.minutes)}</span></div>
-                    <div className="flex justify-between"><span className="text-muted-foreground">Total earnings</span><span className="font-semibold">{money(s.earnings, currency)}</span></div>
+                    <div className="flex justify-between" title="Unsettled hours — what the next Settle & Reset will pay for">
+                      <span className="text-muted-foreground">Hours to pay</span><span>{formatMinutes(s.dueMinutes)}</span>
+                    </div>
+                    <div className="flex justify-between" title="Earnings for time that has not been settled yet. This goes back to zero when you settle & reset.">
+                      <span className="text-muted-foreground">Total earnings to pay</span>
+                      <span className={cn('font-semibold', s.dueEarnings <= 0 && 'text-muted-foreground')}>{money(s.dueEarnings, currency)}</span>
+                    </div>
+                    <p className="text-[11px] leading-snug text-muted-foreground">
+                      {s.dueCount > 0
+                        ? `${s.dueCount} unsettled ${s.dueCount === 1 ? 'entry' : 'entries'}`
+                        : 'All settled — nothing to pay'}
+                      {s.settledEarnings > 0
+                        ? ` · ${money(s.settledEarnings, currency)} / ${formatMinutes(s.settledMinutes)} already settled`
+                        : ''}
+                    </p>
                     <div className="flex justify-between"><span className="text-muted-foreground">Added</span><span>{formatDate(w.created_at)}</span></div>
                   </div>
 

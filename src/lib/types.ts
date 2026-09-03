@@ -129,6 +129,22 @@ export interface ChatMessage {
 }
 
 /**
+ * A member's emoji reaction on a chat message. One row per (message, member,
+ * emoji), so the same person can react with several emoji but never twice with
+ * the same one — tapping it again takes it back.
+ */
+export interface ChatReaction {
+  id: string
+  message_id: string
+  /** Auth user id of the member who reacted. */
+  author_id: string
+  /** Snapshot of their name, so a hover label survives profile changes. */
+  author_name: string
+  emoji: string
+  created_at: string
+}
+
+/**
  * One entry in the team chat member list (admin + every worker). Unlike
  * `listWorkers`, this is never scoped down for workers — the chat member list is
  * the same for everyone so a worker can see the whole team, including the admin.

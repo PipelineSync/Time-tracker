@@ -7,6 +7,7 @@ import type {
   TimeEntryComment,
   ChatMessage,
   ChatMember,
+  ChatReaction,
   AppNotification,
   Payment,
   PaymentStatus,
@@ -105,6 +106,17 @@ export interface DataBackend {
   sendChatMessage(body: string): Promise<BackendResult<ChatMessage>>
   /** Everyone in the chat, including the admin — identical for every role. */
   listChatMembers(): Promise<BackendResult<ChatMember[]>>
+  /**
+   * Emoji reactions on the workspace's chat messages, oldest first. Reactions
+   * are deliberately quiet: they never create a notification.
+   */
+  listChatReactions(): Promise<BackendResult<ChatReaction[]>>
+  /**
+   * Add the emoji to the message, or remove it if the caller already reacted
+   * with it. Resolves with that message's reactions, so the caller can drop the
+   * result straight into the row it toggled.
+   */
+  toggleChatReaction(messageId: string, emoji: string): Promise<BackendResult<ChatReaction[]>>
 
   // Notifications
   listNotifications(): Promise<BackendResult<AppNotification[]>>

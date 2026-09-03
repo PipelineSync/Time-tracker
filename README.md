@@ -28,6 +28,8 @@ The app has two roles with clearly separated permissions:
 | Notes / chat on entries | ✅ (reply) | ✅ (add notes) |
 | Team chat (Chat section) | ✅ (post as Admin) | ✅ (post as themselves) |
 | See all members of the chat | ✅ | ✅ (same roster, admin included) |
+| Emoji & stickers in the chat | ✅ | ✅ |
+| React to a chat message with emoji | ✅ | ✅ |
 | Settle & reset time → payments | ✅ | ❌ |
 | Payments view | ✅ (all, full control) | ✅ (own, read-only) |
 | Change own password | ✅ | ✅ |
@@ -37,12 +39,12 @@ Workers **clock in, take breaks, and clock out** — their rate is set by the ad
 
 ### Pages
 - **Dashboard** *(admin)* — today's & this week's hours and earnings, a live **"On the clock now"** panel listing **every** worker currently clocked in (with a **Working** / **On break** badge, time worked and break time, updated every second), per-worker summary, recent entries, "Add time"
-- **Workers** *(admin)* — add/edit/delete workers, create each worker's login account, set hourly rate & active/inactive status. Each worker card shows their **live clock status** (Working / On break, with elapsed time) while they are on the clock. **Deleting a worker also permanently disables their login account** (the Supabase Auth user is removed server-side, and any open session of theirs is signed out) — they can no longer sign in.
+- **Workers** *(admin)* — add/edit/delete workers, create each worker's login account, set hourly rate & active/inactive status. Each worker card shows their **live clock status** (Working / On break, with elapsed time) while they are on the clock, and the **hours & earnings still to pay** — only the time that has *not* been settled yet, so both drop back to zero the moment you **Settle & reset** (what has already been settled stays visible underneath as context, and the full lifetime totals live in Time Entries and Reports). **Deleting a worker also permanently disables their login account** (the Supabase Auth user is removed server-side, and any open session of theirs is signed out) — they can no longer sign in.
 - **Clock In / Out** *(worker)* — big clock-in button, then break/pause/resume and clock-out; survives a page refresh. At clock-out the worker can attach an **optional note** that is saved on the time entry (the admin's clock-out notification flags that a note was added).
 - **Manual entry** *(admin)* — date, start/end time, break, project, notes, auto-calculated hours & earnings (this is how the admin adds time to workers)
 - **Time Entries** — table on desktop / cards on mobile, filters (including **settled / unsettled**), sorting; admin can edit/delete/duplicate, workers see their own. Entries that a settlement paid for carry a **Settled** badge and stay here as history; the summary line also shows the **unsettled** earnings still waiting to be paid out
 - **Notes / chat on entries** — every entry has a conversation thread: workers add notes, the admin replies (and vice versa), both sides are notified
-- **Chat** *(admin & worker, right before Settings in the navigation)* — one shared **team room** for the whole workspace. Every message is shown with the sender's **profile picture, name and role** (the admin appears as **Admin**; a worker's role is their position, e.g. *Foreman*, falling back to *Worker*), plus a time stamp and day separators. A **See all members** button opens the roster — **the admin first, then every worker**, with each member's picture, role and whether their account is active; workers get the same roster including the admin, even though the rest of their access is limited to their own records. New messages arrive on their own (the room refreshes while the tab is open), Enter sends, Shift+Enter adds a line
+- **Chat** *(admin & worker, right before Settings in the navigation)* — one shared **team room** for the whole workspace. Every message is shown with the sender's **profile picture, name and role** (the admin appears as **Admin**; a worker's role is their position, e.g. *Foreman*, falling back to *Worker*), plus a time stamp and day separators. A **See all members** button opens the roster — **the admin first, then every worker**, with each member's picture, role and whether their account is active; workers get the same roster including the admin, even though the rest of their access is limited to their own records. New messages arrive on their own (the room refreshes while the tab is open), Enter sends, Shift+Enter adds a line. The composer has an **emoji picker** for both roles — searchable, grouped, with the emoji you used recently floated to the top — and a **sticker** tab (see `src/assets/chat-stickers/`). A **sticker message is stored as plain text** (`[sticker:slug]`), so it needs no upload, no new column, and still reads as "Mike: [Side eye cat]" in a notification. Any message can be **reacted to** with emoji (the smile icon beside it): one tap adds, tapping the same emoji again takes it back, and reactions never send a notification
 - **Reports** *(admin)* — today/week/month/custom range, totals & averages, charts, **CSV export**
 - **Settings** *(admin)* — business name, currency, timezone, default rate, theme, export & delete all data
 - **Settings → Profile** *(worker)* — workers upload their own **profile picture** from their account settings. The picture is saved to their worker profile and shows up **for the admin** next to their name on the Workers page, the Dashboard, the "On the clock now" panel, and in every **Chat** message — not just a bare name.
@@ -112,6 +114,8 @@ This creates the `workers`, `time_entries`, `active_timers`, `settings`, and `pa
 >
 > For **settlements that keep time entries**, run `supabase/settle-keeps-entries.sql` once. It adds `time_entries.settled_at`, the column "Settle & reset" stamps instead of deleting the entries it paid for (without it the app still keeps the entries, but falls back to the previous payment's `period_end` as the paid-up-to boundary). Fresh installs get this automatically from `schema.sql`.
 >
+> For **emoji reactions on chat messages**, run `supabase/chat-reactions.sql` once (after `chat-messages.sql`). It creates `chat_reactions` — one row per (message, member, emoji), so a member can react with several emoji but never twice with the same one — with RLS so the whole workspace reads the same reactions, plus the SECURITY DEFINER functions `list_chat_reactions()` and `toggle_chat_reaction(message_id, emoji)`, which stamp the reactor from `auth.uid()` and refuse messages from another workspace. Without it the chat still loads (there is simply nothing to show); reacting explains which migration to run. Fresh installs get this automatically from `schema.sql`.
+
 > For **chat message notifications**, run `supabase/chat-notifications.sql` once (after `chat-messages.sql`). It allows `'chat'` as a notification type and adds the SECURITY DEFINER function `notify_chat_message()`, which writes a notification for every member of the workspace except the author — something a worker cannot do directly, because RLS only lets them notify themselves and the admin. Fresh installs get this automatically from `schema.sql`.
 
 ---
@@ -242,12 +246,15 @@ time-tracker/
 ├─ supabase/schema.sql          # Database tables, RLS, triggers (incl. team chat)
 ├─ supabase/chat-messages.sql   # One-time migration for the team chat on existing databases
 ├─ supabase/chat-notifications.sql      # One-time migration: notifications for chat messages
+├─ supabase/chat-reactions.sql  # One-time migration: emoji reactions on chat messages
 ├─ supabase/settle-keeps-entries.sql    # One-time migration: settlements keep time entries
 ├─ src/
 │  ├─ lib/                      # types, utils, stats, backend (local + supabase), store, theme, chat helpers
+│  │                          # + emoji.ts (chat emoji catalogue) & stickers.ts (sticker pack registry)
 │  │                          # + platform.ts (shell detection), native.ts (Capacitor bootstrap), useInstallPrompt.ts
-│  ├─ components/               # shared UI + app components (shadcn-style), incl. AvatarBubble + ChatMembersDialog
+│  ├─ components/               # shared UI + app components (shadcn-style), incl. AvatarBubble + ChatMembersDialog + EmojiPicker
 │  │                          # + InstallAppCard.tsx (Settings → “Get the app”)
+│  ├─ assets/chat-stickers/     # Drop an image in here and it becomes a chat sticker (see its README)
 │  ├─ pages/                    # Dashboard, Tracker, Entries, Workers, Reports, Chat, Settings, Auth
 │  ├─ App.tsx                   # Routing + auth gate (HashRouter inside native shells)
 │  └─ main.tsx                  # mounts app, registers the PWA service worker (browser shells only)

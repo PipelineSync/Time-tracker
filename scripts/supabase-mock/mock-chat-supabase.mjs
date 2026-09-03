@@ -15,6 +15,7 @@ export const state = {
   workers: [], // { id, user_id, name, email, position, avatar_url, status, hourly_rate }
   settings: [], // { id, user_id, business_name, currency, timezone, avatar_url }
   chat: [], // chat_messages rows, oldest first
+  reactions: [], // chat_reactions rows, oldest first
   notifications: [], // { id, user_id, entry_id, type, message, read, created_at }
   timeEntries: [], // time_entries rows
   payments: [], // payments rows
@@ -30,6 +31,7 @@ export function resetState() {
   state.workers = []
   state.settings = []
   state.chat = []
+  state.reactions = []
   state.notifications = []
   state.timeEntries = []
   state.payments = []
@@ -141,6 +143,56 @@ function postChatMessage(body) {
   return { data: row }
 }
 
+/** public.list_chat_reactions() — the caller's workspace, oldest first. */
+function listChatReactions() {
+  const owner = workspaceOwnerId()
+  return state.reactions
+    .filter((r) => r.user_id === owner)
+    .sort((a, b) => a.created_at.localeCompare(b.created_at))
+    .map(clone)
+}
+
+/** public.toggle_chat_reaction(message_id, emoji) — add, or take back, one emoji. */
+function toggleChatReaction(messageId, emoji) {
+  const me = state.authUser?.id
+  if (!me) return { error: { message: 'Not signed in.' } }
+  const glyph = String(emoji ?? '').trim()
+  if (!glyph) return { error: { message: 'Pick an emoji first.' } }
+  if ([...glyph].length > 8) return { error: { message: 'A reaction is a single emoji.' } }
+  const msg = state.chat.find((m) => m.id === messageId)
+  if (!msg) return { error: { message: 'That message is no longer there.' } }
+  const owner = workspaceOwnerId()
+  if (msg.user_id !== owner) return { error: { message: 'That message is not in your workspace.' } }
+
+  const profile = state.profiles.find((p) => p.user_id === me)
+  const name =
+    profile?.role === 'admin'
+      ? 'Admin'
+      : state.workers.find((w) => w.id === profile?.worker_id)?.name ?? 'Member'
+
+  const existing = state.reactions.findIndex(
+    (r) => r.message_id === messageId && r.author_id === me && r.emoji === glyph
+  )
+  if (existing >= 0) state.reactions.splice(existing, 1)
+  else {
+    state.reactions.push({
+      id: id('reaction'),
+      user_id: owner,
+      message_id: messageId,
+      author_id: me,
+      author_name: name,
+      emoji: glyph,
+      created_at: nowIso(),
+    })
+  }
+  return {
+    data: state.reactions
+      .filter((r) => r.message_id === messageId)
+      .sort((a, b) => a.created_at.localeCompare(b.created_at))
+      .map(clone),
+  }
+}
+
 /**
  * public.notify_chat_message(chat_id) — one notification row per member of the
  * workspace except the author (see supabase/chat-notifications.sql).
@@ -171,7 +223,8 @@ function notifyChatMessage(chatId) {
 }
 
 /** The client queries `chat_messages` / `time_entries`; state uses short keys. */
-const tableKey = (table) => (table === 'chat_messages' ? 'chat' : table === 'time_entries' ? 'timeEntries' : table)
+const tableKey = (table) =>
+  table === 'chat_messages' ? 'chat' : table === 'chat_reactions' ? 'reactions' : table === 'time_entries' ? 'timeEntries' : table
 function rowsOf(table) {
   return state[tableKey(table)] ?? []
 }
@@ -358,6 +411,8 @@ function tableApi(table, ctx) {
             const rows = rowsOf(table)
             const doomed = new Set(applyEq(rows, filters).map((r) => r.id))
             setRows(table, rows.filter((r) => !doomed.has(r.id)))
+            // on delete cascade for chat_reactions.message_id
+            if (table === 'chat_messages') state.reactions = state.reactions.filter((r) => !doomed.has(r.message_id))
             ctx.deleted.push(table)
             resolve({ error: null })
           } catch (e) {
@@ -414,6 +469,15 @@ export function createClient() {
         const r = postChatMessage(args?.message_body)
         return r.error ? { data: null, error: r.error } : { data: r.data, error: null }
       }
+      if (fn === 'list_chat_reactions') {
+        if (state.missingTables.includes('chat_reactions')) return { data: null, error: missingTableError('chat_reactions') }
+        return { data: listChatReactions(), error: null }
+      }
+      if (fn === 'toggle_chat_reaction') {
+        if (state.missingTables.includes('chat_reactions')) return { data: null, error: missingTableError('chat_reactions') }
+        const r = toggleChatReaction(args?.message_id, args?.reaction_emoji)
+        return r.error ? { data: null, error: r.error } : { data: r.data, error: null }
+      }
       if (fn === 'notify_chat_message') {
         if (state.missingTables.includes('chat_messages')) return { data: null, error: missingTableError('chat_messages') }
         const r = notifyChatMessage(args?.p_chat_id)
@@ -424,7 +488,7 @@ export function createClient() {
   }
 }
 
-export { workspaceMembers, postChatMessage, notifyChatMessage, workspaceOwnerId }
+export { workspaceMembers, postChatMessage, notifyChatMessage, workspaceOwnerId, listChatReactions, toggleChatReaction }
 
 // Guards mirroring the real @supabase/auth-js exports used by supabaseDb.ts.
 export function isAuthRetryableFetchError(e) {

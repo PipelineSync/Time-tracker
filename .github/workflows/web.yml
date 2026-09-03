@@ -30,7 +30,7 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Build (PWA: manifest + service worker + precache)
+      - name: "Build (PWA: manifest + service worker + precache)"
         env:
           # Baked in at build time. Without them the artifact runs in demo
           # mode (browser-local storage) — still fully installable.

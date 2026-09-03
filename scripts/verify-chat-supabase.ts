@@ -212,11 +212,60 @@ async function scenario4_notifications_without_the_function() {
   assert(!adminNotifs.some((n: any) => n.user_id === ADMIN.id), 'the admin is not notified about their own message')
 }
 
+async function scenario5_reactions() {
+  console.log('\n--- S5: emoji reactions on messages ---')
+  seedWorkspace()
+  await signInAs(JOHN)
+
+  const added = await supabaseBackend.toggleChatReaction('c0', '👍')
+  assert(!added.error && added.data?.length === 1, 'a worker can react to a message through the RPC')
+  assert(added.data?.[0]?.author_name === 'John Smith', 'the reactor comes from auth.uid(), not the request')
+  assert(added.data?.[0]?.message_id === 'c0', 'the reaction lands on the right message')
+
+  const back = await supabaseBackend.toggleChatReaction('c0', '👍')
+  assert(!back.error && back.data?.length === 0, 'sending the same emoji again takes the reaction back')
+
+  await supabaseBackend.toggleChatReaction('c0', '🙏')
+  await signInAs(SARAH)
+  await supabaseBackend.toggleChatReaction('c0', '🙏')
+  const room = await supabaseBackend.listChatReactions()
+  assert(!room.error && room.data?.length === 2, `both members' reactions are in the shared room (${room.data?.length})`)
+  assert(
+    new Set((room.data ?? []).map((r: any) => r.author_name)).size === 2,
+    'the admin sees who reacted, not just how many'
+  )
+
+  await signInAs(JOHN)
+  assert((await supabaseBackend.toggleChatReaction('c-does-not-exist', '👍')).error, 'reacting to an unknown message fails')
+  assert((await supabaseBackend.toggleChatReaction('c0', 'a whole sentence')).error, 'a reaction must be a single emoji')
+
+  // Reactions belong to the room: a row for another workspace's message is
+  // refused, so nobody can react their way into someone else's chat.
+  await signInAs(ADMIN)
+  const foreign = await supabaseBackend.toggleChatReaction('c-elsewhere', '👍')
+  assert(foreign.error !== null, 'reacting to a message outside the workspace fails')
+
+  // A database without supabase/chat-reactions.sql must still show the chat.
+  seedWorkspace()
+  state.missingTables = ['chat_reactions']
+  await signInAs(JOHN)
+  const noneYet = await supabaseBackend.listChatReactions()
+  assert(!noneYet.error && noneYet.data?.length === 0, 'an unmigrated database simply has no reactions to show')
+  const messages = await supabaseBackend.listChatMessages(50)
+  assert(!messages.error && messages.data?.length === 5, 'and the chat itself still loads')
+  const refused = await supabaseBackend.toggleChatReaction('c0', '👍')
+  assert(
+    /chat-reactions\.sql/.test(refused.error ?? ''),
+    `reacting explains which migration to run (${refused.error?.slice(0, 48)}…)`
+  )
+}
+
 async function main() {
   await scenario1_worker_reads_and_posts()
   await scenario2_admin_view()
   await scenario3_unmigrated_database()
   await scenario4_notifications_without_the_function()
+  await scenario5_reactions()
   console.log(failures ? `\n${failures} FAILURE(S)` : '\nall chat/supabase checks passed')
   if (failures) process.exit(1)
 }

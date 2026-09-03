@@ -104,6 +104,25 @@ create table if not exists public.chat_messages (
 create index if not exists chat_messages_user_created_idx on public.chat_messages (user_id, created_at);
 create index if not exists chat_messages_author_idx on public.chat_messages (author_id);
 
+-- ---------- chat_reactions (emoji reactions on chat messages) ----------
+-- One row per (message, member, emoji): a member can react with several emoji,
+-- but never twice with the same one — the client sends it again to take it back.
+-- Reactions never notify; see supabase/chat-reactions.sql for the rationale.
+create table if not exists public.chat_reactions (
+  id          uuid primary key default gen_random_uuid(),
+  -- Workspace owner (the admin), like chat_messages. Set by trg_chat_reactions_user.
+  user_id     uuid not null references auth.users (id) on delete cascade,
+  message_id  uuid not null references public.chat_messages (id) on delete cascade,
+  author_id   uuid not null references auth.users (id) on delete cascade,
+  author_name text not null,
+  emoji       text not null check (char_length(emoji) between 1 and 8),
+  created_at  timestamptz not null default now(),
+  unique (message_id, author_id, emoji)
+);
+
+create index if not exists chat_reactions_message_idx on public.chat_reactions (message_id);
+create index if not exists chat_reactions_user_created_idx on public.chat_reactions (user_id, created_at);
+
 -- ---------- notifications ----------
 create table if not exists public.notifications (
   id         uuid primary key default gen_random_uuid(),
@@ -178,6 +197,7 @@ alter table public.time_entry_comments enable row level security;
 alter table public.notifications      enable row level security;
 alter table public.payments           enable row level security;
 alter table public.chat_messages          enable row level security;
+alter table public.chat_reactions         enable row level security;
 
 create or replace function public.is_admin()
 returns boolean
@@ -358,6 +378,17 @@ drop policy if exists "chat_messages_delete" on public.chat_messages;
 create policy "chat_messages_delete" on public.chat_messages
   for delete using ((select public.is_admin()) and (select auth.uid()) = user_id);
 
+-- chat_reactions policies — the whole workspace reads the same reactions.
+-- Toggling happens through toggle_chat_reaction() (below, security definer), so
+-- there is no insert policy for clients; the admin may clear them with the room.
+drop policy if exists "chat_reactions_select" on public.chat_reactions;
+create policy "chat_reactions_select" on public.chat_reactions
+  for select using (user_id = (select public.workspace_owner_id()));
+
+drop policy if exists "chat_reactions_delete" on public.chat_reactions;
+create policy "chat_reactions_delete" on public.chat_reactions
+  for delete using ((select public.is_admin()) and (select auth.uid()) = user_id);
+
 -- notifications policies (users manage their own notifications)
 drop policy if exists "notifications_select" on public.notifications;
 create policy "notifications_select" on public.notifications
@@ -457,6 +488,10 @@ create trigger trg_payments_user before insert on public.payments
 
 drop trigger if exists trg_chat_messages_user on public.chat_messages;
 create trigger trg_chat_messages_user before insert on public.chat_messages
+  for each row execute function public.set_user_id();
+
+drop trigger if exists trg_chat_reactions_user on public.chat_reactions;
+create trigger trg_chat_reactions_user before insert on public.chat_reactions
   for each row execute function public.set_user_id();
 
 drop trigger if exists trg_workers_updated on public.workers;
@@ -742,7 +777,8 @@ begin
     raise exception 'You can only notify about your own message.';
   end if;
 
-  preview := btrim(regexp_replace(msg.body, '\s+', ' ', 'g'));
+  -- A sticker is a token in the body; announce it as "[sticker]" instead.
+  preview := btrim(regexp_replace(regexp_replace(msg.body, '\[sticker:[a-z0-9-]+\]', '[sticker]', 'g'), '\s+', ' ', 'g'));
   if length(preview) > 120 then
     preview := left(preview, 119) || '…';
   end if;
@@ -760,3 +796,97 @@ $$;
 
 revoke all on function public.notify_chat_message(uuid) from public, anon;
 grant execute on function public.notify_chat_message(uuid) to authenticated;
+
+-- ============================================================
+-- Team chat reactions (see supabase/chat-reactions.sql)
+-- ============================================================
+
+-- The whole workspace's reactions for the messages the client already has.
+create or replace function public.list_chat_reactions()
+returns setof public.chat_reactions
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select r.*
+    from public.chat_reactions r
+   where r.user_id = public.workspace_owner_id()
+   order by r.created_at;
+$$;
+
+revoke all on function public.list_chat_reactions() from public, anon;
+grant execute on function public.list_chat_reactions() to authenticated;
+
+-- Add the emoji to the message, or remove it when it is already there. The
+-- reactor is auth.uid() and the message must belong to the caller's workspace,
+-- so neither can be forged by a client. Returns the message's reactions.
+create or replace function public.toggle_chat_reaction(message_id uuid, reaction_emoji text)
+returns setof public.chat_reactions
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  me          uuid := auth.uid();
+  owner_id    uuid;
+  caller_role text;
+  wid         uuid;
+  v_name      text;
+  v_emoji     text := btrim(coalesce(reaction_emoji, ''));
+  -- Local copies: inside plpgsql a bare message_id would also match the column.
+  v_message   uuid := toggle_chat_reaction.message_id;
+  target      public.chat_messages;
+begin
+  if me is null then
+    raise exception 'Not signed in.';
+  end if;
+  if v_emoji = '' then
+    raise exception 'Pick an emoji first.';
+  end if;
+  if char_length(v_emoji) > 8 then
+    raise exception 'A reaction is a single emoji.';
+  end if;
+
+  select * into target from public.chat_messages m where m.id = v_message;
+  if not found then
+    raise exception 'That message is no longer there.';
+  end if;
+
+  owner_id := public.workspace_owner_id();
+  if target.user_id is distinct from owner_id then
+    raise exception 'That message is not in your workspace.';
+  end if;
+
+  select p.role, p.worker_id into caller_role, wid
+    from public.profiles p
+   where p.user_id = me;
+  if caller_role = 'admin' then
+    v_name := 'Admin';
+  else
+    select w.name into v_name from public.workers w where w.id = wid;
+  end if;
+  if v_name is null then
+    v_name := 'Member';
+  end if;
+
+  delete from public.chat_reactions r
+    where r.message_id = v_message
+      and r.author_id = me
+      and r.emoji = v_emoji;
+
+  if not found then
+    insert into public.chat_reactions (user_id, message_id, author_id, author_name, emoji)
+    values (owner_id, v_message, me, v_name, v_emoji);
+  end if;
+
+  return query
+    select r.*
+      from public.chat_reactions r
+     where r.message_id = v_message
+     order by r.created_at;
+end;
+$$;
+
+revoke all on function public.toggle_chat_reaction(uuid, text) from public, anon;
+grant execute on function public.toggle_chat_reaction(uuid, text) to authenticated;
