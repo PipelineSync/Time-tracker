@@ -41,10 +41,31 @@ notification ("Mike: [Side eye cat]").
 
 ## A note on what is in here
 
-The nine bundled stickers are original artwork drawn for this app in the
-general style of a meme pack (kissy selfie, peace-sign duo, shushing kid,
-tongue-out grin, side-eye cat, cheeky grin, crying thumbs-up cat,
-leaning-in shock, puzzled stare). Anything of someone's actual face, a
-copyrighted character, or a private photo should only be added with that
-person's OK — this is a shared work chat, and the pack is visible to every
-account in the workspace.
+The 19 bundled stickers are original artwork drawn for this app in the general
+style of a meme pack, so the tab is useful on day one:
+
+| File | Beat |
+| --- | --- |
+| `kissy-selfie` | fisheye duck-face selfie |
+| `peace-duo` | two goofballs, double peace signs |
+| `shush-smirk` | "say less" finger to lips |
+| `tongue-grin` | tongue out, zero regrets |
+| `side-eye-cat` | the judgmental stare |
+| `side-eye-duo` | two people looking at each other, suspicious |
+| `cheeky-grin` | innocent, definitely up to something |
+| `thumbs-up-tears` | crying cat thumbs up — "I'm fine" |
+| `thumbs-up-panic` | sweating thumbs up — "all good!" |
+| `nervous-sweat-grin` | huge grin, one sweat drop |
+| `wince-teeth` | clenched teeth — "yikes" |
+| `puzzled-stare` | complete bewilderment |
+| `shock-lean` | leaning in, mouth open |
+| `money-eyes` | payday |
+| `chef-kiss` | perfection |
+| `deal-with-it-cat` | unbothered, sunglasses on |
+| `faceplant-keyboard` | asleep on the keyboard after lunch |
+| `white-flag-ghost` | giving up, quietly |
+| `sprint-dust-cloud` | on the way, at speed |
+
+Anything of someone's actual face, a copyrighted character, or a private photo
+should only be added with that person's OK — this is a shared work chat, and the
+pack is visible to every account in the workspace.
