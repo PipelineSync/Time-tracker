@@ -12,6 +12,8 @@ concurrency:
 jobs:
   build:
     name: Tauri ${{ matrix.label }}
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -62,7 +64,7 @@ jobs:
       # Baked in at build time; without them the desktop app runs in demo
       # mode (local storage) which is ideal for evaluating the installers.
       - name: Build, bundle & upload installers
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
