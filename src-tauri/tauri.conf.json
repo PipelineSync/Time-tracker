@@ -44,13 +44,12 @@
       "icons/icon.ico"
     ],
     "category": "Business",
-    "copyright": "© PipelineSync",
+    "copyright": "\u00a9 PipelineSync",
     "shortDescription": "Track worker hours, breaks and payments",
-    "longDescription": "PipelineSync Work Tracker — clock workers in and out, track breaks, notes, hourly rates, settlements and team chat. One account syncs the web, mobile and desktop apps.",
+    "longDescription": "PipelineSync Work Tracker \u2014 clock workers in and out, track breaks, notes, hourly rates, settlements and team chat. One account syncs the web, mobile and desktop apps.",
     "publisher": "PipelineSync",
     "macOS": {
       "minimumSystemVersion": "10.15",
-      "category": "public.app-category.business",
       "frameworks": [],
       "entitlements": null
     },
