@@ -21,6 +21,11 @@ jobs:
   android:
     name: Android APK + AAB
     runs-on: ubuntu-latest
+    env:
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
 
@@ -46,16 +51,16 @@ jobs:
       # Present only when the ANDROID_KEYSTORE_BASE64 secret is configured;
       # otherwise the release build stays unsigned (debug APK still builds).
       - name: Restore release keystore
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        if: ${{ env.ANDROID_KEYSTORE_BASE64 != '' }}
         env:
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_BASE64: ${{ env.ANDROID_KEYSTORE_BASE64 }}
         run: |
           echo "$KEYSTORE_BASE64" | base64 -d > android/release.keystore
           cat > android/key.properties <<EOF
           storeFile=../release.keystore
-          storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
-          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
+          storePassword=${{ env.ANDROID_KEYSTORE_PASSWORD }}
+          keyAlias=${{ env.ANDROID_KEY_ALIAS }}
+          keyPassword=${{ env.ANDROID_KEY_PASSWORD }}
           EOF
 
       - name: Derive version code/name from tag
@@ -92,6 +97,12 @@ jobs:
   ios:
     name: iOS archive (+ .ipa when signing secrets exist)
     runs-on: macos-latest
+    env:
+      IOS_CERTIFICATE_P12_BASE64: ${{ secrets.IOS_CERTIFICATE_P12_BASE64 }}
+      IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+      IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+      IOS_PROVISIONING_PROFILE_NAME: ${{ secrets.IOS_PROVISIONING_PROFILE_NAME }}
+      IOS_DEVELOPMENT_TEAM: ${{ secrets.IOS_DEVELOPMENT_TEAM }}
     steps:
       - uses: actions/checkout@v4
 
@@ -110,10 +121,10 @@ jobs:
         run: npx cap sync ios
 
       - name: Import distribution certificate
-        if: ${{ secrets.IOS_CERTIFICATE_P12_BASE64 != '' }}
+        if: ${{ env.IOS_CERTIFICATE_P12_BASE64 != '' }}
         env:
-          P12_BASE64: ${{ secrets.IOS_CERTIFICATE_P12_BASE64 }}
-          P12_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          P12_BASE64: ${{ env.IOS_CERTIFICATE_P12_BASE64 }}
+          P12_PASSWORD: ${{ env.IOS_CERTIFICATE_PASSWORD }}
         run: |
           echo "$P12_BASE64" | base64 -d > /tmp/distribution.p12
           security create-keychain -p "" build.keychain
@@ -124,9 +135,9 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -t private -k "" build.keychain
 
       - name: Install provisioning profile
-        if: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 != '' }}
+        if: ${{ env.IOS_PROVISIONING_PROFILE_BASE64 != '' }}
         env:
-          PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+          PROFILE_BASE64: ${{ env.IOS_PROVISIONING_PROFILE_BASE64 }}
         run: |
           mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
           echo "$PROFILE_BASE64" | base64 -d > ~/Library/MobileDevice/Provisioning\ Profiles/pipelinesync.mobileprovision
@@ -134,14 +145,14 @@ jobs:
       - name: Archive (signed when certs are present, unsigned otherwise)
         working-directory: ios/App
         run: |
-          if [ -n "${{ secrets.IOS_CERTIFICATE_P12_BASE64 }}" ]; then
+          if [ -n "${{ env.IOS_CERTIFICATE_P12_BASE64 }}" ]; then
             xcodebuild -project App.xcodeproj -scheme App \
               -configuration Release -sdk iphoneos \
               -destination 'generic/platform=iOS' \
               -archivePath build/App.xcarchive \
               CODE_SIGN_STYLE=Manual \
-              DEVELOPMENT_TEAM="${{ secrets.IOS_DEVELOPMENT_TEAM }}" \
-              PROVISIONING_PROFILE_SPECIFIER="${{ secrets.IOS_PROVISIONING_PROFILE_NAME }}" \
+              DEVELOPMENT_TEAM="${{ env.IOS_DEVELOPMENT_TEAM }}" \
+              PROVISIONING_PROFILE_SPECIFIER="${{ env.IOS_PROVISIONING_PROFILE_NAME }}" \
               archive
           else
             echo "::notice::No iOS signing secrets — building an unsigned archive for validation."
@@ -154,7 +165,7 @@ jobs:
           fi
 
       - name: Export .ipa
-        if: ${{ secrets.IOS_CERTIFICATE_P12_BASE64 != '' }}
+        if: ${{ env.IOS_CERTIFICATE_P12_BASE64 != '' }}
         working-directory: ios/App
         run: |
           cat > ExportOptions.plist <<'EOF'
@@ -164,11 +175,11 @@ jobs:
           <dict>
             <key>method</key><string>app-store</string>
             <key>signingStyle</key><string>manual</string>
-            <key>teamID</key><string>${{ secrets.IOS_DEVELOPMENT_TEAM }}</string>
+            <key>teamID</key><string>${{ env.IOS_DEVELOPMENT_TEAM }}</string>
             <key>provisioningProfiles</key>
             <dict>
               <key>com.pipelinesync.worktracker</key>
-              <string>${{ secrets.IOS_PROVISIONING_PROFILE_NAME }}</string>
+              <string>${{ env.IOS_PROVISIONING_PROFILE_NAME }}</string>
             </dict>
             <key>uploadSymbols</key><true/>
           </dict>
