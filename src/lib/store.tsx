@@ -28,6 +28,32 @@ import { localBackend } from './localDb'
 import { supabaseBackend, isSupabaseConfigured, ACCOUNT_DEACTIVATED_MESSAGE } from './supabaseDb'
 import { toast } from 'sonner'
 
+// ---- Data-sync budget ----------------------------------------------------
+// Every visible tab keeps a bounded slice of the database in memory and its
+// 15-second background poll fetches only the rows that CHANGED since the last
+// sync, not the whole history. Per-tab network load therefore stays flat as
+// the workspace's entry history grows — the difference between "7 phones on
+// the free plan" and constant 429s/lag.
+const ENTRIES_WINDOW_ADMIN = 1200    // admin's newest-entries window (~8 months for a 7-person team)
+const ENTRIES_WINDOW_WORKER = 300    // a worker's own newest-entries window (~14 months)
+const ENTRY_DELTA_LIMIT = 200        // max rows a "what changed since?" sync can return
+const ENTRY_PAGE_SIZE = 500          // rows per "load older" page
+const ENTRIES_MAX_WORKING_SET = 5000 // hard cap on entries held in memory per tab
+const NOTIF_WINDOW = 20              // notifications the bell dropdown shows
+const PAYMENT_WINDOW = 100           // payments the list shows (~years of history)
+const FULL_EVERY_TICKS = 20          // full entry re-sync every 5 min reconciles deletions
+const FOCUS_FULL_MIN_MS = 90_000     // a refocus re-loads the full window at most once per 90 s
+
+function sortEntriesDesc(rows: TimeEntry[]): TimeEntry[] {
+  return [...rows].sort((a, b) => b.start_time.localeCompare(a.start_time))
+}
+
+function oldestOf(rows: TimeEntry[]): string | null {
+  let min: string | null = null
+  for (const r of rows) if (min === null || r.start_time < min) min = r.start_time
+  return min
+}
+
 function pickBackend(): DataBackend {
   if (isSupabaseConfigured()) return supabaseBackend
   // Falling back to browser-local demo mode. If you expected Supabase (e.g. on a
@@ -56,6 +82,13 @@ interface StoreValue {
   payments: Payment[]
   unreadCount: number
   dataLoading: boolean
+  /** Fetch the next page of entries older than everything currently loaded
+   *  (for the Time Entries list and for reports over older ranges). Resolves
+   *  with how many rows were added and the new oldest loaded start_time
+   *  (null when there is nothing loaded). */
+  loadOlderEntries: () => Promise<{ added: number; oldest: string | null }>
+  /** start_time of the oldest entry currently loaded, or null. */
+  oldestEntryTime: string | null
 
   signIn: (email: string, password: string) => Promise<string | null>
   signOut: () => Promise<void>
@@ -123,11 +156,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [notifications, setNotifications] = useState<AppNotification[]>([])
   const [payments, setPayments] = useState<Payment[]>([])
   const [dataLoading, setDataLoading] = useState(false)
+  const [unreadCount, setUnreadCount] = useState(0)
   const dataVersion = useRef(0)
   // Suppress stacking background refreshes (see refreshData).
   const refreshInFlight = useRef(false)
   const userRef = useRef(user)
   useEffect(() => { userRef.current = user }, [user])
+  // Entry-sync state: `lastEntrySyncAt` anchors the delta syncs; the pages the
+  // user explicitly "loaded older" live in `olderEntries` and survive the
+  // background full syncs (those replace only the newest window).
+  const lastEntrySyncAt = useRef<string | null>(null)
+  const lastFullEntrySyncAt = useRef(0)
+  const olderEntries = useRef<Map<string, TimeEntry>>(new Map())
+  const entriesRef = useRef<TimeEntry[]>([])
+  useEffect(() => { entriesRef.current = entries }, [entries])
+  const loadOlderInFlight = useRef(false)
 
   const isAdmin = user?.role === 'admin'
 
@@ -145,28 +188,59 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // visibilitychange fire as a burst, and letting each of them fire the whole
   // query set multiplied database load for every open tab. Refreshes triggered
   // by the user's own actions always run.
-  const refreshData = useCallback(async (opts?: { background?: boolean; light?: boolean }) => {
+  const refreshData = useCallback(async (opts?: { background?: boolean; light?: boolean; entrySync?: 'delta' | 'full' }) => {
     const uid = userRef.current
     if (!uid) return
     if (opts?.background && refreshInFlight.current) return
     refreshInFlight.current = true
     const light = !!opts?.light
+    // 'full' re-loads the newest entries window (initial load, focus, user
+    // actions, periodic reconciliation); 'delta' fetches only rows created or
+    // updated since the last sync — a few hundred bytes most of the time.
+    const entrySync = opts?.entrySync ?? 'full'
+    const since = lastEntrySyncAt.current
+    const useDelta = entrySync === 'delta' && !!since
     const token = ++dataVersion.current
     setDataLoading(true)
     try {
-      const [w, e, s, at, n, p] = await Promise.all([
+      const windowSize = userRef.current?.role === 'worker' ? ENTRIES_WINDOW_WORKER : ENTRIES_WINDOW_ADMIN
+      // Captured BEFORE the query: rows updated after this instant are picked
+      // up by the next delta; duplicates are harmless (merged by id).
+      const syncTime = new Date().toISOString()
+      const [w, e, s, at, n, p, u] = await Promise.all([
         light ? skipped<Worker[]>() : backend.listWorkers(),
-        light ? skipped<TimeEntry[]>() : backend.listEntries(),
+        useDelta
+          ? backend.listEntries({ since, limit: ENTRY_DELTA_LIMIT })
+          : backend.listEntries({ limit: windowSize }),
         light ? skipped<Settings>() : backend.getSettings(),
         // One query covers both "everyone on the clock" and the signed-in
         // worker's own timer — getActiveTimer() re-runs this exact query.
         backend.listActiveTimers(),
-        backend.listNotifications(),
-        light ? skipped<Payment[]>() : backend.listPayments(),
+        backend.listNotifications(NOTIF_WINDOW),
+        light ? skipped<Payment[]>() : backend.listPayments(PAYMENT_WINDOW),
+        backend.countUnreadNotifications(),
       ])
       if (token !== dataVersion.current) return
       if (w.data) setWorkers(w.data)
-      if (e.data) setEntries(e.data)
+      if (e.data) {
+        if (useDelta) {
+          // Merge only the rows that changed since the last sync.
+          setEntries((prev) => {
+            const map = new Map(prev.map((r) => [r.id, r] as const))
+            for (const r of e.data!) map.set(r.id, r)
+            return sortEntriesDesc([...map.values()])
+          })
+        } else {
+          // Re-load the newest window; "load older" pages survive the swap.
+          const windowIds = new Set(e.data.map((r) => r.id))
+          for (const id of [...olderEntries.current.keys()]) {
+            if (windowIds.has(id)) olderEntries.current.delete(id)
+          }
+          setEntries(sortEntriesDesc([...e.data, ...olderEntries.current.values()]))
+          lastFullEntrySyncAt.current = Date.now()
+        }
+        lastEntrySyncAt.current = syncTime
+      }
       if (s.data) setSettings(s.data)
       // Clear on a clean empty result (someone clocked out elsewhere); keep the
       // previous value when the backend errored so a blip doesn't hide a timer.
@@ -180,6 +254,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
       if (n.data) setNotifications(n.data)
       if (p.data) setPayments(p.data)
+      if (u.data != null) setUnreadCount(u.data)
     } finally {
       refreshInFlight.current = false
       if (token === dataVersion.current) setDataLoading(false)
@@ -208,9 +283,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [backend])
 
-  // Load data when user changes
+  // Load data when user changes (a new sign-in starts from a fresh, full sync)
   useEffect(() => {
     if (user) {
+      olderEntries.current.clear()
+      lastEntrySyncAt.current = null
+      lastFullEntrySyncAt.current = 0
+      setUnreadCount(0)
       refreshData()
     } else {
       setWorkers([]); setEntries([]); setSettings(null); setActiveTimer(null); setActiveTimers([]); setNotifications([]); setPayments([])
@@ -226,17 +305,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // the backend restores a valid session (via its refresh token) whenever the
   // stored session briefly disappears.
   //
-  // Tick budget: every 15s tick fetches only timers + notifications (cheap,
-  // near-real-time). The heavy lists (workers, entries, payments, settings)
-  // refetch on every 4th tick (~once a minute) and on any full refresh
-  // triggered by the user's own actions or on returning to the tab. This keeps
-  // per-tab database load roughly constant as the workspace grows instead of
-  // scaling with the entry history.
+  // Tick budget: every 15s tick fetches timers + notifications (small,
+  // near-real-time) and a DELTA of entries (only rows changed since the last
+  // sync — usually nothing). Workers/payments/settings (all small lists)
+  // refetch on every 4th tick (~once a minute). The full entries window
+  // re-loads every 20th tick (~5 min, to reconcile entries deleted elsewhere)
+  // and on refocus — but at most once per 90 s, since focus/visibility events
+  // fire in bursts. Per-tab bandwidth is therefore flat as history grows.
   useEffect(() => {
     if (!user) return
     let stopped = false
     let ticks = 0
-    const tick = (full: boolean) => {
+    const tick = (focus: boolean) => {
       if (document.visibilityState === 'hidden' || stopped) return
       void (async () => {
         try {
@@ -245,7 +325,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           if (!userRef.current) return
           if (session.data) {
             if (session.data.id !== userRef.current.id) setUser(session.data)
-            void refreshData({ background: true, light: !full && ++ticks % 4 !== 0 })
+            ticks += 1
+            const due = Date.now() - lastFullEntrySyncAt.current > FOCUS_FULL_MIN_MS
+            const entrySync: 'delta' | 'full' =
+              ticks % FULL_EVERY_TICKS === 0 || (focus && due) ? 'full' : 'delta'
+            void refreshData({ background: true, light: !focus && ticks % 4 !== 0, entrySync })
             return
           }
           // No user data. Distinguish why:
@@ -262,7 +346,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             return
           }
           // Transient error — keep the session and let the next tick retry.
-          void refreshData({ background: true, light: true })
+          void refreshData({ background: true, light: true, entrySync: 'delta' })
         } catch (err) {
           // A thrown error must never be treated as a sign-out.
           console.warn('[work-tracker] session check failed; will retry:', err)
@@ -486,6 +570,31 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const markNotificationsRead = useCallback(async () => {
     await backend.markNotificationsRead()
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })))
+    setUnreadCount(0)
+  }, [backend])
+
+  /** Fetch the next page of entries older than the oldest one loaded. */
+  const loadOlderEntries = useCallback(async () => {
+    const current = entriesRef.current
+    if (current.length === 0 || loadOlderInFlight.current) return { added: 0, oldest: null }
+    const oldest = oldestOf(current)
+    if (!oldest) return { added: 0, oldest: null }
+    if (current.length >= ENTRIES_MAX_WORKING_SET) return { added: 0, oldest }
+    loadOlderInFlight.current = true
+    try {
+      const res = await backend.listOlderEntries(oldest, ENTRY_PAGE_SIZE)
+      if (res.error || !res.data) return { added: 0, oldest }
+      const known = new Set(current.map((r) => r.id))
+      const room = ENTRIES_MAX_WORKING_SET - current.length
+      const fresh = res.data.filter((r) => !known.has(r.id)).slice(0, room)
+      if (fresh.length === 0) return { added: 0, oldest }
+      for (const r of fresh) olderEntries.current.set(r.id, r)
+      const next = sortEntriesDesc([...current, ...fresh])
+      setEntries(next)
+      return { added: fresh.length, oldest: oldestOf(next) }
+    } finally {
+      loadOlderInFlight.current = false
+    }
   }, [backend])
 
   const listChatMessages = useCallback(async (limit?: number) => {
@@ -542,8 +651,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return true
   }, [backend, refreshData])
 
-  const unreadCount = notifications.filter((n) => !n.read).length
-
   const value: StoreValue = {
     backend,
     user,
@@ -558,6 +665,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     payments,
     unreadCount,
     dataLoading,
+    loadOlderEntries,
+    oldestEntryTime: oldestOf(entries),
     signIn,
     signOut,
     resetPassword,

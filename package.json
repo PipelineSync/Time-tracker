@@ -27,7 +27,8 @@
     "verify:payment-methods": "tsx scripts/verify-payment-methods-local.ts",
     "verify:session": "tsx scripts/verify-session-supabase.ts",
     "verify:chat-emoji": "tsx scripts/verify-chat-emoji-local.ts",
-    "verify": "npm run verify:deletion && npm run verify:active-workers && npm run verify:chat && npm run verify:chat-emoji && npm run verify:settle && npm run verify:session",
+    "verify:entries-sync": "tsx scripts/verify-entries-sync-local.ts",
+    "verify": "npm run verify:deletion && npm run verify:active-workers && npm run verify:chat && npm run verify:chat-emoji && npm run verify:settle && npm run verify:session && npm run verify:entries-sync",
     "tauri": "tauri"
   },
   "dependencies": {

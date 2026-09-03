@@ -40,6 +40,10 @@ export function EntriesPage() {
   const [search, setSearch] = useState('')
   const [sortKey, setSortKey] = useState<SortKey>('date')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
+  // Render at most this many rows at a time — the store may hold thousands of
+  // entries in memory, but a phone shouldn't render all of them as DOM.
+  const [visibleCount, setVisibleCount] = useState(200)
+  const PAGE_RENDER_STEP = 200
 
   const currency = settings?.currency || 'USD'
 
@@ -123,6 +127,13 @@ export function EntriesPage() {
     })
     return sorted
   }, [entries, workerFilter, projectFilter, settleFilter, dateFilter, fromDate, toDate, search, sortKey, sortDir]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // A new filter means a new list — start it at the first page again.
+  useEffect(() => {
+    setVisibleCount(200)
+  }, [workerFilter, projectFilter, settleFilter, dateFilter, search, fromDate, toDate, sortKey, sortDir])
+
+  const visible = filtered.slice(0, visibleCount)
 
   const totals = useMemo(() => {
     let min = 0
@@ -321,7 +332,7 @@ export function EntriesPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {filtered.map((e) => (
+                  {visible.map((e) => (
                     <tr key={e.id} className="hover:bg-muted/40"><TableRow e={e} /></tr>
                   ))}
                 </tbody>
@@ -331,7 +342,7 @@ export function EntriesPage() {
 
           {/* Mobile cards */}
           <div className="space-y-3 md:hidden">
-            {filtered.map((e) => (
+            {visible.map((e) => (
               <Card key={e.id}>
                 <CardContent className="p-4">
                   <div className="flex items-start justify-between">
@@ -369,6 +380,15 @@ export function EntriesPage() {
               </Card>
             ))}
           </div>
+
+          {/* Only the newest page is rendered; older rows stay in memory. */}
+          {visible.length < filtered.length && (
+            <div className="flex justify-center">
+              <Button variant="outline" size="sm" onClick={() => setVisibleCount((c) => c + PAGE_RENDER_STEP)}>
+                Show more ({filtered.length - visible.length} older entries)
+              </Button>
+            </div>
+          )}
         </>
       )}
 

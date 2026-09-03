@@ -609,14 +609,29 @@ export const localBackend: DataBackend = {
     return { data: null, error: null }
   },
 
-  async listEntries() {
+  async listEntries(opts) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
-    if (c.user.role === 'worker') {
-      const mine = c.data.entries.filter((e) => e.worker_id === c.user.workerId)
-      return { data: [...mine].sort((a, b) => b.start_time.localeCompare(a.start_time)), error: null }
+    let rows = c.user.role === 'worker'
+      ? c.data.entries.filter((e) => e.worker_id === c.user.workerId)
+      : c.data.entries
+    // Incremental sync: rows created or updated since the last sync.
+    if (opts?.since) {
+      const since = opts.since
+      rows = rows.filter((e) => e.created_at >= since || e.updated_at >= since)
     }
-    return { data: [...c.data.entries].sort((a, b) => b.start_time.localeCompare(a.start_time)), error: null }
+    rows = [...rows].sort((a, b) => b.start_time.localeCompare(a.start_time))
+    if (opts?.limit) rows = rows.slice(0, opts.limit)
+    return { data: rows, error: null }
+  },
+
+  async listOlderEntries(before, limit = 500) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    let rows = c.data.entries.filter((e) => e.start_time <= before)
+    if (c.user.role === 'worker') rows = rows.filter((e) => e.worker_id === c.user.workerId)
+    rows = [...rows].sort((a, b) => b.start_time.localeCompare(a.start_time))
+    return { data: rows.slice(0, limit), error: null }
   },
 
   async createEntry(input) {
@@ -1009,13 +1024,19 @@ export const localBackend: DataBackend = {
     return { data: reactionsForMessage(c.data, messageId), error: null }
   },
 
-  async listNotifications() {
+  async listNotifications(limit) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
     const mine = c.data.notifications
       .filter((n) => n.user_id === c.user.id)
       .sort((a, b) => b.created_at.localeCompare(a.created_at))
-    return { data: mine, error: null }
+    return { data: limit ? mine.slice(0, limit) : mine, error: null }
+  },
+
+  async countUnreadNotifications() {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    return { data: c.data.notifications.filter((n) => n.user_id === c.user.id && !n.read).length, error: null }
   },
 
   async markNotificationsRead() {
@@ -1028,14 +1049,14 @@ export const localBackend: DataBackend = {
     return { data: null, error: null }
   },
 
-  async listPayments() {
+  async listPayments(limit) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
-    if (c.user.role === 'worker') {
-      const mine = c.data.payments.filter((p) => p.worker_id === c.user.workerId)
-      return { data: [...mine].sort((a, b) => b.created_at.localeCompare(a.created_at)), error: null }
-    }
-    return { data: [...c.data.payments].sort((a, b) => b.created_at.localeCompare(a.created_at)), error: null }
+    let rows = c.user.role === 'worker'
+      ? c.data.payments.filter((p) => p.worker_id === c.user.workerId)
+      : c.data.payments
+    rows = [...rows].sort((a, b) => b.created_at.localeCompare(a.created_at))
+    return { data: limit ? rows.slice(0, limit) : rows, error: null }
   },
 
   async settleWorker(workerId, note) {

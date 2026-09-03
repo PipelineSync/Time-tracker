@@ -21,11 +21,34 @@ const COLORS = ['#3b82f6', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4'
 type Period = 'today' | 'week' | 'month' | 'custom'
 
 export function ReportsPage() {
-  const { entries, workers, settings, dataLoading } = useStore()
+  const { entries, workers, settings, dataLoading, loadOlderEntries, oldestEntryTime } = useStore()
   const currency = settings?.currency || 'USD'
   const [period, setPeriod] = useState<Period>('week')
   const [fromDate, setFromDate] = useState('')
   const [toDate, setToDate] = useState('')
+  const [loadingOlder, setLoadingOlder] = useState(false)
+
+  // The store keeps a bounded newest-entries window in memory; a custom range
+  // that starts before the oldest loaded entry needs older pages pulled in.
+  const rangeStartsEarlier =
+    period === 'custom' && !!fromDate && !!oldestEntryTime &&
+    new Date(`${fromDate}T00:00:00`).getTime() < new Date(oldestEntryTime).getTime()
+
+  async function loadOlderForRange() {
+    if (!fromDate) return
+    setLoadingOlder(true)
+    try {
+      const target = `${fromDate}T00:00:00`
+      // Pull pages until the range start is covered or the backend runs out.
+      for (let i = 0; i < 10; i++) {
+        const { added, oldest } = await loadOlderEntries()
+        if (added === 0 || !oldest) break
+        if (new Date(oldest).getTime() <= new Date(target).getTime()) break
+      }
+    } finally {
+      setLoadingOlder(false)
+    }
+  }
 
   const range = useMemo(() => dateRangeFor(period, fromDate || undefined, toDate || undefined), [period, fromDate, toDate])
   const filtered = useMemo(() => filterEntriesInRange(entries, range.from, range.to), [entries, range])
@@ -165,6 +188,16 @@ export function ReportsPage() {
               </>
             )}
           </div>
+          {rangeStartsEarlier && oldestEntryTime && (
+            <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm">
+              <span className="text-amber-700 dark:text-amber-400">
+                Only entries from {new Date(oldestEntryTime).toLocaleDateString()} are loaded — totals would be incomplete.
+              </span>
+              <Button size="sm" variant="outline" onClick={loadOlderForRange} disabled={loadingOlder}>
+                {loadingOlder ? 'Loading…' : 'Load older entries'}
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
 

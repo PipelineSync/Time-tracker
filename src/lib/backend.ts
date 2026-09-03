@@ -71,7 +71,20 @@ export interface DataBackend {
   deleteWorker(id: string): Promise<BackendResult<null>>
   getWorkerLogin(id: string): Promise<BackendResult<{ email: string | null; password: string | null }>>
 
-  listEntries(): Promise<BackendResult<TimeEntry[]>>
+  /**
+   * List time entries, newest first.
+   * - `limit` bounds how many rows come back (the app polls with a bounded
+   *   window so a tab's bandwidth stays flat as history grows).
+   * - `since` returns only entries created or updated at/after that instant
+   *   (the incremental "what changed?" sync between full loads).
+   */
+  listEntries(opts?: { since?: string; limit?: number }): Promise<BackendResult<TimeEntry[]>>
+  /**
+   * A page of entries strictly older than `before` (the oldest start_time the
+   * caller already has), newest first — "load older" pagination for the
+   * entries list and for reports over older ranges.
+   */
+  listOlderEntries(before: string, limit?: number): Promise<BackendResult<TimeEntry[]>>
   createEntry(input: Omit<TimeEntry, 'id' | 'created_at' | 'updated_at'>): Promise<BackendResult<TimeEntry>>
   updateEntry(id: string, patch: Partial<TimeEntry>): Promise<BackendResult<TimeEntry>>
   deleteEntry(id: string): Promise<BackendResult<null>>
@@ -119,11 +132,15 @@ export interface DataBackend {
   toggleChatReaction(messageId: string, emoji: string): Promise<BackendResult<ChatReaction[]>>
 
   // Notifications
-  listNotifications(): Promise<BackendResult<AppNotification[]>>
+  /** The most recent notifications for the signed-in user (`limit` caps the
+   *  dropdown; the unread badge uses countUnreadNotifications instead). */
+  listNotifications(limit?: number): Promise<BackendResult<AppNotification[]>>
+  /** How many of the signed-in user's notifications are still unread. */
+  countUnreadNotifications(): Promise<BackendResult<number>>
   markNotificationsRead(): Promise<BackendResult<null>>
 
   // Payments / settlements
-  listPayments(): Promise<BackendResult<Payment[]>>
+  listPayments(limit?: number): Promise<BackendResult<Payment[]>>
   settleWorker(workerId: string, note?: string): Promise<BackendResult<Payment>>
   /**
    * Change a payment's status. When marking it `paid`, `paymentMethod` records
