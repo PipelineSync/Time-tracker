@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Work Tracker — Options</title>
+  </head>
+  <body>
+    <main class="page">
+      <header class="page-header">
+        <img src="./icons/icon-48.png" alt="" width="40" height="40" />
+        <div>
+          <h1>Work Tracker</h1>
+          <p>Clock in, break and clock out from the toolbar.</p>
+        </div>
+      </header>
+
+      <section class="card">
+        <h2>1. Connect your workspace</h2>
+        <p class="note">
+          In Supabase, open <strong>Project Settings → API</strong> and copy the <em>Project URL</em> and the
+          <em>publishable key</em> (<code>sb_publishable_…</code>, or the older <code>anon public</code> key). Paste both
+          here and click <strong>Save &amp; test</strong>.
+        </p>
+
+        <label class="field">
+          <span>Supabase Project URL</span>
+          <input id="cfg-url" type="url" placeholder="https://your-project.supabase.co" spellcheck="false" />
+        </label>
+
+        <label class="field">
+          <span>Publishable (anon) key</span>
+          <input id="cfg-key" type="password" placeholder="sb_publishable_…" spellcheck="false" />
+        </label>
+
+        <label class="check">
+          <input id="cfg-reveal" type="checkbox" />
+          <span>Show key</span>
+        </label>
+
+        <div class="row">
+          <button class="btn primary" id="btn-save">Save &amp; test</button>
+          <button class="btn" id="btn-disconnect">Disconnect</button>
+        </div>
+
+        <div class="banner" id="cfg-status" hidden></div>
+      </section>
+
+      <section class="card">
+        <h2>2. Sign in</h2>
+        <p class="note">
+          Open the extension from the toolbar and sign in with the email and password your administrator created for you.
+          The session is remembered, so you only do this once.
+        </p>
+        <div class="signin-state" id="signin-state">Checking…</div>
+        <div class="row">
+          <button class="btn" id="btn-signout" hidden>Sign out</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>About</h2>
+        <ul class="list">
+          <li>Clock in, start/end a break and clock out — nothing else, and no time tracking outside a shift.</li>
+          <li>
+            Punches are written straight to the same Supabase tables as the web app. Your administrator sees them live in
+            the dashboard, Time Entries and Reports, and gets the usual clock-in / break / clock-out notifications.
+          </li>
+          <li>Hours are counted server-side from the clock-in timestamp, so closing the popup never loses time.</li>
+        </ul>
+        <p class="note warning">
+          <strong>Never paste the service-role key here.</strong> It bypasses Row Level Security. Only the publishable
+          (anon) key belongs in a browser extension.
+        </p>
+      </section>
+    </main>
+
+    <script type="module" src="./src/options/main.ts"></script>
+  </body>
+</html>

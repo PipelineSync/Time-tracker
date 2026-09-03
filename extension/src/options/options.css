@@ -1,0 +1,109 @@
+
+
+/* Options page: a centred, readable column. */
+
+body {
+  padding: 32px 20px 56px;
+}
+
+.page {
+  max-width: 620px;
+  margin: 0 auto;
+}
+
+.page-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 22px;
+}
+
+.page-header img {
+  border-radius: 10px;
+}
+
+.page-header h1 {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 680;
+  letter-spacing: -0.015em;
+}
+
+.page-header p {
+  margin: 2px 0 0;
+  color: var(--fg-muted);
+  font-size: 13px;
+}
+
+.card {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 18px;
+  margin-bottom: 16px;
+  background: var(--bg-sub);
+}
+
+.card h2 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 660;
+}
+
+.note {
+  margin: 0 0 14px;
+  color: var(--fg-muted);
+  font-size: 13px;
+}
+
+.note.warning {
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 1px 4px;
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--fg-muted);
+  margin: -4px 0 14px;
+  cursor: pointer;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.signin-state {
+  font-size: 13px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  margin-bottom: 12px;
+}
+
+.list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--fg-muted);
+  font-size: 13px;
+}
+
+.list li {
+  margin-bottom: 6px;
+}

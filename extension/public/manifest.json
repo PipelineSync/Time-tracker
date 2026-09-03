@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Work Tracker — Clock In / Out",
+  "version": "1.0.0",
+  "description": "Clock in, take a break and clock out from any tab. Punches go straight to your Work Tracker workspace and the admin dashboard.",
+  "minimum_chrome_version": "102",
+  "action": {
+    "default_title": "Work Tracker — Clock In / Out",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png",
+      "128": "icons/icon-128.png"
+    }
+  },
+  "options_page": "options.html",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "permissions": ["storage"],
+  "optional_host_permissions": ["https://*/*"]
+}

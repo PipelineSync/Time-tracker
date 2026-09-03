@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Work Tracker — Clock In / Out</title>
+  </head>
+  <body>
+    <div class="app">
+      <header class="app-header">
+        <img class="brand" src="./icons/icon-32.png" alt="" width="28" height="28" />
+        <div class="brand-text">
+          <div class="brand-title" id="brand-title">Work Tracker</div>
+          <div class="brand-sub" id="brand-sub">Not signed in</div>
+        </div>
+        <button class="icon-btn" id="btn-signout" title="Sign out" hidden>
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <path
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"
+            />
+          </svg>
+        </button>
+      </header>
+
+      <div class="banner" id="banner" role="status" hidden></div>
+
+      <!-- 1. Not connected yet -->
+      <section class="view" id="view-setup" hidden>
+        <div class="empty">
+          <h2>Connect your workspace</h2>
+          <p>
+            Add your Supabase Project URL and publishable key once, then sign in with the email and password your
+            administrator gave you.
+          </p>
+          <button class="btn primary block" id="btn-open-options">Open options</button>
+        </div>
+      </section>
+
+      <!-- 2. Sign in -->
+      <section class="view" id="view-login" hidden>
+        <form id="login-form" autocomplete="on">
+          <label class="field">
+            <span>Email</span>
+            <input id="login-email" type="email" autocomplete="username" required placeholder="you@example.com" />
+          </label>
+          <label class="field">
+            <span>Password</span>
+            <input id="login-password" type="password" autocomplete="current-password" required placeholder="••••••••" />
+          </label>
+          <button class="btn primary block" type="submit" id="login-submit">Sign in</button>
+          <p class="hint">Use the same login you use in the Work Tracker web app.</p>
+        </form>
+      </section>
+
+      <!-- 3. The clock -->
+      <section class="view" id="view-clock" hidden>
+        <div class="status" id="status-pill" data-state="out">
+          <span class="dot"></span>
+          <span id="status-text">Clocked out</span>
+        </div>
+
+        <div class="timer" id="timer">00:00:00</div>
+        <div class="meta" id="timer-meta"></div>
+
+        <div class="actions" id="actions-idle">
+          <button class="btn primary block" id="btn-clock-in">Clock in</button>
+          <button class="btn ghost block" id="btn-toggle-details" aria-expanded="false">
+            Add project or note <span class="chev">▾</span>
+          </button>
+          <div class="details" id="clockin-details" hidden>
+            <label class="field">
+              <span class="sr-only">Project</span>
+              <input id="clockin-project" type="text" placeholder="Project / site (optional)" maxlength="120" />
+            </label>
+            <label class="field">
+              <span class="sr-only">Note</span>
+              <textarea id="clockin-notes" rows="2" placeholder="Note (optional)" maxlength="500"></textarea>
+            </label>
+          </div>
+        </div>
+
+        <div class="actions" id="actions-running" hidden>
+          <button class="btn block" id="btn-break">Start break</button>
+          <button class="btn danger block" id="btn-clock-out">Clock out</button>
+        </div>
+
+        <div class="totals">
+          <div class="total">
+            <span class="label">Today</span>
+            <span class="value" id="today-time">0h 0m</span>
+          </div>
+          <div class="total">
+            <span class="label">Earned today</span>
+            <span class="value" id="today-money">—</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- 4. Confirm clock out -->
+      <section class="view" id="view-confirm" hidden>
+        <h2 class="confirm-title">Clock out?</h2>
+        <div class="summary" id="confirm-summary"></div>
+        <label class="field">
+          <span>Note for the admin <em>(optional)</em></span>
+          <textarea id="confirm-note" rows="3" placeholder="Anything your administrator should know about this shift" maxlength="500"></textarea>
+        </label>
+        <div class="actions row">
+          <button class="btn block" id="btn-confirm-cancel">Back</button>
+          <button class="btn primary block" id="btn-confirm-clockout">Clock out</button>
+        </div>
+      </section>
+
+      <footer class="app-footer">
+        <button class="link" id="btn-options">Options</button>
+        <span class="rate" id="footer-rate"></span>
+      </footer>
+    </div>
+
+    <div class="toast" id="toast" hidden></div>
+    <script type="module" src="./src/popup/main.ts"></script>
+  </body>
+</html>

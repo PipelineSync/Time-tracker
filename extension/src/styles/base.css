@@ -1,0 +1,258 @@
+/* Shared tokens + controls for the popup and the options page. */
+
+:root {
+  --bg: #ffffff;
+  --bg-sub: #f5f6f8;
+  --fg: #101828;
+  --fg-muted: #667085;
+  --border: #e4e7ec;
+  --primary: #1f7a4d;
+  --primary-fg: #ffffff;
+  --primary-hover: #1a6741;
+  --danger: #b42318;
+  --danger-bg: #fef3f2;
+  --warn-bg: #fffaeb;
+  --warn-fg: #b54708;
+  --error-bg: #fef3f2;
+  --error-fg: #b42318;
+  --ok: #12b76a;
+  --amber: #f79009;
+  --shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14161a;
+    --bg-sub: #1c1f24;
+    --fg: #f2f4f7;
+    --fg-muted: #98a2b3;
+    --border: #2b3038;
+    --primary: #2f9e68;
+    --primary-hover: #37b075;
+    --danger: #f97066;
+    --danger-bg: #2a1a1a;
+    --warn-bg: #2a2113;
+    --warn-fg: #fdb022;
+    --error-bg: #2a1a1a;
+    --error-fg: #fda29b;
+    --shadow: none;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------- form controls ---------- */
+.field {
+  display: block;
+  margin-bottom: 10px;
+}
+
+.field > span {
+  display: block;
+  font-size: 12px;
+  font-weight: 550;
+  color: var(--fg-muted);
+  margin-bottom: 4px;
+}
+
+.field em {
+  font-style: normal;
+  font-weight: 400;
+  opacity: 0.75;
+}
+
+input[type='email'],
+input[type='password'],
+input[type='text'],
+input[type='url'],
+textarea {
+  width: 100%;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  outline: none;
+  resize: vertical;
+}
+
+input:focus,
+textarea:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 18%, transparent);
+}
+
+/* ---------- buttons ---------- */
+.btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 9px 14px;
+  font: inherit;
+  font-weight: 600;
+  font-size: 13.5px;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+  transition: background 0.12s ease, border-color 0.12s ease, opacity 0.12s ease;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--bg-sub);
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.btn.block {
+  width: 100%;
+}
+
+.btn.primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--primary-fg);
+  padding: 11px 14px;
+  font-size: 14.5px;
+}
+
+.btn.primary:hover:not(:disabled) {
+  background: var(--primary-hover);
+  border-color: var(--primary-hover);
+}
+
+.btn.danger {
+  color: var(--danger);
+  background: var(--danger-bg);
+  border-color: color-mix(in srgb, var(--danger) 25%, transparent);
+}
+
+.btn.ghost {
+  box-shadow: none;
+  background: transparent;
+  border-color: transparent;
+  color: var(--fg-muted);
+  font-weight: 550;
+  font-size: 12.5px;
+  padding: 6px;
+}
+
+.btn.ghost:hover:not(:disabled) {
+  background: var(--bg-sub);
+  color: var(--fg);
+}
+
+.link {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.link:hover {
+  color: var(--fg);
+}
+
+/* ---------- banner ---------- */
+.banner {
+  border-radius: 9px;
+  padding: 8px 10px;
+  font-size: 12.5px;
+  background: var(--error-bg);
+  color: var(--error-fg);
+  border: 1px solid transparent;
+  word-break: break-word;
+}
+
+.banner[data-tone='warn'] {
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+}
+
+.banner[data-tone='info'] {
+  background: var(--bg-sub);
+  color: var(--fg-muted);
+}
+
+.banner[data-tone='success'] {
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+  color: var(--primary);
+}
+
+/* ---------- toast ---------- */
+.toast {
+  position: fixed;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  background: #101828;
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 550;
+  padding: 9px 12px;
+  border-radius: 9px;
+  box-shadow: 0 6px 20px rgba(16, 24, 40, 0.22);
+  z-index: 10;
+}
+
+.toast[data-tone='error'] {
+  background: var(--danger);
+}
+
+.toast[data-tone='success'] {
+  background: var(--primary);
+}
+
+@media (prefers-color-scheme: dark) {
+  .toast {
+    background: #f2f4f7;
+    color: #101828;
+  }
+}
+
+/* ---------- utilities ---------- */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+}

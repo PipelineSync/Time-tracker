@@ -72,6 +72,26 @@ The app is built so a workspace of several users on phones **and** laptops, all 
 
 ---
 
+## Chrome extension for workers
+
+Workers do not have to open the app to punch in. There is a **Chrome extension** in
+[`extension/`](extension/README.md) that does nothing but **clock in**, **start/end a break** and
+**clock out** from the toolbar — and writes straight to this same Supabase database, so the
+"On the clock now" panel, the notification bell, Time Entries and Reports all update live.
+
+- **No schema changes needed.** The RLS policies in `supabase/schema.sql` already let a signed-in
+  worker insert their own `active_timers` row, update it for breaks, insert their own `time_entries`
+  and notify the workspace owner.
+- **Worker accounts only.** Signing in with the admin account is refused — the admin adds time
+  through manual entries.
+- **Each install is pointed at your workspace once**, from the extension's Options page (Supabase
+  Project URL + publishable key). No rebuild per workspace, and no service-role key anywhere.
+
+Build it with `cd extension && npm install && npm run build`, then **Load unpacked** → `extension/dist`.
+Setup, security notes and troubleshooting are in **[extension/README.md](extension/README.md)**.
+
+---
+
 ## 1. Install dependencies
 
 ```bash
@@ -268,6 +288,9 @@ time-tracker/
 │  ├─ pages/                    # Dashboard, Tracker, Entries, Workers, Reports, Chat, Settings, Auth
 │  ├─ App.tsx                   # Routing + auth gate (HashRouter inside native shells)
 │  └─ main.tsx                  # mounts app, registers the PWA service worker (browser shells only)
+├─ extension/                   # Chrome extension (worker clock in / break / clock out) — see extension/README.md
+│  ├─ src/lib/api.ts            # the only place the extension writes to Supabase
+│  └─ scripts/                  # mock Supabase + verifiers (npm run verify, verify:build, verify:chrome)
 ├─ ios/                         # Capacitor iOS project (Xcode) — App Store / TestFlight
 ├─ android/                     # Capacitor Android project (Gradle) — Play Store
 ├─ src-tauri/                   # Tauri desktop shell — Windows / macOS / Linux installers

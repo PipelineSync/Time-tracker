@@ -37,3 +37,8 @@ ios/App/App/Generated.xcconfig.bak
 # --- Desktop shell (Tauri) ----------------------------------------------
 src-tauri/target/
 src-tauri/gen/schemas/
+
+# --- Chrome extension (extension/) ----------------------------------------
+# Build output (extension/dist) is already covered by `dist/` above.
+extension/releases/
+extension/screenshots/
