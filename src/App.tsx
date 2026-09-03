@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react'
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, HashRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useStore } from '@/lib/store'
+import { isNativeShell } from '@/lib/platform'
 import { AppLayout } from '@/components/AppLayout'
 import { AuthPage } from '@/pages/AuthPage'
 import { FullScreenLoader } from '@/components/FullScreenLoader'
@@ -29,8 +30,14 @@ export function App() {
     return <AuthPage />
   }
 
+  // Native shells (Capacitor WebView, Tauri webview) resolve URLs against the
+  // packaged bundle: "/entries" is not a real file there, so a reload or a
+  // deep link would 404 under BrowserRouter. Hash routing keeps every route
+  // resolvable in those shells while the hosted web app keeps clean URLs.
+  const Router = isNativeShell() ? HashRouter : BrowserRouter
+
   return (
-    <BrowserRouter>
+    <Router>
       <Suspense fallback={<FullScreenLoader />}>
         <Routes>
         <Route element={<AppLayout />}>
@@ -64,6 +71,6 @@ export function App() {
         </Route>
       </Routes>
       </Suspense>
-    </BrowserRouter>
+    </Router>
   )
 }

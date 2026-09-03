@@ -7,6 +7,19 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "--- apps: ship the same codebase as phone + desktop apps ---": "",
+    "apps:web:build": "vite build",
+    "apps:sync": "npm run build && cap sync",
+    "apps:ios:open": "cap open ios",
+    "apps:ios:run": "cap run ios",
+    "apps:android:open": "cap open android",
+    "apps:android:run": "cap run android",
+    "apps:android:apk": "cd android && ./gradlew assembleDebug",
+    "apps:android:aab": "cd android && ./gradlew bundleRelease",
+    "apps:desktop:dev": "tauri dev",
+    "apps:desktop:build": "tauri build",
+    "apps:icons": "tauri icon assets/icon-only.png -o src-tauri/icons && ./scripts/apps/generate-native-assets.sh",
     "verify:deletion": "tsx scripts/verify-delete-local.ts && tsx scripts/verify-delete-supabase.ts",
     "verify:active-workers": "tsx scripts/verify-active-workers-local.ts",
     "verify:chat": "tsx scripts/verify-chat-local.ts && tsx scripts/verify-chat-supabase.ts",
@@ -16,6 +29,11 @@
     "verify": "npm run verify:deletion && npm run verify:active-workers && npm run verify:chat && npm run verify:settle && npm run verify:session"
   },
   "dependencies": {
+    "@capacitor/app": "^8.1.1",
+    "@capacitor/core": "^8.5.1",
+    "@capacitor/keyboard": "^8.0.5",
+    "@capacitor/splash-screen": "^8.0.2",
+    "@capacitor/status-bar": "^8.0.3",
     "@radix-ui/react-dialog": "^1.1.2",
     "@radix-ui/react-dropdown-menu": "^2.1.2",
     "@radix-ui/react-label": "^2.1.0",
@@ -24,6 +42,7 @@
     "@radix-ui/react-switch": "^1.1.1",
     "@radix-ui/react-tabs": "^1.1.1",
     "@supabase/supabase-js": "^2.45.4",
+    "@tauri-apps/api": "^2.11.1",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
     "date-fns": "^3.6.0",
@@ -36,6 +55,10 @@
     "tailwind-merge": "^2.5.4"
   },
   "devDependencies": {
+    "@capacitor/android": "^8.5.1",
+    "@capacitor/cli": "^8.5.1",
+    "@capacitor/ios": "^8.5.1",
+    "@tauri-apps/cli": "^2.11.4",
     "@types/node": "^26.4.0",
     "@types/react": "^18.3.5",
     "@types/react-dom": "^18.3.0",
@@ -46,6 +69,7 @@
     "tailwindcss-animate": "^1.0.7",
     "tsx": "^4.23.13",
     "typescript": "^5.5.4",
-    "vite": "^5.4.8"
+    "vite": "^5.4.8",
+    "vite-plugin-pwa": "^1.3.0"
   }
 }

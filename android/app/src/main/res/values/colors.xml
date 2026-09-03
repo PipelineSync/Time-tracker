@@ -1,0 +1,13 @@
+<?xml version='1.0' encoding='utf-8'?>
+<!--
+  PipelineSync brand colours for the native Android shell.
+  App-module resources override the Capacitor library defaults.
+    Pipeline Blue  #0868D9  (primary controls)
+    Core Navy      #06245B  (status bar / chrome)
+    Bright Aqua    #36B7C9  (accent)
+-->
+<resources>
+    <color name="colorPrimary">#0868D9</color>
+    <color name="colorPrimaryDark">#06245B</color>
+    <color name="colorAccent">#36B7C9</color>
+</resources>

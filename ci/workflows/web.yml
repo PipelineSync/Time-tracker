@@ -1,0 +1,61 @@
+name: Web app (installable PWA)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: web-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Typecheck, build & package the PWA
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build (PWA: manifest + service worker + precache)
+        env:
+          # Baked in at build time. Without them the artifact runs in demo
+          # mode (browser-local storage) — still fully installable.
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
+        run: npm run build
+
+      - name: Assert PWA artifacts exist
+        run: |
+          test -f dist/manifest.webmanifest
+          test -f dist/sw.js
+          test -f dist/pwa/pwa-512.png
+          echo "PWA artifacts OK"
+
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: dist
+          retention-days: 14
+
+      # Optional: publish straight to Netlify. Set the NETLIFY_AUTH_TOKEN
+      # secret + NETLIFY_SITE_ID variable and pushes to main deploy; without
+      # them this step is skipped and Netlify's own Git integration applies.
+      - name: Deploy to Netlify (production)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.NETLIFY_AUTH_TOKEN != '' && vars.NETLIFY_SITE_ID != ''
+        env:
+          NETLIFY_SITE_ID: ${{ vars.NETLIFY_SITE_ID }}
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+        run: npx --yes netlify-cli deploy --dir=dist --prod --site "$NETLIFY_SITE_ID" --auth "$NETLIFY_AUTH_TOKEN"
