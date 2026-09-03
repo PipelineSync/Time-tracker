@@ -194,13 +194,22 @@ running window instead of opening another one
 
 ## 4. CI — signed builds without a build machine
 
-Three workflows ship everything on GitHub-hosted runners:
+Three workflows ship everything on GitHub-hosted runners. They live in
+**`ci/workflows/`** in this repository: the bot that maintains the repo is not
+permitted to create files under `.github/workflows/` (GitHub gates that path
+behind the *Workflows* repository permission). Activate them once from an
+account that has that permission:
+
+```bash
+./scripts/apps/enable-ci.sh     # copies ci/workflows/*.yml → .github/workflows/
+git add .github/workflows && git commit -m "Enable release workflows" && git push
+```
 
 | Workflow | Trigger | Produces |
 |---|---|---|
-| `.github/workflows/web.yml` | push to `main`, PRs, manual | `web-dist` artifact; optional Netlify deploy |
-| `.github/workflows/mobile.yml` | tag `v*`, manual | Android `.apk`/`.aab`; iOS `.xcarchive` (+ `.ipa` when signing secrets exist) |
-| `.github/workflows/desktop.yml` | tag `v*`, manual | draft GitHub Release with `.msi` `.exe` `.dmg` `.app.tar.gz` `.AppImage` `.deb` |
+| `ci/workflows/web.yml` | push to `main`, PRs, manual | `web-dist` artifact; optional Netlify deploy |
+| `ci/workflows/mobile.yml` | tag `v*`, manual | Android `.apk`/`.aab`; iOS `.xcarchive` (+ `.ipa` when signing secrets exist) |
+| `ci/workflows/desktop.yml` | tag `v*`, manual | draft GitHub Release with `.msi` `.exe` `.dmg` `.app.tar.gz` `.AppImage` `.deb` |
 
 Release flow:
 
