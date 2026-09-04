@@ -8,7 +8,7 @@ It writes to the **same Supabase database as the web app**, so the moment a work
 - the admin gets the usual **clock-in / break / clock-out notification** in the bell,
 - the finished shift appears in **Time Entries** and **Reports** like any other entry.
 
-Nothing needs to be added to your database — the existing tables and Row Level Security policies already allow it.
+Nothing needs to be added to your database — the existing tables and Row Level Security policies already allow it. If your database is older than those policies, run [`supabase/chrome-extension.sql`](../supabase/chrome-extension.sql) in the SQL editor: it checks every requirement and repairs whatever is missing.
 
 ---
 
@@ -147,4 +147,4 @@ extension/
 | *Wrong email or password* | Same credentials as the web app. The admin can reset the password from the Workers page. |
 | *Your account is not linked to a worker profile* | The admin deleted and recreated the worker record; ask them to re-link the login. |
 | *The Chrome extension is for worker accounts* | Signed in with the admin account — use the web app instead. |
-| *Your workspace rejected that* | The database is missing the policies; re-run `supabase/schema.sql` in the SQL editor. |
+| *Your workspace rejected that* | The database is missing a policy or the break notification types. Run [`supabase/chrome-extension.sql`](../supabase/chrome-extension.sql) in the SQL editor — it reports what is missing and fixes it. |

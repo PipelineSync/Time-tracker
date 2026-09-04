@@ -81,7 +81,9 @@ Workers do not have to open the app to punch in. There is a **Chrome extension**
 
 - **No schema changes needed.** The RLS policies in `supabase/schema.sql` already let a signed-in
   worker insert their own `active_timers` row, update it for breaks, insert their own `time_entries`
-  and notify the workspace owner.
+  and notify the workspace owner. For databases created before those policies existed,
+  [`supabase/chrome-extension.sql`](supabase/chrome-extension.sql) checks every requirement and
+  repairs whatever is missing.
 - **Worker accounts only.** Signing in with the admin account is refused — the admin adds time
   through manual entries.
 - **Each install is pointed at your workspace once**, from the extension's Options page (Supabase
