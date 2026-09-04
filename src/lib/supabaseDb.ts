@@ -612,14 +612,24 @@ export const supabaseBackend: DataBackend = {
     const columns = 'id, name, email, hourly_rate, status, position, payment_methods, created_at, updated_at'
     const stripImages = (rows: Worker[]): Worker[] =>
       normalizeWorkers(rows).map((w) => ({ ...w, avatar_url: null, qr_code_url: null }))
-    if (me.data!.role === 'worker' && me.data!.workerId) {
-      const { data, error } = await client().from('workers').select(columns).eq('id', me.data!.workerId)
-      if (error) return fail(error.message)
-      return ok(stripImages((data as Worker[]) ?? []))
+    const fetchRows = async () => {
+      if (me.data!.role === 'worker' && me.data!.workerId) {
+        return client().from('workers').select(columns).eq('id', me.data!.workerId)
+      }
+      return client().from('workers').select(columns).order('name')
     }
-    const { data, error } = await client().from('workers').select(columns).order('name')
-    if (error) return fail(error.message)
-    return ok(stripImages((data as Worker[]) ?? []))
+    const { data, error } = await fetchRows()
+    if (!error) return ok(stripImages((data as Worker[]) ?? []))
+    // A database from before the position/payment-methods columns existed:
+    // fall back to the original column set instead of breaking the worker list.
+    if (isMissingColumn(error as { code?: string; message?: string }, 'position') ||
+        isMissingColumn(error as { code?: string; message?: string }, 'payment_methods')) {
+      console.warn('[workers] newer worker columns are missing — run the supabase migrations to enable positions and payment methods.')
+      const legacy = await client().from('workers').select('id, name, email, hourly_rate, status, created_at, updated_at')
+      if (legacy.error) return fail(legacy.error.message)
+      return ok(stripImages((legacy.data as Worker[]) ?? []))
+    }
+    return fail(error.message)
   },
 
   async listWorkerAvatars() {
