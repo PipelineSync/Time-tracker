@@ -46,6 +46,7 @@ const store = new Map<string, unknown>()
 }
 
 const { saveConfig } = await import('../src/lib/config')
+const { computeEarnings } = await import('../src/lib/format')
 const api = await import('../src/lib/api')
 
 // ---------------------------------------------------------------------------
@@ -90,6 +91,8 @@ const { db, ids } = mock
 await saveConfig({ supabaseUrl: mock.url, anonKey: mock.anonKey })
 
 const MINUTE = 60_000
+
+console.log(`Running at ${new Date().toString()} (${Intl.DateTimeFormat().resolvedOptions().timeZone})`)
 
 try {
   section('Connection')
@@ -155,21 +158,46 @@ try {
   )
 
   section('Clock out')
-  // The shift started two hours ago: 2h on the clock minus the 30m break.
-  resumed.start_time = new Date(Date.now() - 120 * MINUTE).toISOString()
+  // Backdate the shift to two hours ago — 2h on the clock minus the 30m break.
+  // Never backdate past local midnight: the entry would stop counting as
+  // "today" and the totals below would depend on the wall clock. (A CI run at
+  // 00:05 failed exactly this way before the clamp existed.)
+  const startOfDay = new Date()
+  startOfDay.setHours(0, 0, 0, 0)
+  const twoHoursAgo = new Date(Date.now() - 120 * MINUTE)
+  const shiftStart = twoHoursAgo >= startOfDay ? twoHoursAgo : startOfDay
+  const backdatedFully = shiftStart === twoHoursAgo
+
+  resumed.start_time = shiftStart.toISOString()
   const { entry } = await api.clockOut('Wrap up')
   check('time entry written', db.time_entries.length === 1)
   check('timer cleared', db.active_timers.length === 0)
-  check('90 minutes worked', entry.total_minutes === 90, entry.total_minutes)
+
+  // Worked = time on the clock minus the break, whatever the clock says.
+  const workedMs = new Date(entry.end_time).getTime() - shiftStart.getTime() - 30 * MINUTE
+  const expectedWorked = Math.max(0, Math.round(workedMs / 60000))
+  check('worked time = time on the clock minus the break', Math.abs(entry.total_minutes - expectedWorked) <= 1, {
+    actual: entry.total_minutes,
+    expected: expectedWorked,
+  })
   check('30 minutes of break', entry.break_minutes === 30, entry.break_minutes)
-  check('earnings = 1.5h × $25', entry.earnings === 37.5, entry.earnings)
+  check('earnings = hours × $25/hr', entry.earnings === computeEarnings(entry.total_minutes, 25), entry.earnings)
+  if (backdatedFully) {
+    check('90 minutes worked', entry.total_minutes === 90, entry.total_minutes)
+    check('earnings = 1.5h × $25', entry.earnings === 37.5, entry.earnings)
+  } else {
+    console.log('  · within two hours of local midnight: skipped the fixed 90-minute assertion')
+  }
   check('rate snapshotted on the entry', entry.hourly_rate === 25)
   check('clock-in note and clock-out note both kept', entry.notes === 'early  shift\nWrap up', entry.notes)
   check('entry owned by the workspace admin', (entry as unknown as { user_id: string }).user_id === ids.ADMIN_ID)
+  const humanMinutes = `${Math.floor(entry.total_minutes / 60)}h ${entry.total_minutes % 60}m`
   check(
     'admin notified of clock out',
     db.notifications.some(
-      (n) => n.type === 'time_out' && n.message === 'Ana Reyes clocked out — 1h 30m · Site A · added a note',
+      (n) =>
+        n.type === 'time_out' &&
+        n.message === `Ana Reyes clocked out — ${humanMinutes} · Site A · added a note`,
     ),
     db.notifications.map((n) => n.message),
   )
@@ -177,8 +205,16 @@ try {
   const afterOut = await api.loadState()
   if (afterOut.kind !== 'ready') throw new Error('expected a ready state')
   check('no timer after clock out', afterOut.snapshot.timer === null)
-  check("today's minutes include the finished shift", afterOut.snapshot.todayMinutes === 90, afterOut.snapshot)
-  check("today's earnings include the finished shift", afterOut.snapshot.todayEarnings === 37.5)
+  check(
+    "today's minutes include the finished shift",
+    afterOut.snapshot.todayMinutes === entry.total_minutes,
+    afterOut.snapshot,
+  )
+  check(
+    "today's earnings include the finished shift",
+    afterOut.snapshot.todayEarnings === entry.earnings,
+    afterOut.snapshot,
+  )
 
   section('Resilience')
   // Two timer rows for one worker cannot happen in Postgres (unique index), but
