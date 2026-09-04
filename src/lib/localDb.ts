@@ -3,6 +3,7 @@ import type {
   TimeEntry,
   ActiveTimer,
   Settings,
+  SlackSettings,
   AuthUser,
   TimeEntryComment,
   ChatMessage,
@@ -14,6 +15,7 @@ import type {
   PaymentMethod,
   Role,
 } from './types'
+import { DEFAULT_SLACK_SETTINGS } from './types'
 import type { BackendResult, DataBackend, CreateWorkerInput } from './backend'
 import { ACCOUNT_DEACTIVATED_MESSAGE, CHAT_MAX_LENGTH } from './backend'
 import { buildDemoChat, buildDemoSeed } from './demoSeed'
@@ -52,6 +54,7 @@ interface UserData {
 const USERS_KEY = 'wt_users'
 const SESSION_KEY = 'wt_session'
 const dataKey = (userId: string) => `wt_data_${userId}`
+const slackKey = (userId: string) => `wt_slack_${userId}`
 
 function read<T>(key: string, fallback: T): T {
   try {
@@ -882,6 +885,27 @@ export const localBackend: DataBackend = {
     c.data.settings = { ...c.data.settings, ...patch }
     save(c.data)
     return { data: c.data.settings, error: null }
+  },
+
+  // Slack integration config. Kept in its own storage slot (keyed by the
+  // workspace admin) so it survives "Delete all data", which wipes the main
+  // blob. In demo mode there is no server, so notifySlack() posts to Slack
+  // straight from the browser using this webhook URL.
+  async getSlackSettings() {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (c.user.role !== 'admin') return { data: null, error: 'Only the admin can view Slack settings.' }
+    return { data: read<SlackSettings>(slackKey(c.admin.id), { ...DEFAULT_SLACK_SETTINGS }), error: null }
+  },
+
+  async saveSlackSettings(patch) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (c.user.role !== 'admin') return { data: null, error: 'Only the admin can change Slack settings.' }
+    const next: SlackSettings = { ...DEFAULT_SLACK_SETTINGS, ...read<SlackSettings>(slackKey(c.admin.id), { ...DEFAULT_SLACK_SETTINGS }), ...patch }
+    next.webhook_url = next.webhook_url?.trim() ? next.webhook_url.trim() : null
+    write(slackKey(c.admin.id), next)
+    return { data: next, error: null }
   },
 
   async listEntryComments(entryId) {

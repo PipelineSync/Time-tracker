@@ -3,6 +3,7 @@ import type {
   TimeEntry,
   ActiveTimer,
   Settings,
+  SlackSettings,
   AuthUser,
   TimeEntryComment,
   ChatMessage,
@@ -106,6 +107,14 @@ export interface DataBackend {
 
   getSettings(): Promise<BackendResult<Settings>>
   saveSettings(patch: Partial<Settings>): Promise<BackendResult<Settings>>
+
+  /**
+   * Slack integration config (Settings → Slack, admin only). The webhook URL
+   * lives in a row workers cannot read; notifications themselves are posted
+   * server-side by the slack-notify Netlify Function.
+   */
+  getSlackSettings(): Promise<BackendResult<SlackSettings>>
+  saveSlackSettings(patch: Partial<SlackSettings>): Promise<BackendResult<SlackSettings>>
 
   // Notes / chat on entries
   listEntryComments(entryId: string): Promise<BackendResult<TimeEntryComment[]>>
