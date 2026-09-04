@@ -890,3 +890,38 @@ $$;
 
 revoke all on function public.toggle_chat_reaction(uuid, text) from public, anon;
 grant execute on function public.toggle_chat_reaction(uuid, text) to authenticated;
+
+-- ============================================================
+-- Slack notifications (Settings → Slack)
+-- ============================================================
+-- The admin's Slack incoming-webhook URL + which events mirror into Slack.
+-- Admin-only RLS: the webhook URL is never readable by workers — Slack
+-- messages are posted server-side by the `slack-notify` Netlify Function.
+create table if not exists public.slack_settings (
+  id                   uuid primary key default gen_random_uuid(),
+  user_id              uuid not null unique references auth.users (id) on delete cascade,
+  webhook_url          text,
+  notify_clock_in      boolean not null default true,
+  notify_clock_out     boolean not null default true,
+  notify_break_start   boolean not null default true,
+  notify_break_end     boolean not null default true,
+  notify_payment_paid  boolean not null default true,
+  created_at           timestamptz not null default now(),
+  updated_at           timestamptz not null default now()
+);
+
+alter table public.slack_settings enable row level security;
+
+drop policy if exists "slack_settings_admin_all" on public.slack_settings;
+create policy "slack_settings_admin_all" on public.slack_settings
+  for all
+  using ((select public.is_admin()) and (select auth.uid()) = user_id)
+  with check ((select public.is_admin()) and (select auth.uid()) = user_id);
+
+drop trigger if exists trg_slack_settings_user on public.slack_settings;
+create trigger trg_slack_settings_user before insert on public.slack_settings
+  for each row execute function public.set_user_id();
+
+drop trigger if exists trg_slack_settings_updated on public.slack_settings;
+create trigger trg_slack_settings_updated before update on public.slack_settings
+  for each row execute function public.set_updated_at();

@@ -3,6 +3,7 @@ import type {
   TimeEntry,
   ActiveTimer,
   Settings,
+  SlackSettings,
   AuthUser,
   TimeEntryComment,
   ChatMessage,
@@ -14,6 +15,7 @@ import type {
   PaymentMethod,
   Role,
 } from './types'
+import { DEFAULT_SLACK_SETTINGS } from './types'
 import type { BackendResult, DataBackend, CreateWorkerInput } from './backend'
 import { ACCOUNT_DEACTIVATED_MESSAGE, CHAT_MAX_LENGTH } from './backend'
 import {
@@ -31,6 +33,20 @@ const anonKey = (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.en
 
 export function isSupabaseConfigured(): boolean {
   return Boolean(url && anonKey)
+}
+
+/**
+ * The signed-in user's Supabase access token (for calling Netlify Functions
+ * that verify it server-side). Null when signed out or unconfigured.
+ */
+export async function getSupabaseAccessToken(): Promise<string | null> {
+  if (!url || !anonKey) return null
+  try {
+    const { data } = await client().auth.getSession()
+    return data.session?.access_token ?? null
+  } catch {
+    return null
+  }
 }
 
 let supabase: SupabaseClient | null = null
@@ -1098,6 +1114,57 @@ export const supabaseBackend: DataBackend = {
     const { data, error } = await client().from('settings').update(patch).eq('id', cur.data.id).select().single()
     if (error) return fail(error.message)
     return ok(data as Settings)
+  },
+
+  async getSlackSettings() {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (me.data!.role !== 'admin') return fail('Only the admin can view Slack settings.')
+    // Admin-only RLS on slack_settings keeps the webhook URL away from workers.
+    const { data, error } = await client().from('slack_settings').select('*').maybeSingle()
+    if (error) {
+      // The migration (supabase/slack-notifications.sql) has not been run yet —
+      // behave as "not configured" instead of breaking the Settings page.
+      if (/does not exist|not found in schema/i.test(error.message)) return ok({ ...DEFAULT_SLACK_SETTINGS })
+      return fail(error.message)
+    }
+    if (!data) return ok({ ...DEFAULT_SLACK_SETTINGS })
+    return ok({
+      webhook_url: (data.webhook_url as string | null) ?? null,
+      notify_clock_in: data.notify_clock_in !== false,
+      notify_clock_out: data.notify_clock_out !== false,
+      notify_break_start: data.notify_break_start !== false,
+      notify_break_end: data.notify_break_end !== false,
+      notify_payment_paid: data.notify_payment_paid !== false,
+    })
+  },
+
+  async saveSlackSettings(patch) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (me.data!.role !== 'admin') return fail('Only the admin can change Slack settings.')
+    const cur = await this.getSlackSettings()
+    if (!cur.data) return fail('Slack settings unavailable.')
+    const next = { ...cur.data, ...patch }
+    const row = {
+      webhook_url: next.webhook_url?.trim() ? next.webhook_url.trim() : null,
+      notify_clock_in: next.notify_clock_in,
+      notify_clock_out: next.notify_clock_out,
+      notify_break_start: next.notify_break_start,
+      notify_break_end: next.notify_break_end,
+      notify_payment_paid: next.notify_payment_paid,
+    }
+    // user_id is auto-filled with the workspace owner by the trg_slack_settings_user trigger.
+    const { data, error } = await client().from('slack_settings').upsert(row, { onConflict: 'user_id' }).select().single()
+    if (error) return fail(error.message)
+    return ok({
+      webhook_url: (data.webhook_url as string | null) ?? null,
+      notify_clock_in: data.notify_clock_in !== false,
+      notify_clock_out: data.notify_clock_out !== false,
+      notify_break_start: data.notify_break_start !== false,
+      notify_break_end: data.notify_break_end !== false,
+      notify_payment_paid: data.notify_payment_paid !== false,
+    })
   },
 
   async listEntryComments(entryId) {
