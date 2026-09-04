@@ -25,11 +25,7 @@ The app has two roles with clearly separated permissions:
 | Time out | ✅ | ✅ |
 | View own time | ✅ (all) | ✅ (own only) |
 | Dashboard / Reports / Settings | ✅ | ❌ |
-| Notes / chat on entries | ✅ (reply) | ✅ (add notes) |
-| Team chat (Chat section) | ✅ (post as Admin) | ✅ (post as themselves) |
-| See all members of the chat | ✅ | ✅ (same roster, admin included) |
-| Emoji & stickers in the chat | ✅ | ✅ |
-| React to a chat message with emoji | ✅ | ✅ |
+| Notes on entries | ✅ (reply) | ✅ (add notes) |
 | Settle & reset time → payments | ✅ | ❌ |
 | Payments view | ✅ (all, full control) | ✅ (own, read-only) |
 | Change own password | ✅ | ✅ |
@@ -44,10 +40,9 @@ Workers **clock in, take breaks, and clock out** — their rate is set by the ad
 - **Manual entry** *(admin)* — date, start/end time, break, project, notes, auto-calculated hours & earnings (this is how the admin adds time to workers)
 - **Time Entries** — table on desktop / cards on mobile, filters (including **settled / unsettled**), sorting; admin can edit/delete/duplicate, workers see their own. Entries that a settlement paid for carry a **Settled** badge and stay here as history; the summary line also shows the **unsettled** earnings still waiting to be paid out
 - **Notes / chat on entries** — every entry has a conversation thread: workers add notes, the admin replies (and vice versa), both sides are notified
-- **Chat** *(admin & worker, right before Settings in the navigation)* — one shared **team room** for the whole workspace. Every message is shown with the sender's **profile picture, name and role** (the admin appears as **Admin**; a worker's role is their position, e.g. *Foreman*, falling back to *Worker*), plus a time stamp and day separators. A **See all members** button opens the roster — **the admin first, then every worker**, with each member's picture, role and whether their account is active; workers get the same roster including the admin, even though the rest of their access is limited to their own records. New messages arrive on their own (the room refreshes while the tab is open), Enter sends, Shift+Enter adds a line. The composer has an **emoji picker** for both roles — searchable, grouped, with the emoji you used recently floated to the top — and a **sticker** tab (see `src/assets/chat-stickers/`). A **sticker message is stored as plain text** (`[sticker:slug]`), so it needs no upload, no new column, and still reads as "Mike: [Side eye cat]" in a notification. Any message can be **reacted to** with emoji (the smile icon beside it): one tap adds, tapping the same emoji again takes it back, and reactions never send a notification
 - **Reports** *(admin)* — today/week/month/custom range, totals & averages, charts, **CSV export**
 - **Settings** *(admin)* — business name, currency, timezone, default rate, theme, export & delete all data
-- **Settings → Profile** *(worker)* — workers upload their own **profile picture** from their account settings. The picture is saved to their worker profile and shows up **for the admin** next to their name on the Workers page, the Dashboard, the "On the clock now" panel, and in every **Chat** message — not just a bare name.
+- **Settings → Profile** *(worker)* — workers upload their own **profile picture** from their account settings. The picture is saved to their worker profile and shows up **for the admin** next to their name on the Workers page, the Dashboard and the "On the clock now" panel — not just a bare name.
 - **Settings → Payment methods** *(worker)* — each worker chooses how they can be paid: **Cash**, **QR Code**, or both. Enabling **QR Code** requires uploading their QR code image (a screenshot/photo of their GCash, Maya, banking-app, etc. QR — the image is automatically downscaled before saving). The methods and QR image are saved on the worker's profile.
 - **Payments** — the admin turns a worker's unsettled time & earnings into a **settlement**: a **Reset & settle** action on a worker creates an **unpaid** payment for the time that has not been settled yet. **Time entries are never deleted by a settlement** — the entries it paid for are marked **Settled** (their hours, notes and comments all stay in Time Entries), so the next settlement only covers time worked since. An entry only disappears when the admin **deletes it by hand**. The admin then drives the status **unpaid → pending → paid** (with a "Back to unpaid" option) and can delete payments. When the admin clicks **Mark paid**, a dialog shows the **payment methods that worker accepts** (Cash / QR Code, with the QR image ready to scan) and the admin **picks the method they are paying with**; it is stored on the payment (`payments.payment_method`, see `supabase/payment-paid-method.sql`) and shown in the **Paid via** column of the history. The **worker** sees their own payments **read-only**, with no edit controls, and their own enabled methods and QR code at the top of the page.
 - **Auth** — sign in with admin or worker credentials. Only the admin can create worker login accounts.
@@ -56,7 +51,6 @@ Workers **clock in, take breaks, and clock out** — their rate is set by the ad
 ### Notifications
 A notification bell (with an unread badge) appears for both roles. The admin is notified when a worker **clocks in**, **starts a break**, **comes back from a break**, **clocks out**, or **adds a note**. Workers are notified when the **admin replies to a note**, **adds time** for them, creates a **payment**, or changes a **payment status**. Clicking a notification opens the related entry.
 
-**Team chat messages notify everyone else in the room** — never the sender. A new message raises a **toast** (unless you are already in the Chat section), bumps the **bell badge**, and shows an unread count **on the Chat item** in the sidebar / bottom navigation. The notification reads *"John Smith: On site now."* (long messages are clipped) and clicking it opens the Chat section.
 
 All entries **snapshot the hourly rate** at record time, so historical earnings don't change when a worker's rate changes later. Sessions that cross midnight are handled correctly.
 
@@ -76,7 +70,7 @@ Messages are posted server-side by the `slack-notify` Netlify Function, which re
 The app is built so a workspace of several users on phones **and** laptops, all open at the same time, stays fast on a free Supabase plan:
 
 - **Incremental entry sync** — every 15 s a visible tab re-fetches only the entries *changed* since its last sync (usually zero rows), not the whole history. The newest-entries window (≈1,200 for the admin, ≈300 for a worker) re-loads on refocus (at most once per 90 s) and every 5 minutes, which is also when entries deleted on another device get reconciled. Per-tab bandwidth therefore stays flat as the workspace's history grows.
-- **Bounded lists** — the notification bell fetches the 20 most recent notifications (its badge is an indexed `COUNT` query, so the exact unread number is free), payments show the 100 most recent, and the team chat the 500 most recent.
+- **Bounded lists** — the notification bell fetches the 20 most recent notifications (its badge is an indexed `COUNT` query, so the exact unread number is free), and payments show the 100 most recent.
 - **Load older, on demand** — the Time Entries page renders 200 rows at a time with a *Show more* button, and Reports shows a *Load older entries* button when you pick a custom range that starts before the oldest loaded entry (one tap pulls in the pages the range needs).
 - **Hidden tabs don't poll** — polling pauses while a tab is in the background or the device sleeps.
 
@@ -104,7 +98,7 @@ npm run dev
 Open `http://localhost:5173`. Without Supabase credentials the app uses **browser-local storage** as the database. A single admin is auto-created on first run.
 
 **Demo credentials**
-- Admin: `admin` / `admin.pipelinesync` — the admin workspace is auto-seeded with sample workers, entries and a short team-chat conversation on first login.
+- Admin: `admin` / `admin.pipelinesync` — the admin workspace is auto-seeded with sample workers and entries on first login.
 - Sample workers: `john@example.com`, `sarah@example.com`, `mike@example.com` — password `worker123`.
 
 Log in as admin to manage workers, set rates, and create worker accounts. Log in as a sample worker to see the limited clock-in/out experience.
@@ -128,7 +122,6 @@ This creates the `workers`, `time_entries`, `active_timers`, `settings`, and `pa
 
 > **Upgrading an existing database?** Run `supabase/fix-multiple-active-workers.sql` once — it makes the timer uniqueness rule *one per worker* (older databases allowed only one clocked-in worker per workspace, so the admin dashboard could only ever show a single worker) and allows the new `break_start` / `break_end` notification types.
 >
-> **For the team chat**, run `supabase/chat-messages.sql` once. It creates the `chat_messages` table with RLS (so the admin and every worker of the workspace read the same room), plus two SECURITY DEFINER functions: `post_chat_message()` (stamps the author's name, role and profile picture from the signed-in user, so nobody can post as somebody else) and `workspace_members()` (the "See all members" roster, which a worker cannot build from the raw tables because RLS limits them to their own rows). Fresh installs get this automatically from `schema.sql`.
 
 > If your database predates the worker-login fix, also run `supabase/fix-deleted-worker-login.sql` once. It adds the `profiles_delete` policy and permanently removes the leftover logins of workers that were deleted before the fix (so those workers can no longer sign in).
 >
@@ -136,9 +129,7 @@ This creates the `workers`, `time_entries`, `active_timers`, `settings`, and `pa
 >
 > For **settlements that keep time entries**, run `supabase/settle-keeps-entries.sql` once. It adds `time_entries.settled_at`, the column "Settle & reset" stamps instead of deleting the entries it paid for (without it the app still keeps the entries, but falls back to the previous payment's `period_end` as the paid-up-to boundary). Fresh installs get this automatically from `schema.sql`.
 >
-> For **emoji reactions on chat messages**, run `supabase/chat-reactions.sql` once (after `chat-messages.sql`). It creates `chat_reactions` — one row per (message, member, emoji), so a member can react with several emoji but never twice with the same one — with RLS so the whole workspace reads the same reactions, plus the SECURITY DEFINER functions `list_chat_reactions()` and `toggle_chat_reaction(message_id, emoji)`, which stamp the reactor from `auth.uid()` and refuse messages from another workspace. Without it the chat still loads (there is simply nothing to show); reacting explains which migration to run. Fresh installs get this automatically from `schema.sql`.
 
-> For **chat message notifications**, run `supabase/chat-notifications.sql` once (after `chat-messages.sql`). It allows `'chat'` as a notification type and adds the SECURITY DEFINER function `notify_chat_message()`, which writes a notification for every member of the workspace except the author — something a worker cannot do directly, because RLS only lets them notify themselves and the admin. Fresh installs get this automatically from `schema.sql`.
 
 > For **Slack notifications** (clock in / out, breaks, payments posted to a Slack channel), run `supabase/slack-notifications.sql` once. It creates the admin-only `slack_settings` table (webhook URL + per-event toggles). Then connect the webhook in **Settings → Slack** — see the *Slack notifications* section under Features. Fresh installs get this automatically from `schema.sql`.
 
@@ -184,7 +175,7 @@ This is already handled by `supabase/schema.sql` (it runs `alter table ... enabl
 ```sql
 select relname, relrowsecurity
 from pg_class
-where relname in ('workers','time_entries','active_timers','settings','payments','profiles','chat_messages');
+where relname in ('workers','time_entries','active_timers','settings','payments','profiles');
 ```
 
 The RLS model:
@@ -267,19 +258,14 @@ setup and the secrets table live in **[docs/APPS.md](docs/APPS.md)**.
 
 ```
 time-tracker/
-├─ supabase/schema.sql          # Database tables, RLS, triggers (incl. team chat)
-├─ supabase/chat-messages.sql   # One-time migration for the team chat on existing databases
-├─ supabase/chat-notifications.sql      # One-time migration: notifications for chat messages
-├─ supabase/chat-reactions.sql  # One-time migration: emoji reactions on chat messages
+├─ supabase/schema.sql          # Database tables, RLS, triggers
 ├─ supabase/settle-keeps-entries.sql    # One-time migration: settlements keep time entries
 ├─ src/
-│  ├─ lib/                      # types, utils, stats, backend (local + supabase), store, theme, chat helpers
-│  │                          # + emoji.ts (chat emoji catalogue) & stickers.ts (sticker pack registry)
+│  ├─ lib/                      # types, utils, stats, backend (local + supabase), store, theme
 │  │                          # + platform.ts (shell detection), native.ts (Capacitor bootstrap), useInstallPrompt.ts
-│  ├─ components/               # shared UI + app components (shadcn-style), incl. AvatarBubble + ChatMembersDialog + EmojiPicker
+│  ├─ components/               # shared UI + app components (shadcn-style), incl. AvatarBubble
 │  │                          # + InstallAppCard.tsx (Settings → “Get the app”)
-│  ├─ assets/chat-stickers/     # Drop an image in here and it becomes a chat sticker (see its README)
-│  ├─ pages/                    # Dashboard, Tracker, Entries, Workers, Reports, Chat, Settings, Auth
+│  ├─ pages/                    # Dashboard, Tracker, Entries, Workers, Reports, Settings, Payments, Auth
 │  ├─ App.tsx                   # Routing + auth gate (HashRouter inside native shells)
 │  └─ main.tsx                  # mounts app, registers the PWA service worker (browser shells only)
 ├─ ios/                         # Capacitor iOS project (Xcode) — App Store / TestFlight
@@ -304,7 +290,6 @@ time-tracker/
 - `user_id` is set server-side via triggers, never trusted from the client.
 - **Calculated values** (`total_minutes`, `earnings`) are recomputed in the backend/local layer where possible, and stored on the entry so history is stable.
 - Input is trimmed and validated before writing.
-- **Team chat** is one shared room per workspace: `chat_messages` rows are owned by the workspace admin and readable by every member of that workspace. `post_chat_message()` resolves the author (name, role, profile picture) from `auth.uid()` rather than from the request, so a worker cannot post as the admin or as another teammate; the client-side 2000-character limit mirrors the table's `check` constraint.
 
 ---
 

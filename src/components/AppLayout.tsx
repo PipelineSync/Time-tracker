@@ -13,7 +13,6 @@ import {
   Moon,
   Sun,
   Monitor,
-  MessagesSquare,
 } from 'lucide-react'
 import { useStore } from '@/lib/store'
 import { useTheme } from '@/lib/theme'
@@ -21,7 +20,6 @@ import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { BrandLogo } from '@/components/BrandLogo'
 import { NotificationsBell } from '@/components/NotificationsBell'
-import { ChatNotifications } from '@/components/ChatNotifications'
 import { ChangePasswordDialog } from '@/components/ChangePasswordDialog'
 import {
   DropdownMenu,
@@ -38,7 +36,6 @@ const adminNav = [
   { to: '/payments', label: 'Payments', shortLabel: 'Pay', icon: Wallet },
   { to: '/workers', label: 'Workers', shortLabel: 'Workers', icon: Users },
   { to: '/reports', label: 'Reports', shortLabel: 'Reports', icon: BarChart3 },
-  { to: '/chat', label: 'Chat', shortLabel: 'Chat', icon: MessagesSquare },
   { to: '/settings', label: 'Settings', shortLabel: 'Settings', icon: Settings },
 ]
 
@@ -46,20 +43,15 @@ const workerNav = [
   { to: '/tracker', label: 'Clock In / Out', shortLabel: 'Clock', icon: Timer },
   { to: '/entries', label: 'My Time', shortLabel: 'Time', icon: ListChecks },
   { to: '/payments', label: 'Payments', shortLabel: 'Pay', icon: Wallet },
-  { to: '/chat', label: 'Chat', shortLabel: 'Chat', icon: MessagesSquare },
   { to: '/settings', label: 'Settings', shortLabel: 'Settings', icon: Settings },
 ]
 
 export function AppLayout() {
-  const { user, signOut, isAdmin, workers, settings, notifications } = useStore()
+  const { user, signOut, isAdmin, workers, settings } = useStore()
   const { setTheme } = useTheme()
   const navigate = useNavigate()
   const navItems = isAdmin ? adminNav : workerNav
   const [changePwOpen, setChangePwOpen] = useState(false)
-
-  // Unread team-chat messages, badged on the Chat item so a new message is
-  // visible even without opening the notification bell.
-  const unreadChat = notifications.filter((n) => !n.read && n.type === 'chat').length
 
   // The signed-in user's avatar, if they have uploaded one. Workers see their
   // own worker row in `workers`; the admin's avatar is the business/account
@@ -146,11 +138,6 @@ export function AppLayout() {
             >
               <item.icon className="h-5 w-5" />
               <span className="flex-1">{item.label}</span>
-              {item.to === '/chat' && unreadChat > 0 && (
-                <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-[#F77A0A] px-1.5 text-[11px] font-bold text-white">
-                  {unreadChat > 99 ? '99+' : unreadChat}
-                </span>
-              )}
             </NavLink>
           ))}
         </nav>
@@ -204,11 +191,6 @@ export function AppLayout() {
             >
               <span className="relative">
                 <item.icon className="h-5 w-5" />
-                {item.to === '/chat' && unreadChat > 0 && (
-                  <span className="absolute -right-2.5 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#F77A0A] px-1 text-[10px] font-bold text-white">
-                    {unreadChat > 99 ? '99+' : unreadChat}
-                  </span>
-                )}
               </span>
               <span className="w-full truncate text-center">{item.shortLabel}</span>
             </NavLink>
@@ -217,8 +199,6 @@ export function AppLayout() {
       </nav>
 
       <ChangePasswordDialog open={changePwOpen} onOpenChange={setChangePwOpen} />
-      {/* Toasts for new team-chat messages (mounted once, from the layout). */}
-      <ChatNotifications />
     </div>
   )
 }

@@ -6,20 +6,17 @@ import type {
   SlackSettings,
   AuthUser,
   TimeEntryComment,
-  ChatMessage,
-  ChatMember,
-  ChatReaction,
   AppNotification,
   Payment,
   PaymentStatus,
   PaymentMethod,
   Role,
+  WorkerAvatar,
 } from './types'
 import { DEFAULT_SLACK_SETTINGS } from './types'
 import type { BackendResult, DataBackend, CreateWorkerInput } from './backend'
-import { ACCOUNT_DEACTIVATED_MESSAGE, CHAT_MAX_LENGTH } from './backend'
-import { buildDemoChat, buildDemoSeed } from './demoSeed'
-import { chatNotificationText } from './chat'
+import { ACCOUNT_DEACTIVATED_MESSAGE } from './backend'
+import { buildDemoSeed } from './demoSeed'
 import { uid, computeEarnings, computeTotalMinutes, formatMinutes, formatDate } from './utils'
 import { storage } from './storage'
 
@@ -43,10 +40,6 @@ interface UserData {
   activeTimer?: ActiveTimer | null
   settings: Settings | null
   comments: TimeEntryComment[]
-  /** Workspace-wide team chat (admin + every worker, one shared room). */
-  chat: ChatMessage[]
-  /** Emoji reactions on those messages, keyed by message id. */
-  chatReactions: ChatReaction[]
   notifications: AppNotification[]
   payments: Payment[]
 }
@@ -79,7 +72,7 @@ function writeUsers(users: StoredUser[]) {
 }
 
 function emptyData(): UserData {
-  return { workers: [], entries: [], activeTimers: [], settings: null, comments: [], chat: [], chatReactions: [], notifications: [], payments: [] }
+  return { workers: [], entries: [], activeTimers: [], settings: null, comments: [], notifications: [], payments: [] }
 }
 
 /** The method the admin paid a settlement with, or null when unknown/invalid. */
@@ -120,10 +113,6 @@ function readData(userId: string): UserData {
   }
   d.settings = d.settings || null
   d.comments = d.comments || []
-  // Workspaces saved before the team chat section existed have no chat log yet.
-  d.chat = d.chat || []
-  // ...and workspaces saved before reactions existed have no reactions either.
-  d.chatReactions = d.chatReactions || []
   d.notifications = d.notifications || []
   d.payments = d.payments || []
   return d
@@ -181,13 +170,6 @@ function ctx(): { user: AuthUser; admin: StoredUser; data: UserData } | null {
   return { user, admin, data: readData(admin.id) }
 }
 
-/** Reactions on one chat message, oldest first — what the UI keeps for that row. */
-function reactionsForMessage(data: UserData, messageId: string): ChatReaction[] {
-  return data.chatReactions
-    .filter((r) => r.message_id === messageId)
-    .sort((a, b) => a.created_at.localeCompare(b.created_at))
-}
-
 function save(data: UserData) {
   const admin = getAdmin()
   writeData(admin.id, data)
@@ -232,128 +214,12 @@ function workerName(data: UserData, workerId: string): string {
   return data.workers.find((w) => w.id === workerId)?.name || 'A worker'
 }
 
-/** How the admin is identified in the team chat (their picture comes from settings). */
-const ADMIN_CHAT_NAME = 'Admin'
-const ADMIN_CHAT_POSITION = 'Owner'
-
-/** The identity a team-chat message is stamped with. */
-function chatAuthor(
-  data: UserData,
-  user: AuthUser
-): { name: string; role: Role; workerId: string | null; position: string | null; avatarUrl: string | null } | null {
-  if (user.role === 'admin') {
-    return {
-      name: ADMIN_CHAT_NAME,
-      role: 'admin',
-      workerId: null,
-      position: ADMIN_CHAT_POSITION,
-      avatarUrl: data.settings?.avatar_url ?? null,
-    }
-  }
-  const me = data.workers.find((w) => w.id === user.workerId)
-  if (!me) return null
-  return {
-    name: me.name,
-    role: 'worker',
-    workerId: me.id,
-    position: me.position ?? null,
-    avatarUrl: me.avatar_url ?? null,
-  }
-}
-
-/**
- * Every member of the workspace chat — the admin first, then workers A→Z.
- * Deliberately not scoped to the caller: a worker sees the whole team here
- * (including the admin) even though `listWorkers` only returns their own row.
- */
-function chatMembers(data: UserData, adminUserId: string): ChatMember[] {
-  const admin: ChatMember = {
-    id: `admin:${adminUserId}`,
-    user_id: adminUserId,
-    worker_id: null,
-    name: ADMIN_CHAT_NAME,
-    role: 'admin',
-    position: ADMIN_CHAT_POSITION,
-    avatar_url: data.settings?.avatar_url ?? null,
-    worker_status: null,
-  }
-  const workers: ChatMember[] = [...data.workers]
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .map((w) => ({
-      id: w.id,
-      user_id: workerUserId(w.id),
-      worker_id: w.id,
-      name: w.name,
-      role: 'worker' as Role,
-      position: w.position ?? null,
-      avatar_url: w.avatar_url ?? null,
-      worker_status: w.status,
-    }))
-  return [admin, ...workers]
-}
-
-/** Demo chat lines, mapped onto the seeded workers so each one has a real author. */
-function seedChat(data: UserData, adminUserId: string, idMap: Map<string, string>) {
-  for (const line of buildDemoChat()) {
-    const workerId = line.worker_id ? idMap.get(line.worker_id) ?? null : null
-    const worker = workerId ? data.workers.find((w) => w.id === workerId) ?? null : null
-    data.chat.push({
-      id: uid(),
-      author_id: (worker ? workerUserId(worker.id) : null) || adminUserId,
-      worker_id: worker?.id ?? null,
-      author_name: worker?.name ?? ADMIN_CHAT_NAME,
-      author_role: worker ? 'worker' : 'admin',
-      author_position: worker ? worker.position ?? null : ADMIN_CHAT_POSITION,
-      author_avatar_url: worker ? worker.avatar_url ?? null : data.settings?.avatar_url ?? null,
-      body: line.body,
-      created_at: new Date(Date.now() - line.minutes_ago * 60_000).toISOString(),
-    })
-  }
-
-  // A couple of reactions on the starter conversation, so a fresh demo
-  // workspace shows what reacting looks like instead of an empty row.
-  const react = (message: ChatMessage, userId: string | null, name: string, emoji: string) => {
-    if (!userId) return
-    data.chatReactions.push({
-      id: uid(),
-      message_id: message.id,
-      author_id: userId,
-      author_name: name,
-      emoji,
-      // A few minutes after the message, never after "now".
-      created_at: new Date(Math.min(Date.now(), new Date(message.created_at).getTime() + 5 * 60_000)).toISOString(),
-    })
-  }
-  const newest = data.chat[data.chat.length - 1]
-  const oldest = data.chat[0]
-  if (newest) react(newest, adminUserId, ADMIN_CHAT_NAME, '👍')
-  if (oldest && data.workers[0]) {
-    const worker = data.workers[0]
-    react(oldest, workerUserId(worker.id), worker.name, '✅')
-  }
-}
-
 function formatMoney(amount: number, currency: string): string {
   try {
     return new Intl.NumberFormat(undefined, { style: 'currency', currency: currency || 'USD' }).format(amount)
   } catch {
     return `$${amount.toFixed(2)}`
   }
-}
-
-/**
- * Maps the demo seed's worker ids onto the workspace's rows, or null unless
- * every sample worker is still there under the same name and email. Used to
- * recognize an untouched demo workspace.
- */
-function demoSeedIdMap(data: UserData): Map<string, string> | null {
-  const map = new Map<string, string>()
-  for (const seeded of buildDemoSeed().workers) {
-    const real = data.workers.find((w) => w.name === seeded.name && w.email === seeded.email)
-    if (!real) return null
-    map.set(seeded.id, real.id)
-  }
-  return map
 }
 
 // Auto-seed the admin workspace on first login so the app isn't empty.
@@ -379,14 +245,6 @@ function maybeAutoSeed(data: UserData) {
     data.workers = seededWorkers
     data.entries = seed.entries.map((e) => ({ ...e, worker_id: idMap.get(e.worker_id) || e.worker_id, id: uid() }))
     data.settings = seed.settings
-    data.chat = []
-    seedChat(data, getAdmin().id, idMap)
-  } else if (data.chat.length === 0) {
-    // A demo workspace created before the Chat section existed gets the starter
-    // conversation once — but only if it is still the untouched sample team, so
-    // a workspace the admin has edited is left alone.
-    const idMap = demoSeedIdMap(data)
-    if (idMap) seedChat(data, getAdmin().id, idMap)
   }
 }
 
@@ -509,11 +367,28 @@ export const localBackend: DataBackend = {
   async listWorkers() {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
+    // The background poll excludes the image columns (avatar + QR data URLs
+    // are the heaviest fields on the row). The UI merges the separately
+    // fetched snapshot from listWorkerAvatars() back in.
+    const stripImages = (w: Worker): Worker => ({ ...w, avatar_url: null, qr_code_url: null })
     if (c.user.role === 'worker') {
       const w = c.data.workers.find((x) => x.id === c.user.workerId)
-      return { data: w ? [w] : [], error: null }
+      return { data: w ? [stripImages(w)] : [], error: null }
     }
-    return { data: [...c.data.workers].sort((a, b) => a.name.localeCompare(b.name)), error: null }
+    return { data: [...c.data.workers].sort((a, b) => a.name.localeCompare(b.name)).map(stripImages), error: null }
+  },
+
+  async listWorkerAvatars() {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    const rows: WorkerAvatar[] =
+      c.user.role === 'worker'
+        ? c.data.workers.filter((w) => w.id === c.user.workerId)
+        : c.data.workers
+    return {
+      data: rows.map((w) => ({ id: w.id, avatar_url: w.avatar_url ?? null, qr_code_url: w.qr_code_url ?? null })),
+      error: null,
+    }
   },
 
   async createWorker(input: CreateWorkerInput) {
@@ -595,19 +470,9 @@ export const localBackend: DataBackend = {
     c.data.activeTimers = c.data.activeTimers.filter((t) => t.worker_id !== id)
     const entryIds = new Set(c.data.entries.map((e) => e.id))
     c.data.comments = c.data.comments.filter((cm) => entryIds.has(cm.entry_id))
-    // Their team-chat messages go with them (the worker row no longer exists to
-    // describe the author, and the account is deleted too).
-    const droppedMessages = new Set(c.data.chat.filter((m) => m.worker_id === id).map((m) => m.id))
-    c.data.chat = c.data.chat.filter((m) => m.worker_id !== id)
     // Delete the worker's login account.
     const users = readUsers()
-    const accountIds = new Set(users.filter((u) => u.workerId === id).map((u) => u.id))
     writeUsers(users.filter((u) => u.workerId !== id))
-    // ...and their reactions, along with anything left on messages that just
-    // went — the same cascade chat_reactions.message_id has in SQL.
-    c.data.chatReactions = c.data.chatReactions.filter(
-      (r) => !droppedMessages.has(r.message_id) && !accountIds.has(r.author_id)
-    )
     save(c.data)
     return { data: null, error: null }
   },
@@ -957,97 +822,6 @@ export const localBackend: DataBackend = {
     return { data: comment, error: null }
   },
 
-  async listChatMessages(limit) {
-    const c = ctx()
-    if (!c) return { data: null, error: 'Not signed in.' }
-    // Same shared room for everyone — unlike entries, chat is not scoped down
-    // for workers, so the admin and every worker read the identical timeline.
-    const max = Math.max(1, Math.min(Math.floor(limit ?? 200), 500))
-    const messages = [...c.data.chat]
-      .sort((a, b) => a.created_at.localeCompare(b.created_at))
-      .slice(-max)
-    return { data: messages, error: null }
-  },
-
-  async sendChatMessage(body) {
-    const c = ctx()
-    if (!c) return { data: null, error: 'Not signed in.' }
-    const text = body.trim()
-    if (!text) return { data: null, error: 'Write a message first.' }
-    if (text.length > CHAT_MAX_LENGTH) {
-      return { data: null, error: `Message is too long (${CHAT_MAX_LENGTH} characters max).` }
-    }
-    const me = chatAuthor(c.data, c.user)
-    if (!me) return { data: null, error: 'No worker profile linked to this account.' }
-    const message: ChatMessage = {
-      id: uid(),
-      author_id: c.user.id,
-      worker_id: me.workerId,
-      author_name: me.name,
-      author_role: me.role,
-      author_position: me.position,
-      author_avatar_url: me.avatarUrl,
-      body: text,
-      created_at: new Date().toISOString(),
-    }
-    c.data.chat.push(message)
-    // Everyone else in the room gets a notification about the new message.
-    for (const member of chatMembers(c.data, c.admin.id)) {
-      if (!member.user_id || member.user_id === c.user.id) continue
-      pushNotification(c.data, member.user_id, {
-        entry_id: null,
-        type: 'chat',
-        message: chatNotificationText(message),
-      })
-    }
-    save(c.data)
-    return { data: message, error: null }
-  },
-
-  async listChatMembers() {
-    const c = ctx()
-    if (!c) return { data: null, error: 'Not signed in.' }
-    return { data: chatMembers(c.data, c.admin.id), error: null }
-  },
-
-  async listChatReactions() {
-    const c = ctx()
-    if (!c) return { data: null, error: 'Not signed in.' }
-    return {
-      data: [...c.data.chatReactions].sort((a, b) => a.created_at.localeCompare(b.created_at)),
-      error: null,
-    }
-  },
-
-  async toggleChatReaction(messageId, emoji) {
-    const c = ctx()
-    if (!c) return { data: null, error: 'Not signed in.' }
-    const glyph = emoji.trim()
-    if (!glyph) return { data: null, error: 'Pick an emoji first.' }
-    if (Array.from(glyph).length > 8) return { data: null, error: 'A reaction is a single emoji.' }
-    if (!c.data.chat.some((m) => m.id === messageId)) return { data: null, error: 'That message is no longer there.' }
-
-    const existing = c.data.chatReactions.findIndex(
-      (r) => r.message_id === messageId && r.author_id === c.user.id && r.emoji === glyph
-    )
-    if (existing >= 0) {
-      // Tapping a reaction you already left takes it back.
-      c.data.chatReactions.splice(existing, 1)
-    } else {
-      const me = chatMembers(c.data, c.admin.id).find((m) => m.user_id === c.user.id)
-      c.data.chatReactions.push({
-        id: uid(),
-        message_id: messageId,
-        author_id: c.user.id,
-        author_name: me?.name ?? (c.user.role === 'admin' ? 'Admin' : 'You'),
-        emoji: glyph,
-        created_at: new Date().toISOString(),
-      })
-    }
-    save(c.data)
-    return { data: reactionsForMessage(c.data, messageId), error: null }
-  },
-
   async listNotifications(limit) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
@@ -1220,12 +994,9 @@ export const localBackend: DataBackend = {
       activeTimers: [],
       settings: seed.settings,
       comments: [],
-      chat: [],
-      chatReactions: [],
       notifications: [],
       payments: [],
     }
-    seedChat(next, c.admin.id, idMap)
     save(next)
     return { data: null, error: null }
   },

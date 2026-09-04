@@ -8,7 +8,7 @@ import { FullScreenLoader } from '@/components/FullScreenLoader'
 
 // Route-level code splitting: each page downloads as its own chunk, so a
 // worker opening the clock-in page on a phone doesn't also download the
-// reports charts, the admin dashboard, chat, etc. (Pages use named exports,
+// reports charts, the admin dashboard, etc. (Pages use named exports,
 // so map them onto the default export React.lazy expects.)
 const DashboardPage = lazy(() => import('@/pages/DashboardPage').then((m) => ({ default: m.DashboardPage })))
 const TrackerPage = lazy(() => import('@/pages/TrackerPage').then((m) => ({ default: m.TrackerPage })))
@@ -16,7 +16,6 @@ const EntriesPage = lazy(() => import('@/pages/EntriesPage').then((m) => ({ defa
 const WorkersPage = lazy(() => import('@/pages/WorkersPage').then((m) => ({ default: m.WorkersPage })))
 const ReportsPage = lazy(() => import('@/pages/ReportsPage').then((m) => ({ default: m.ReportsPage })))
 const SettingsPage = lazy(() => import('@/pages/SettingsPage').then((m) => ({ default: m.SettingsPage })))
-const ChatPage = lazy(() => import('@/pages/ChatPage').then((m) => ({ default: m.ChatPage })))
 const PaymentsPage = lazy(() => import('@/pages/PaymentsPage').then((m) => ({ default: m.PaymentsPage })))
 
 export function App() {
@@ -54,7 +53,6 @@ export function App() {
           {/* Shared */}
           <Route path="/entries" element={<EntriesPage />} />
           <Route path="/payments" element={<PaymentsPage />} />
-          <Route path="/chat" element={<ChatPage />} />
           <Route path="/settings" element={<SettingsPage />} />
 
           {/* Admin-only */}
