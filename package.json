@@ -22,13 +22,11 @@
     "apps:icons": "tauri icon assets/icon-only.png -o src-tauri/icons && ./scripts/apps/generate-native-assets.sh",
     "verify:deletion": "tsx scripts/verify-delete-local.ts && tsx scripts/verify-delete-supabase.ts",
     "verify:active-workers": "tsx scripts/verify-active-workers-local.ts",
-    "verify:chat": "tsx scripts/verify-chat-local.ts && tsx scripts/verify-chat-supabase.ts",
     "verify:settle": "tsx scripts/verify-settle-local.ts && tsx scripts/verify-settle-supabase.ts",
     "verify:payment-methods": "tsx scripts/verify-payment-methods-local.ts",
     "verify:session": "tsx scripts/verify-session-supabase.ts",
-    "verify:chat-emoji": "tsx scripts/verify-chat-emoji-local.ts",
     "verify:entries-sync": "tsx scripts/verify-entries-sync-local.ts",
-    "verify": "npm run verify:deletion && npm run verify:active-workers && npm run verify:chat && npm run verify:chat-emoji && npm run verify:settle && npm run verify:session && npm run verify:entries-sync",
+    "verify": "npm run verify:deletion && npm run verify:active-workers && npm run verify:settle && npm run verify:session && npm run verify:entries-sync",
     "tauri": "tauri"
   },
   "dependencies": {

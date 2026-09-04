@@ -110,56 +110,15 @@ export interface TimeEntryComment {
 }
 
 /**
- * A message in the workspace-wide team chat (the Chat section in the sidebar).
- * Author details are snapshotted on the row so a message always shows who wrote
- * it, even if their profile changes or their account is later removed. The UI
- * prefers the live member record when it is still available, so a new profile
- * picture shows up on older messages too.
+ * A worker's image columns, fetched once per sign-in and cached — never
+ * polled. Profile pictures and QR codes are the heaviest columns in the
+ * workers table (base64 data URLs), so the minute-by-minute `listWorkers`
+ * poll deliberately excludes them and the UI merges this snapshot back in.
  */
-export interface ChatMessage {
+export interface WorkerAvatar {
   id: string
-  author_id: string // auth user id of the sender
-  worker_id: string | null // worker row for workers, null for the admin
-  author_name: string
-  author_role: Role
-  author_position: string | null
-  author_avatar_url: string | null
-  body: string
-  created_at: string
-}
-
-/**
- * A member's emoji reaction on a chat message. One row per (message, member,
- * emoji), so the same person can react with several emoji but never twice with
- * the same one — tapping it again takes it back.
- */
-export interface ChatReaction {
-  id: string
-  message_id: string
-  /** Auth user id of the member who reacted. */
-  author_id: string
-  /** Snapshot of their name, so a hover label survives profile changes. */
-  author_name: string
-  emoji: string
-  created_at: string
-}
-
-/**
- * One entry in the team chat member list (admin + every worker). Unlike
- * `listWorkers`, this is never scoped down for workers — the chat member list is
- * the same for everyone so a worker can see the whole team, including the admin.
- */
-export interface ChatMember {
-  /** Stable row key: the worker id for workers, the auth user id for the admin. */
-  id: string
-  user_id: string | null
-  worker_id: string | null
-  name: string
-  role: Role
-  position: string | null
   avatar_url: string | null
-  /** Worker account status; null for the admin, who is always a member. */
-  worker_status: WorkerStatus | null
+  qr_code_url: string | null
 }
 
 export type NotificationType =
@@ -170,8 +129,6 @@ export type NotificationType =
   | 'payment'
   | 'break_start'
   | 'break_end'
-  /** A teammate posted in the team chat. */
-  | 'chat'
 
 export interface AppNotification {
   id: string

@@ -15,13 +15,11 @@ import type {
   Settings,
   AuthUser,
   TimeEntryComment,
-  ChatMessage,
-  ChatMember,
-  ChatReaction,
   AppNotification,
   Payment,
   PaymentStatus,
   PaymentMethod,
+  WorkerAvatar,
 } from './types'
 import type { DataBackend, CreateWorkerInput, BackendResult } from './backend'
 import { localBackend } from './localDb'
@@ -52,6 +50,19 @@ function oldestOf(rows: TimeEntry[]): string | null {
   let min: string | null = null
   for (const r of rows) if (min === null || r.start_time < min) min = r.start_time
   return min
+}
+
+/**
+ * Merge a separately fetched image snapshot back into worker rows.
+ * `listWorkers` excludes the heavy base64 image columns, so the background
+ * poll stays small; this restores the pictures for display.
+ */
+function withAvatars(rows: Worker[], cache: Map<string, WorkerAvatar>): Worker[] {
+  if (cache.size === 0) return rows
+  return rows.map((w) => {
+    const a = cache.get(w.id)
+    return a ? { ...w, avatar_url: a.avatar_url, qr_code_url: a.qr_code_url } : w
+  })
 }
 
 function pickBackend(): DataBackend {
@@ -126,16 +137,6 @@ interface StoreValue {
   addEntryComment: (entryId: string, body: string) => Promise<TimeEntryComment | null>
   markNotificationsRead: () => Promise<void>
 
-  /** Team chat: the shared room for the admin and every worker. Reads report the
-   * backend error (not just an empty list) so the page can explain, for example,
-   * that a Supabase database still needs the chat migration. */
-  listChatMessages: (limit?: number) => Promise<{ messages: ChatMessage[]; error: string | null }>
-  sendChatMessage: (body: string) => Promise<{ message: ChatMessage | null; error: string | null }>
-  listChatMembers: () => Promise<{ members: ChatMember[]; error: string | null }>
-  listChatReactions: () => Promise<{ reactions: ChatReaction[]; error: string | null }>
-  /** Add (or take back) the caller's emoji on a message; resolves with that message's reactions. */
-  toggleChatReaction: (messageId: string, emoji: string) => Promise<{ reactions: ChatReaction[]; error: string | null }>
-
   settleWorker: (workerId: string, note?: string) => Promise<Payment | null>
   updatePaymentStatus: (id: string, status: PaymentStatus, paymentMethod?: PaymentMethod | null) => Promise<Payment | null>
   updatePaymentNote: (id: string, note: string | null) => Promise<Payment | null>
@@ -158,6 +159,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [dataLoading, setDataLoading] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
   const dataVersion = useRef(0)
+  // Worker images (profile pictures + QR codes) are the heaviest columns in
+  // the workers table, so they are fetched once per sign-in — never by the
+  // background poll — and merged back into the worker list on every refresh.
+  const avatarsRef = useRef(new Map<string, WorkerAvatar>())
   // Suppress stacking background refreshes (see refreshData).
   const refreshInFlight = useRef(false)
   const userRef = useRef(user)
@@ -221,7 +226,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         backend.countUnreadNotifications(),
       ])
       if (token !== dataVersion.current) return
-      if (w.data) setWorkers(w.data)
+      if (w.data) setWorkers(withAvatars(w.data, avatarsRef.current))
       if (e.data) {
         if (useDelta) {
           // Merge only the rows that changed since the last sync.
@@ -283,6 +288,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [backend])
 
+  /** Fetch the worker image snapshot once (pictures, not the minute poll). */
+  const refreshAvatars = useCallback(async () => {
+    if (!userRef.current) return
+    const res = await backend.listWorkerAvatars()
+    if (res.data) {
+      const map = new Map<string, WorkerAvatar>()
+      for (const a of res.data) map.set(a.id, a)
+      avatarsRef.current = map
+      setWorkers((prev) => withAvatars(prev, map))
+    }
+  }, [backend])
+
   // Load data when user changes (a new sign-in starts from a fresh, full sync)
   useEffect(() => {
     if (user) {
@@ -290,11 +307,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       lastEntrySyncAt.current = null
       lastFullEntrySyncAt.current = 0
       setUnreadCount(0)
-      refreshData()
+      avatarsRef.current = new Map()
+      // Pictures first (one tiny query), then the normal full sync whose
+      // image-less worker rows merge this snapshot back in.
+      void refreshAvatars().finally(() => {
+        void refreshData()
+      })
     } else {
+      avatarsRef.current = new Map()
       setWorkers([]); setEntries([]); setSettings(null); setActiveTimer(null); setActiveTimers([]); setNotifications([]); setPayments([])
     }
-  }, [user, refreshData])
+  }, [user, refreshData, refreshAvatars])
 
   // Keep cross-account updates fresh. Worker/admin actions happen in different
   // browser sessions, so poll lightly and refresh on focus to pick up new
@@ -393,37 +416,47 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return res.error
   }, [backend])
 
+  /** Keep the image snapshot in step with a freshly saved worker row. */
+  const rememberAvatar = useCallback((w: Worker) => {
+    avatarsRef.current.set(w.id, { id: w.id, avatar_url: w.avatar_url ?? null, qr_code_url: w.qr_code_url ?? null })
+  }, [])
+
   const updateOwnProfile = useCallback(async (avatarUrl: string | null) => {
     const res = await backend.updateOwnProfile({ avatar_url: avatarUrl })
     if (res.error || !res.data) return null
+    rememberAvatar(res.data)
     await refreshData()
     return res.data
-  }, [backend, refreshData])
+  }, [backend, refreshData, rememberAvatar])
 
   const updateOwnPaymentMethods = useCallback(async (paymentMethods: PaymentMethod[], qrCodeUrl?: string | null) => {
     const res = await backend.updateOwnPaymentMethods({ payment_methods: paymentMethods, qr_code_url: qrCodeUrl })
     if (res.error || !res.data) return null
+    rememberAvatar(res.data)
     await refreshData()
     return res.data
-  }, [backend, refreshData])
+  }, [backend, refreshData, rememberAvatar])
 
   const createWorker = useCallback(async (input: CreateWorkerInput) => {
     const res = await backend.createWorker(input)
     if (res.error || !res.data) return null
+    rememberAvatar(res.data)
     await refreshData()
     return res.data
-  }, [backend, refreshData])
+  }, [backend, refreshData, rememberAvatar])
 
   const updateWorker = useCallback(async (id: string, patch: Partial<Worker> & { newPassword?: string }) => {
     const res = await backend.updateWorker(id, patch)
     if (res.error || !res.data) return null
+    rememberAvatar(res.data)
     await refreshData()
     return res.data
-  }, [backend, refreshData])
+  }, [backend, refreshData, rememberAvatar])
 
   const deleteWorker = useCallback(async (id: string) => {
     const res = await backend.deleteWorker(id)
     if (res.error) return false
+    avatarsRef.current.delete(id)
     await refreshData()
     return true
   }, [backend, refreshData])
@@ -597,32 +630,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [backend])
 
-  const listChatMessages = useCallback(async (limit?: number) => {
-    const res = await backend.listChatMessages(limit)
-    return { messages: res.data || [], error: res.error }
-  }, [backend])
-
-  const sendChatMessage = useCallback(async (body: string) => {
-    const res = await backend.sendChatMessage(body)
-    if (res.error || !res.data) return { message: null, error: res.error || 'Failed to send message.' }
-    return { message: res.data, error: null }
-  }, [backend])
-
-  const listChatMembers = useCallback(async () => {
-    const res = await backend.listChatMembers()
-    return { members: res.data || [], error: res.error }
-  }, [backend])
-
-  const listChatReactions = useCallback(async () => {
-    const res = await backend.listChatReactions()
-    return { reactions: res.data || [], error: res.error }
-  }, [backend])
-
-  const toggleChatReaction = useCallback(async (messageId: string, emoji: string) => {
-    const res = await backend.toggleChatReaction(messageId, emoji)
-    return { reactions: res.data || [], error: res.error }
-  }, [backend])
-
   const settleWorker = useCallback(async (workerId: string, note?: string) => {
     const res = await backend.settleWorker(workerId, note)
     if (res.error || !res.data) return null
@@ -694,11 +701,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     listEntryComments,
     addEntryComment,
     markNotificationsRead,
-    listChatMessages,
-    sendChatMessage,
-    listChatMembers,
-    listChatReactions,
-    toggleChatReaction,
     settleWorker,
     updatePaymentStatus,
     updatePaymentNote,

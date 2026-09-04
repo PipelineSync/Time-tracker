@@ -5,14 +5,12 @@ import type {
   Settings,
   AuthUser,
   TimeEntryComment,
-  ChatMessage,
-  ChatMember,
-  ChatReaction,
   AppNotification,
   Payment,
   PaymentStatus,
   PaymentMethod,
   Role,
+  WorkerAvatar,
 } from './types'
 
 export interface BackendResult<T> {
@@ -23,11 +21,6 @@ export interface BackendResult<T> {
 /** Shown when an account that used to work is deleted by the admin. */
 export const ACCOUNT_DEACTIVATED_MESSAGE =
   'This account is no longer active. If you believe this is a mistake, please contact the administrator.'
-
-/** Longest single team-chat message the backends accept. */
-export const CHAT_MAX_LENGTH = 2000
-/** How many messages the chat page pulls by default (newest window). */
-export const CHAT_PAGE_SIZE = 200
 
 export interface CreateWorkerInput {
   name: string
@@ -66,6 +59,13 @@ export interface DataBackend {
 
   // Data (scoped to current user + role)
   listWorkers(): Promise<BackendResult<Worker[]>>
+  /**
+   * The image columns of the workers the caller may see (same scope as
+   * `listWorkers`), fetched once per sign-in. `listWorkers` deliberately
+   * excludes these heavy base64 columns so the background poll stays small;
+   * the store merges this snapshot back into the worker list.
+   */
+  listWorkerAvatars(): Promise<BackendResult<WorkerAvatar[]>>
   createWorker(input: CreateWorkerInput): Promise<BackendResult<Worker>>
   updateWorker(id: string, patch: Partial<Worker> & { newPassword?: string }): Promise<BackendResult<Worker>>
   deleteWorker(id: string): Promise<BackendResult<null>>
@@ -110,26 +110,6 @@ export interface DataBackend {
   // Notes / chat on entries
   listEntryComments(entryId: string): Promise<BackendResult<TimeEntryComment[]>>
   addEntryComment(entryId: string, body: string): Promise<BackendResult<TimeEntryComment>>
-
-  /**
-   * Team chat (the Chat section). Every member of the workspace posts into one
-   * shared room: the admin and all workers see the same messages.
-   */
-  listChatMessages(limit?: number): Promise<BackendResult<ChatMessage[]>>
-  sendChatMessage(body: string): Promise<BackendResult<ChatMessage>>
-  /** Everyone in the chat, including the admin — identical for every role. */
-  listChatMembers(): Promise<BackendResult<ChatMember[]>>
-  /**
-   * Emoji reactions on the workspace's chat messages, oldest first. Reactions
-   * are deliberately quiet: they never create a notification.
-   */
-  listChatReactions(): Promise<BackendResult<ChatReaction[]>>
-  /**
-   * Add the emoji to the message, or remove it if the caller already reacted
-   * with it. Resolves with that message's reactions, so the caller can drop the
-   * result straight into the row it toggled.
-   */
-  toggleChatReaction(messageId: string, emoji: string): Promise<BackendResult<ChatReaction[]>>
 
   // Notifications
   /** The most recent notifications for the signed-in user (`limit` caps the
