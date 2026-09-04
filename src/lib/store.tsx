@@ -25,6 +25,9 @@ import type { DataBackend, CreateWorkerInput, BackendResult } from './backend'
 import { localBackend } from './localDb'
 import { supabaseBackend, isSupabaseConfigured, ACCOUNT_DEACTIVATED_MESSAGE } from './supabaseDb'
 import { toast } from 'sonner'
+import { notifySlack } from './slack'
+import { formatMinutes } from './utils'
+import type { SlackSettings } from './types'
 
 // ---- Data-sync budget ----------------------------------------------------
 // Every visible tab keeps a bounded slice of the database in memory and its
@@ -130,6 +133,9 @@ interface StoreValue {
   cancelTimer: () => Promise<void>
 
   saveSettings: (patch: Partial<Settings>) => Promise<Settings | null>
+  /** Slack integration config — admin only (Settings → Slack). */
+  getSlackSettings: () => Promise<SlackSettings | null>
+  saveSlackSettings: (patch: Partial<SlackSettings>) => Promise<SlackSettings | null>
   resetAllData: () => Promise<void>
   seedDemo: () => Promise<void>
 
@@ -531,24 +537,34 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (res.error || !res.data) return { data: null, error: res.error }
     if (!userRef.current || userRef.current.role === 'worker') setActiveTimer(res.data)
     upsertActiveTimer(res.data)
+    // Mirror to Slack (fire-and-forget; failures are logged, never thrown).
+    const workerName = workers.find((w) => w.id === input.worker_id)?.name || 'Someone'
+    notifySlack('clock_in', {
+      timer_id: res.data.id,
+      demoText: `🟢 ${workerName} just clocked in${input.project ? ` — ${input.project}` : ''}.`,
+    })
     return { data: res.data, error: null }
-  }, [backend, upsertActiveTimer])
+  }, [backend, upsertActiveTimer, workers])
 
   const pauseTimer = useCallback(async (timerId?: string) => {
     const res = await backend.pauseTimer(timerId)
     if (res.error || !res.data) return { data: null, error: res.error }
     setActiveTimer((prev) => (prev && prev.id === res.data!.id ? res.data : prev))
     upsertActiveTimer(res.data)
+    const workerName = workers.find((w) => w.id === res.data!.worker_id)?.name || 'Someone'
+    notifySlack('break_start', { timer_id: res.data.id, demoText: `☕ ${workerName} started a break.` })
     return { data: res.data, error: null }
-  }, [backend, upsertActiveTimer])
+  }, [backend, upsertActiveTimer, workers])
 
   const resumeTimer = useCallback(async (timerId?: string) => {
     const res = await backend.resumeTimer(timerId)
     if (res.error || !res.data) return { data: null, error: res.error }
     setActiveTimer((prev) => (prev && prev.id === res.data!.id ? res.data : prev))
     upsertActiveTimer(res.data)
+    const workerName = workers.find((w) => w.id === res.data!.worker_id)?.name || 'Someone'
+    notifySlack('break_end', { timer_id: res.data.id, demoText: `▶️ ${workerName} is back from break.` })
     return { data: res.data, error: null }
-  }, [backend, upsertActiveTimer])
+  }, [backend, upsertActiveTimer, workers])
 
   const stopTimer = useCallback(async (note?: string) => {
     const current = activeTimer
@@ -557,10 +573,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (res.error || !res.data) return { data: null, error: res.error }
     setActiveTimer(null)
     setActiveTimers((prev) => prev.filter((t) => t.id !== current.id))
+    const workerName = workers.find((w) => w.id === res.data!.worker_id)?.name || 'Someone'
+    notifySlack('clock_out', {
+      entry_id: res.data.id,
+      demoText: `✅ ${workerName} clocked out — ${formatMinutes(res.data.total_minutes)} worked, ${res.data.earnings.toFixed(2)} earned.`,
+    })
     await refreshTimer()
     await refreshData()
     return { data: res.data, error: null }
-  }, [backend, activeTimer, refreshData])
+  }, [backend, activeTimer, refreshData, workers])
 
   const cancelTimer = useCallback(async () => {
     const current = activeTimer
@@ -575,6 +596,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const res = await backend.saveSettings(patch)
     if (res.error || !res.data) return null
     setSettings(res.data)
+    return res.data
+  }, [backend])
+
+  const getSlackSettings = useCallback(async () => {
+    const res = await backend.getSlackSettings()
+    if (res.error) return null
+    return res.data
+  }, [backend])
+
+  const saveSlackSettings = useCallback(async (patch: Partial<SlackSettings>) => {
+    const res = await backend.saveSlackSettings(patch)
+    if (res.error || !res.data) {
+      toast.error(res.error || 'Could not save Slack settings.')
+      return null
+    }
     return res.data
   }, [backend])
 
@@ -640,9 +676,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const updatePaymentStatus = useCallback(async (id: string, status: PaymentStatus, paymentMethod?: PaymentMethod | null) => {
     const res = await backend.updatePaymentStatus(id, status, paymentMethod)
     if (res.error || !res.data) return null
+    // Mirror "marked as paid" into Slack (only that transition, not
+    // unpaid/pending changes).
+    if (status === 'paid') {
+      const payment = res.data
+      const workerName = workers.find((w) => w.id === payment.worker_id)?.name || 'Someone'
+      notifySlack('payment_paid', {
+        payment_id: payment.id,
+        demoText: `💸 ${workerName} was paid ${payment.amount.toFixed(2)}${paymentMethod === 'cash' ? ' (cash)' : paymentMethod === 'qr' ? ' (QR code)' : ''}.`,
+      })
+    }
     await refreshData()
     return res.data
-  }, [backend, refreshData])
+  }, [backend, refreshData, workers])
 
   const updatePaymentNote = useCallback(async (id: string, note: string | null) => {
     const res = await backend.updatePaymentNote(id, note)
@@ -696,6 +742,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     stopTimer,
     cancelTimer,
     saveSettings,
+    getSlackSettings,
+    saveSlackSettings,
     resetAllData,
     seedDemo,
     listEntryComments,

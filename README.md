@@ -54,6 +54,18 @@ A notification bell (with an unread badge) appears for both roles. The admin is 
 
 All entries **snapshot the hourly rate** at record time, so historical earnings don't change when a worker's rate changes later. Sessions that cross midnight are handled correctly.
 
+### Slack notifications
+Every workspace event can also be mirrored into a **Slack channel** automatically: when someone **clocks in**, **clocks out**, **starts a break**, **comes back from a break**, or when a payment is **marked paid** (amount, worker, period and payment method included). Each event type can be toggled on/off in **Settings → Slack**, and a **Send test message** button verifies the setup end to end.
+
+Setup (Supabase-connected deploys):
+
+1. Run `supabase/slack-notifications.sql` once in the Supabase SQL editor (fresh installs running `schema.sql` already have the table). It creates the admin-only `slack_settings` row that stores your webhook URL and per-event toggles — workers can never read the webhook URL because RLS restricts the table to the admin.
+2. In Slack: **Create an app → From scratch** → pick your workspace → enable **Incoming Webhooks** → **Add New Webhook to Workspace** → choose the channel → copy the `https://hooks.slack.com/services/…` URL.
+3. Paste the URL in **Settings → Slack**, pick the events you want, **Save**, then **Send test message**.
+4. Optional deploy-level fallback: set `SLACK_WEBHOOK_URL` in the Netlify environment variables. The saved URL in Settings wins when both exist. (In **demo mode** there is no server, so the browser posts straight to the webhook URL configured in Settings.)
+
+Messages are posted server-side by the `slack-notify` Netlify Function, which rebuilds each message from the database (worker name, project, hours, earnings, currency, business timezone) — so a client can never forge names or amounts, and a slow/broken Slack hookup can never block clocking in or out.
+
 ### Performance (why many tabs at once don't slow it down)
 The app is built so a workspace of several users on phones **and** laptops, all open at the same time, stays fast on a free Supabase plan:
 
@@ -118,6 +130,8 @@ This creates the `workers`, `time_entries`, `active_timers`, `settings`, and `pa
 > For **settlements that keep time entries**, run `supabase/settle-keeps-entries.sql` once. It adds `time_entries.settled_at`, the column "Settle & reset" stamps instead of deleting the entries it paid for (without it the app still keeps the entries, but falls back to the previous payment's `period_end` as the paid-up-to boundary). Fresh installs get this automatically from `schema.sql`.
 >
 
+
+> For **Slack notifications** (clock in / out, breaks, payments posted to a Slack channel), run `supabase/slack-notifications.sql` once. It creates the admin-only `slack_settings` table (webhook URL + per-event toggles). Then connect the webhook in **Settings → Slack** — see the *Slack notifications* section under Features. Fresh installs get this automatically from `schema.sql`.
 
 ---
 

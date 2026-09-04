@@ -142,6 +142,54 @@ export interface AppNotification {
 
 export type PaymentStatus = 'unpaid' | 'pending' | 'paid'
 
+/**
+ * A workspace event that can be mirrored into a Slack channel. Fired
+ * fire-and-forget from the store after the underlying action succeeded; the
+ * slack-notify Netlify Function turns each one into a formatted Slack message.
+ */
+export type SlackEvent =
+  | 'clock_in'
+  | 'clock_out'
+  | 'break_start'
+  | 'break_end'
+  | 'payment_paid'
+
+/** Human label for each Slack event (used by demo-mode fallback texts). */
+export const SlackEventNames: Record<SlackEvent, string> = {
+  clock_in: 'Clock in',
+  clock_out: 'Clock out',
+  break_start: 'Break started',
+  break_end: 'Back from break',
+  payment_paid: 'Payment paid',
+}
+
+/**
+ * Admin-configured Slack integration (Settings → Slack). Stored one row per
+ * workspace in `slack_settings` (admin-only RLS), so the webhook URL is never
+ * readable by workers — notifications are posted server-side by the
+ * slack-notify function instead. All fields optional on purpose: when no row
+ * exists every event is enabled by default and the webhook URL falls back to
+ * the SLACK_WEBHOOK_URL environment variable, if the deployer set one.
+ */
+export interface SlackSettings {
+  webhook_url: string | null
+  notify_clock_in: boolean
+  notify_clock_out: boolean
+  notify_break_start: boolean
+  notify_break_end: boolean
+  notify_payment_paid: boolean
+}
+
+/** Defaults used whenever no Slack settings row exists yet. */
+export const DEFAULT_SLACK_SETTINGS: SlackSettings = {
+  webhook_url: null,
+  notify_clock_in: true,
+  notify_clock_out: true,
+  notify_break_start: true,
+  notify_break_end: true,
+  notify_payment_paid: true,
+}
+
 export interface Payment {
   id: string
   worker_id: string

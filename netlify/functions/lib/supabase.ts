@@ -22,6 +22,30 @@ export function adminClient() {
   return createClient(url, secretKey, { auth: { persistSession: false, autoRefreshToken: false } })
 }
 
+export async function requireUser(request: Request) {
+  const token = getBearer(request)
+  if (!token) return { error: json(401, { error: 'Missing authentication token.' }) }
+  try {
+    const sb = adminClient()
+    const { data: authData, error: authError } = await sb.auth.getUser(token)
+    if (authError || !authData.user) return { error: json(401, { error: 'Invalid or expired session.' }) }
+    const { data: profile, error: profileError } = await sb
+      .from('profiles')
+      .select('role, worker_id')
+      .eq('user_id', authData.user.id)
+      .maybeSingle()
+    if (profileError || !profile) return { error: json(403, { error: 'Profile not found.' }) }
+    return {
+      sb,
+      userId: authData.user.id,
+      role: profile.role as 'admin' | 'worker',
+      workerId: (profile.worker_id as string | null) ?? null,
+    }
+  } catch (error) {
+    return { error: json(500, { error: error instanceof Error ? error.message : 'Server error.' }) }
+  }
+}
+
 export async function requireAdmin(request: Request) {
   const token = getBearer(request)
   if (!token) return { error: json(401, { error: 'Missing authentication token.' }) }
@@ -35,7 +59,7 @@ export async function requireAdmin(request: Request) {
       .eq('user_id', authData.user.id)
       .maybeSingle()
     if (profileError || profile?.role !== 'admin') return { error: json(403, { error: 'Admin access required.' }) }
-    return { sb, userId: authData.user.id }
+    return { sb, userId: authData.user.id, role: 'admin' as const, workerId: null }
   } catch (error) {
     return { error: json(500, { error: error instanceof Error ? error.message : 'Server error.' }) }
   }
