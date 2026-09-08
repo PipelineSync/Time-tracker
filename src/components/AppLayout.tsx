@@ -4,6 +4,7 @@ import {
   LayoutDashboard,
   Timer,
   ListChecks,
+  KanbanSquare,
   Users,
   BarChart3,
   Settings,
@@ -33,6 +34,7 @@ import {
 const adminNav = [
   { to: '/', label: 'Dashboard', shortLabel: 'Home', icon: LayoutDashboard },
   { to: '/entries', label: 'Time Entries', shortLabel: 'Time', icon: ListChecks },
+  { to: '/tasks', label: 'Tasks', shortLabel: 'Tasks', icon: KanbanSquare },
   { to: '/payments', label: 'Payments', shortLabel: 'Pay', icon: Wallet },
   { to: '/workers', label: 'Workers', shortLabel: 'Workers', icon: Users },
   { to: '/reports', label: 'Reports', shortLabel: 'Reports', icon: BarChart3 },
@@ -42,6 +44,7 @@ const adminNav = [
 const workerNav = [
   { to: '/tracker', label: 'Clock In / Out', shortLabel: 'Clock', icon: Timer },
   { to: '/entries', label: 'My Time', shortLabel: 'Time', icon: ListChecks },
+  { to: '/tasks', label: 'My Tasks', shortLabel: 'Tasks', icon: KanbanSquare },
   { to: '/payments', label: 'Payments', shortLabel: 'Pay', icon: Wallet },
   { to: '/settings', label: 'Settings', shortLabel: 'Settings', icon: Settings },
 ]
@@ -115,7 +118,9 @@ export function AppLayout() {
   )
 
   return (
-    <div className="min-h-screen bg-background">
+    // Transparent on purpose: the Christmas snow layer sits at z-index -1 over
+    // the body background, so an opaque wrapper here would hide it.
+    <div className="min-h-screen">
       {/* Desktop sidebar (navy) */}
       <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 flex-col bg-sidebar lg:flex">
         <div className="flex h-16 items-center border-b border-white/10 px-6">

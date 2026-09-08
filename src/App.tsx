@@ -16,6 +16,7 @@ const EntriesPage = lazy(() => import('@/pages/EntriesPage').then((m) => ({ defa
 const WorkersPage = lazy(() => import('@/pages/WorkersPage').then((m) => ({ default: m.WorkersPage })))
 const ReportsPage = lazy(() => import('@/pages/ReportsPage').then((m) => ({ default: m.ReportsPage })))
 const SettingsPage = lazy(() => import('@/pages/SettingsPage').then((m) => ({ default: m.SettingsPage })))
+const TasksPage = lazy(() => import('@/pages/TasksPage').then((m) => ({ default: m.TasksPage })))
 const PaymentsPage = lazy(() => import('@/pages/PaymentsPage').then((m) => ({ default: m.PaymentsPage })))
 
 export function App() {
@@ -52,6 +53,8 @@ export function App() {
 
           {/* Shared */}
           <Route path="/entries" element={<EntriesPage />} />
+          {/* Kanban board — workers see their own tasks, the admin sees all. */}
+          <Route path="/tasks" element={<TasksPage />} />
           <Route path="/payments" element={<PaymentsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
 

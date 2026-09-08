@@ -160,6 +160,34 @@ alter table public.payments add column if not exists payment_method text
 create index if not exists payments_user_idx on public.payments (user_id);
 create index if not exists payments_worker_idx on public.payments (worker_id);
 
+-- ---------- tasks (kanban board) ----------
+-- The Tasks section: a worker sees/manages only their own cards, the admin
+-- sees every worker's. Rows are owned by the workspace admin (user_id) like
+-- time_entries, so a task a worker creates from their own login still shows on
+-- the admin's board. See supabase/tasks.sql for existing databases.
+create table if not exists public.tasks (
+  id              uuid primary key default gen_random_uuid(),
+  user_id         uuid not null references auth.users (id) on delete cascade,
+  worker_id       uuid not null references public.workers (id) on delete cascade,
+  title           text not null check (length(btrim(title)) between 1 and 200),
+  description     text,
+  status          text not null default 'todo' check (status in ('todo','in_progress','waiting','approval','completed')),
+  priority        text not null default 'medium' check (priority in ('low','medium','high')),
+  due_date        date,
+  -- Manual ordering inside a column (smaller sorts first).
+  position        integer not null default 0,
+  created_by_role text not null default 'worker' check (created_by_role in ('admin','worker')),
+  -- When it first reached the Completed column (cleared if it moves back).
+  completed_at    timestamptz,
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now()
+);
+
+create index if not exists tasks_user_idx on public.tasks (user_id);
+create index if not exists tasks_worker_idx on public.tasks (worker_id);
+create index if not exists tasks_worker_status_position_idx
+  on public.tasks (worker_id, status, position);
+
 -- ---------- profiles (role model) ----------
 -- Each auth user has a profile: 'admin' (owns the workspace) or 'worker'
 -- (linked to a worker row). Admin sets hourly rates; workers clock in/out.
@@ -198,6 +226,7 @@ alter table public.notifications      enable row level security;
 alter table public.payments           enable row level security;
 alter table public.chat_messages          enable row level security;
 alter table public.chat_reactions         enable row level security;
+alter table public.tasks                  enable row level security;
 
 create or replace function public.is_admin()
 returns boolean
@@ -423,6 +452,45 @@ drop policy if exists "payments_delete" on public.payments;
 create policy "payments_delete" on public.payments
   for delete using ((select auth.uid()) = user_id and (select public.is_admin()));
 
+-- tasks policies (admin: every worker's board; worker: only their own cards)
+drop policy if exists "tasks_select" on public.tasks;
+create policy "tasks_select" on public.tasks
+  for select using (
+    ((select auth.uid()) = user_id and (select public.is_admin()))
+    or worker_id = (select public.current_worker_id())
+  );
+
+drop policy if exists "tasks_insert_admin" on public.tasks;
+create policy "tasks_insert_admin" on public.tasks
+  for insert with check ((select auth.uid()) = user_id and (select public.is_admin()));
+
+-- A worker may add tasks, but only ever assigned to themselves.
+drop policy if exists "tasks_insert_worker" on public.tasks;
+create policy "tasks_insert_worker" on public.tasks
+  for insert with check (
+    worker_id = (select public.current_worker_id())
+    and worker_id is not null
+    and user_id = (select public.workspace_owner_id())
+  );
+
+drop policy if exists "tasks_update" on public.tasks;
+create policy "tasks_update" on public.tasks
+  for update using (
+    ((select auth.uid()) = user_id and (select public.is_admin()))
+    or worker_id = (select public.current_worker_id())
+  )
+  with check (
+    ((select auth.uid()) = user_id and (select public.is_admin()))
+    or worker_id = (select public.current_worker_id())
+  );
+
+drop policy if exists "tasks_delete" on public.tasks;
+create policy "tasks_delete" on public.tasks
+  for delete using (
+    ((select auth.uid()) = user_id and (select public.is_admin()))
+    or worker_id = (select public.current_worker_id())
+  );
+
 -- ============================================================
 -- Performance indexes for the app's hot query paths
 -- (see supabase/perf-rls-and-indexes.sql for existing databases)
@@ -493,6 +561,14 @@ create trigger trg_chat_messages_user before insert on public.chat_messages
 drop trigger if exists trg_chat_reactions_user on public.chat_reactions;
 create trigger trg_chat_reactions_user before insert on public.chat_reactions
   for each row execute function public.set_user_id();
+
+drop trigger if exists trg_tasks_user on public.tasks;
+create trigger trg_tasks_user before insert on public.tasks
+  for each row execute function public.set_user_id();
+
+drop trigger if exists trg_tasks_updated on public.tasks;
+create trigger trg_tasks_updated before update on public.tasks
+  for each row execute function public.set_updated_at();
 
 drop trigger if exists trg_workers_updated on public.workers;
 create trigger trg_workers_updated before update on public.workers

@@ -11,9 +11,11 @@ import type {
   PaymentStatus,
   PaymentMethod,
   WorkerAvatar,
+  Task,
+  TaskStatus,
 } from './types'
 import { DEFAULT_SLACK_SETTINGS } from './types'
-import type { BackendResult, DataBackend, CreateWorkerInput } from './backend'
+import type { BackendResult, DataBackend, CreateWorkerInput, CreateTaskInput } from './backend'
 import { ACCOUNT_DEACTIVATED_MESSAGE } from './backend'
 import {
   createClient,
@@ -96,6 +98,18 @@ function mapErr(e: unknown): string {
   if (e && typeof e === 'object' && 'message' in e) return String((e as { message: string }).message)
   return 'Something went wrong.'
 }
+
+/**
+ * Columns the app actually reads from `time_entries`. `user_id` is the
+ * workspace owner — identical on every row and never used by the UI — so
+ * naming the columns explicitly keeps ~37 bytes/row off the wire, which is
+ * ~44 KB on a full 1200-row admin sync.
+ */
+const ENTRY_COLUMNS =
+  'id, worker_id, project, start_time, end_time, break_minutes, notes, hourly_rate, total_minutes, earnings, settled_at, created_at, updated_at'
+/** Same list for databases that predate `settled_at`. */
+const ENTRY_COLUMNS_LEGACY =
+  'id, worker_id, project, start_time, end_time, break_minutes, notes, hourly_rate, total_minutes, earnings, created_at, updated_at'
 
 const ok = <T,>(data: T | null): BackendResult<T> => ({ data, error: null })
 const fail = <T,>(error: string): BackendResult<T> => ({ data: null, error })
@@ -432,6 +446,19 @@ async function unsettledWithoutStampColumn(workerId: string): Promise<BackendRes
     .limit(1)
   const boundary = ((lastPayment as Array<{ period_end: string }> | null) ?? [])[0]?.period_end ?? null
   return ok(boundary ? rows.filter((e) => e.end_time > boundary) : rows)
+}
+
+/** Position that puts a new card at the bottom of its worker's column. */
+async function nextTaskPosition(workerId: string, status: TaskStatus): Promise<number> {
+  const { data } = await client()
+    .from('tasks')
+    .select('position')
+    .eq('worker_id', workerId)
+    .eq('status', status)
+    .order('position', { ascending: false })
+    .limit(1)
+  const top = ((data as Array<{ position: number }> | null) ?? [])[0]?.position
+  return typeof top === 'number' ? top + 1 : 0
 }
 
 async function pushNotification(recipientUserId: string, n: { entry_id: string | null; type: AppNotification['type']; message: string }) {
@@ -789,8 +816,8 @@ export const supabaseBackend: DataBackend = {
     const me = await requireUser()
     if (me.error) return fail(me.error)
     // Worker rows are scoped to the worker; admins see the whole workspace.
-    const build = () => {
-      let q = client().from('time_entries').select('*')
+    const build = (columns: string) => {
+      let q = client().from('time_entries').select(columns)
       if (me.data!.role === 'worker' && me.data!.workerId) q = q.eq('worker_id', me.data!.workerId)
       // Incremental sync: only rows created or updated since the last sync.
       // (updated_at is kept current by the set_updated_at trigger.)
@@ -799,19 +826,37 @@ export const supabaseBackend: DataBackend = {
       if (opts?.limit) q = q.limit(opts.limit)
       return q
     }
-    const { data, error } = await build()
-    if (error) return fail(error.message)
-    return ok(data as TimeEntry[])
+    const { data, error } = await build(ENTRY_COLUMNS)
+    if (error) {
+      // Database predating settle-keeps-entries.sql: retry without the column.
+      if (isMissingColumn(error as { code?: string; message?: string }, 'settled_at')) {
+        const retry = await build(ENTRY_COLUMNS_LEGACY)
+        if (retry.error) return fail(retry.error.message)
+        return ok(retry.data as unknown as TimeEntry[])
+      }
+      return fail(error.message)
+    }
+    return ok(data as unknown as TimeEntry[])
   },
 
   async listOlderEntries(before, limit = 500) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    let q = client().from('time_entries').select('*').lte('start_time', before)
-    if (me.data!.role === 'worker' && me.data!.workerId) q = q.eq('worker_id', me.data!.workerId)
-    const { data, error } = await q.order('start_time', { ascending: false }).limit(limit)
-    if (error) return fail(error.message)
-    return ok(data as TimeEntry[])
+    const build = (columns: string) => {
+      let q = client().from('time_entries').select(columns).lte('start_time', before)
+      if (me.data!.role === 'worker' && me.data!.workerId) q = q.eq('worker_id', me.data!.workerId)
+      return q.order('start_time', { ascending: false }).limit(limit)
+    }
+    const { data, error } = await build(ENTRY_COLUMNS)
+    if (error) {
+      if (isMissingColumn(error as { code?: string; message?: string }, 'settled_at')) {
+        const retry = await build(ENTRY_COLUMNS_LEGACY)
+        if (retry.error) return fail(retry.error.message)
+        return ok(retry.data as unknown as TimeEntry[])
+      }
+      return fail(error.message)
+    }
+    return ok(data as unknown as TimeEntry[])
   },
 
   async createEntry(input) {
@@ -1159,7 +1204,8 @@ export const supabaseBackend: DataBackend = {
   async listNotifications(limit) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    let q = client().from('notifications').select('*').eq('user_id', me.data!.id).order('created_at', { ascending: false })
+    // user_id is the caller's own id (already filtered on) — no need to ship it back.
+    let q = client().from('notifications').select('id, entry_id, type, message, read, created_at').eq('user_id', me.data!.id).order('created_at', { ascending: false })
     if (limit) q = q.limit(limit)
     const { data, error } = await q
     if (error) return fail(error.message)
@@ -1191,7 +1237,7 @@ export const supabaseBackend: DataBackend = {
   async listPayments(limit) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    let q = client().from('payments').select('*')
+    let q = client().from('payments').select('id, worker_id, amount, hours, status, period_start, period_end, created_at, paid_at, note, payment_method')
     if (me.data!.role === 'worker' && me.data!.workerId) q = q.eq('worker_id', me.data!.workerId)
     q = q.order('created_at', { ascending: false })
     if (limit) q = q.limit(limit)
@@ -1330,6 +1376,139 @@ export const supabaseBackend: DataBackend = {
     return ok(null)
   },
 
+  // ---- Tasks (kanban board) ----------------------------------------------
+  // RLS (supabase/tasks.sql) is the real boundary: a worker can only select /
+  // insert / update / delete rows whose worker_id is their own, the admin owns
+  // the whole workspace. The scoping below just keeps the queries small.
+
+  async listTasks() {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    // `user_id` is the workspace owner — constant across rows, never read.
+    let q = client().from('tasks').select('id, worker_id, title, description, status, priority, due_date, position, created_by_role, completed_at, created_at, updated_at')
+    if (me.data!.role === 'worker' && me.data!.workerId) q = q.eq('worker_id', me.data!.workerId)
+    const { data, error } = await q.order('position', { ascending: true }).order('created_at', { ascending: false })
+    if (error) return fail(error.message)
+    return ok((data as Task[]) ?? [])
+  },
+
+  async createTask(input: CreateTaskInput) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    const title = input.title.trim()
+    if (!title) return fail('Give the task a title.')
+    // Workers can only ever create tasks for themselves (RLS enforces it too).
+    const workerId = me.data!.role === 'admin' ? input.worker_id : me.data!.workerId
+    if (!workerId) return fail('Choose who the task is for.')
+    const status: TaskStatus = input.status ?? 'todo'
+    const sb = client()
+    const { data, error } = await sb
+      .from('tasks')
+      .insert({
+        worker_id: workerId,
+        title,
+        description: input.description?.trim() || null,
+        status,
+        priority: input.priority ?? 'medium',
+        due_date: input.due_date || null,
+        // Bottom of the column.
+        position: await nextTaskPosition(workerId, status),
+        created_by_role: me.data!.role,
+        completed_at: status === 'completed' ? new Date().toISOString() : null,
+      })
+      .select()
+      .single()
+    if (error) return fail(error.message)
+    // Tell the worker when the admin assigns them something.
+    if (me.data!.role === 'admin') {
+      const recipient = await getWorkerUserId(workerId)
+      if (recipient) {
+        await pushNotification(recipient, { entry_id: null, type: 'note', message: `New task assigned: "${title}"` })
+      }
+    }
+    return ok(data as Task)
+  },
+
+  async updateTask(id, patch) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    const sb = client()
+    const { data: current, error: readErr } = await sb.from('tasks').select('*').eq('id', id).maybeSingle()
+    if (readErr) return fail(readErr.message)
+    if (!current) return fail('Task not found.')
+    const task = current as Task
+
+    const update: Record<string, unknown> = {}
+    if (patch.title !== undefined && patch.title.trim()) update.title = patch.title.trim()
+    if (patch.description !== undefined) update.description = patch.description?.trim() || null
+    if (patch.priority !== undefined) update.priority = patch.priority
+    if (patch.due_date !== undefined) update.due_date = patch.due_date || null
+    // Only the admin may hand a task to a different worker.
+    if (patch.worker_id !== undefined && me.data!.role === 'admin') update.worker_id = patch.worker_id
+    if (patch.status !== undefined) {
+      update.status = patch.status
+      // Stamp the first time it reaches Completed; clear it when it moves back.
+      update.completed_at = patch.status === 'completed' ? (task.completed_at ?? new Date().toISOString()) : null
+    }
+    const nextWorker = (update.worker_id as string | undefined) ?? task.worker_id
+    const nextStatus = (update.status as TaskStatus | undefined) ?? task.status
+    if (nextWorker !== task.worker_id || nextStatus !== task.status) {
+      update.position = await nextTaskPosition(nextWorker, nextStatus)
+    }
+
+    const { data, error } = await sb.from('tasks').update(update).eq('id', id).select().single()
+    if (error) return fail(error.message)
+    return ok(data as Task)
+  },
+
+  async moveTask(id, status, position) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    const sb = client()
+    const { data: current, error: readErr } = await sb.from('tasks').select('*').eq('id', id).maybeSingle()
+    if (readErr) return fail(readErr.message)
+    if (!current) return fail('Task not found.')
+    const task = current as Task
+
+    // Re-number the destination column so the card lands exactly where it was
+    // dropped and the rest keep their relative order.
+    const { data: columnRows } = await sb
+      .from('tasks')
+      .select('id, position')
+      .eq('worker_id', task.worker_id)
+      .eq('status', status)
+      .order('position', { ascending: true })
+    const others = ((columnRows as Array<{ id: string }> | null) ?? []).filter((r) => r.id !== id)
+    const at = Math.max(0, Math.min(position, others.length))
+    const ordered = [...others.slice(0, at).map((r) => r.id), id, ...others.slice(at).map((r) => r.id)]
+
+    const { data, error } = await sb
+      .from('tasks')
+      .update({
+        status,
+        position: ordered.indexOf(id),
+        completed_at: status === 'completed' ? (task.completed_at ?? new Date().toISOString()) : null,
+      })
+      .eq('id', id)
+      .select()
+      .single()
+    if (error) return fail(error.message)
+
+    // Best-effort re-index of the neighbours; a failure only affects ordering.
+    await Promise.all(
+      ordered.map((rowId, i) => (rowId === id ? null : sb.from('tasks').update({ position: i }).eq('id', rowId)))
+    )
+    return ok(data as Task)
+  },
+
+  async deleteTask(id) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    const { error } = await client().from('tasks').delete().eq('id', id)
+    if (error) return fail(error.message)
+    return ok(null)
+  },
+
   async resetAll() {
     const me = await requireUser()
     if (me.error) return fail(me.error)
@@ -1359,6 +1538,7 @@ export const supabaseBackend: DataBackend = {
       }
     }
 
+    await client().from('tasks').delete().neq('id', '')
     await client().from('time_entries').delete().neq('id', '')
     await client().from('active_timers').delete().neq('id', '')
     await client().from('workers').delete().neq('id', '')

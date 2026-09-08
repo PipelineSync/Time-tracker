@@ -55,9 +55,12 @@ export function TrackerPage() {
       return
     }
     setStarting(true)
+    // Fall back to the worker's assigned Project Scope if no project was given
+    // (e.g. a clock-in that skips the dialog), so entries stay attributed.
+    const project = input?.project?.trim() || workerProfile?.position?.trim() || undefined
     const res = await startTimer({
       worker_id: currentWorkerId,
-      project: input?.project?.trim() || undefined,
+      project,
       notes: input?.notes?.trim() || undefined,
     })
     setStarting(false)
@@ -207,6 +210,7 @@ export function TrackerPage() {
         onOpenChange={setClockInOpen}
         workerName={workerProfile?.name || null}
         projectSuggestions={projectSuggestions}
+        projectScope={workerProfile?.position ?? null}
         onConfirm={async ({ project, notes }) => {
           await handleClockIn({ project, notes })
         }}

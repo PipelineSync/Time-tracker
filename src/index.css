@@ -72,6 +72,76 @@
   }
 }
 
+/* ============================================================
+   Christmas theme (seasonal skin)
+   Applied by adding `.christmas` to <html> — see src/lib/christmas.ts.
+   Only the semantic tokens are re-pointed, so every component picks the
+   festive palette up automatically without touching component code.
+   Contrast is kept at/above the original: deep evergreen text on a warm
+   off-white, and a Christmas red primary that still passes on white.
+   ============================================================ */
+@layer base {
+  .christmas {
+    --xmas-red: 355 72% 42%;        /* #B8202F  berry red  */
+    --xmas-red-bright: 355 78% 50%; /* #DC2436  ribbon red */
+    --xmas-green: 152 46% 22%;      /* #1E5138  evergreen  */
+    --xmas-green-deep: 155 52% 14%; /* #113124  pine shade */
+    --xmas-gold: 42 88% 46%;        /* #DEA10E  candlelight */
+    --xmas-cream: 30 40% 97%;       /* #FBF7F3  warm snow  */
+
+    --background: var(--xmas-cream);
+    --foreground: var(--xmas-green-deep);
+    --card: 0 0% 100%;
+    --card-foreground: var(--xmas-green-deep);
+    --popover: 0 0% 100%;
+    --popover-foreground: var(--xmas-green-deep);
+    --primary: var(--xmas-red);
+    --primary-foreground: 30 40% 98%;
+    --secondary: 150 30% 93%;
+    --secondary-foreground: var(--xmas-green);
+    --muted: 150 24% 94%;
+    --muted-foreground: 152 16% 36%;
+    --accent: var(--xmas-green);
+    --accent-foreground: 30 40% 98%;
+    --destructive: 0 72% 45%;
+    --destructive-foreground: 30 40% 98%;
+    --border: 150 20% 86%;
+    --input: 150 20% 86%;
+    --ring: var(--xmas-red);
+    --sidebar: var(--xmas-green-deep);
+    --sidebar-foreground: 30 40% 97%;
+    --sidebar-border: 152 40% 22%;
+  }
+
+  .christmas.dark {
+    /* Night-before-Christmas: deep pine field, warm snow type, red accents. */
+    --background: 155 42% 8%;
+    --foreground: 40 32% 94%;
+    --card: 155 36% 11%;
+    --card-foreground: 40 32% 94%;
+    --popover: 155 36% 11%;
+    --popover-foreground: 40 32% 94%;
+    /* 46% lightness keeps the button label at ~5.1:1 (WCAG AA); brighter
+       reds drop under 4.5:1 against the warm-white label. */
+    --primary: 355 78% 46%;
+    --primary-foreground: 40 32% 97%;
+    --secondary: 154 28% 17%;
+    --secondary-foreground: 40 32% 94%;
+    --muted: 154 26% 16%;
+    --muted-foreground: 145 16% 70%;
+    --accent: 42 80% 55%;
+    --accent-foreground: 155 42% 10%;
+    --destructive: 0 68% 50%;
+    --destructive-foreground: 40 32% 97%;
+    --border: 154 24% 21%;
+    --input: 154 24% 21%;
+    --ring: 355 78% 56%;   /* ring stays brighter — it is a focus cue, not text */
+    --sidebar: 155 48% 6%;
+    --sidebar-foreground: 40 32% 95%;
+    --sidebar-border: 154 28% 15%;
+  }
+}
+
 @layer base {
   * {
     @apply border-border;
@@ -126,5 +196,60 @@
   }
   .pr-safe {
     padding-right: env(safe-area-inset-right, 0px);
+  }
+}
+
+
+/* ============================================================
+   Falling snow (Christmas theme)
+   The layer sits BEHIND the app's content on a negative z-index and never
+   takes pointer events, so it can never obscure text or swallow a click —
+   it shows through the page's translucent surfaces as background texture.
+   ============================================================ */
+.snowfall {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.snowflake {
+  position: absolute;
+  top: -5vh;
+  display: block;
+  border-radius: 9999px;
+  background: #ffffff;
+  /* A soft halo keeps flakes visible on the light theme without needing
+     more opacity (which is what would start to hurt readability). */
+  box-shadow: 0 0 4px 1px rgba(255, 255, 255, 0.65);
+  will-change: transform;
+  animation-name: snow-fall;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+
+/* On the light theme pure white flakes would vanish into the cream page, so
+   tint them a cool blue-grey and drop the glow. */
+:root:not(.dark) .snowflake {
+  background: #9fc0dd;
+  box-shadow: 0 0 4px 1px rgba(120, 160, 200, 0.4);
+}
+
+@keyframes snow-fall {
+  0% {
+    transform: translate3d(0, -5vh, 0);
+  }
+  100% {
+    transform: translate3d(var(--drift, 0px), 105vh, 0);
+  }
+}
+
+/* Respect a user's reduced-motion preference: keep a still dusting of snow
+   rather than animating it. */
+@media (prefers-reduced-motion: reduce) {
+  .snowflake {
+    animation: none;
+    transform: translate3d(0, 40vh, 0);
   }
 }

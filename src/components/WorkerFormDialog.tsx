@@ -145,8 +145,17 @@ export function WorkerFormDialog({
           )}
 
           <div className="space-y-2">
-            <Label htmlFor="w-position">Position / role *</Label>
-            <Input id="w-position" value={position} onChange={(e) => setPosition(e.target.value)} placeholder="e.g. Designer, Developer" required />
+            <Label htmlFor="w-position">Project Scope *</Label>
+            <Input
+              id="w-position"
+              value={position}
+              onChange={(e) => setPosition(e.target.value)}
+              placeholder="e.g. Website redesign"
+              required
+            />
+            <p className="text-xs text-muted-foreground">
+              The work this person is assigned to. It fills in the project on their time entries automatically when they clock in.
+            </p>
           </div>
 
           <div className="space-y-2">

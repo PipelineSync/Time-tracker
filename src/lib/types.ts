@@ -15,6 +15,12 @@ export interface Worker {
   email: string | null
   hourly_rate: number
   status: WorkerStatus
+  /**
+   * The worker's assigned **Project Scope** — the work they are on. Set by the
+   * admin, and used to pre-fill the project on their time entries when they
+   * clock in. (The column is still named `position` for backwards
+   * compatibility with existing databases.)
+   */
   position: string | null
   avatar_url: string | null
   /** Payment methods the worker accepts (cash and/or QR code). */
@@ -188,6 +194,58 @@ export const DEFAULT_SLACK_SETTINGS: SlackSettings = {
   notify_break_start: true,
   notify_break_end: true,
   notify_payment_paid: true,
+}
+
+/**
+ * Columns of the task board. Tasks move between them by drag & drop (or the
+ * "Move to" menu on touch devices); the order is the order they appear in.
+ */
+export type TaskStatus = 'todo' | 'in_progress' | 'waiting' | 'approval' | 'completed'
+
+export const TASK_STATUSES: TaskStatus[] = ['todo', 'in_progress', 'waiting', 'approval', 'completed']
+
+export const TaskStatusNames: Record<TaskStatus, string> = {
+  todo: 'To Do',
+  in_progress: 'In Progress',
+  waiting: 'Waiting',
+  approval: 'Approval',
+  completed: 'Completed',
+}
+
+export type TaskPriority = 'low' | 'medium' | 'high'
+
+export const TaskPriorityNames: Record<TaskPriority, string> = {
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+}
+
+/**
+ * A unit of work assigned to a worker, shown on the Tasks kanban board.
+ *
+ * Visibility mirrors the rest of the app: the admin sees and manages every
+ * worker's tasks, while a worker only ever sees the tasks assigned to them
+ * (both in the UI and — with Supabase — at the RLS level). Workers can add
+ * tasks too, but only for themselves.
+ */
+export interface Task {
+  id: string
+  /** The worker the task belongs to. */
+  worker_id: string
+  title: string
+  description: string | null
+  status: TaskStatus
+  priority: TaskPriority
+  /** Optional deadline (ISO date, no time component needed). */
+  due_date: string | null
+  /** Manual ordering inside a column (smaller sorts first). */
+  position: number
+  /** Who created the task — used for the "Added by admin" hint. */
+  created_by_role: Role
+  /** When the task first landed in the Completed column. */
+  completed_at: string | null
+  created_at: string
+  updated_at: string
 }
 
 export interface Payment {

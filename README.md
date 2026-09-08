@@ -28,6 +28,8 @@ The app has two roles with clearly separated permissions:
 | Notes on entries | ✅ (reply) | ✅ (add notes) |
 | Settle & reset time → payments | ✅ | ❌ |
 | Payments view | ✅ (all, full control) | ✅ (own, read-only) |
+| Add tasks (kanban board) | ✅ (for any worker) | ✅ (own only) |
+| View / move tasks | ✅ (all workers' boards) | ✅ (own only) |
 | Change own password | ✅ | ✅ |
 | Reset other accounts' passwords | ✅ | ❌ (own only) |
 
@@ -35,8 +37,8 @@ Workers **clock in, take breaks, and clock out** — their rate is set by the ad
 
 ### Pages
 - **Dashboard** *(admin)* — today's & this week's hours and earnings, a live **"On the clock now"** panel listing **every** worker currently clocked in (with a **Working** / **On break** badge, time worked and break time, updated every second), per-worker summary, recent entries, "Add time"
-- **Workers** *(admin)* — add/edit/delete workers, create each worker's login account, set hourly rate & active/inactive status. Each worker card shows their **live clock status** (Working / On break, with elapsed time) while they are on the clock, and the **hours & earnings still to pay** — only the time that has *not* been settled yet, so both drop back to zero the moment you **Settle & reset** (what has already been settled stays visible underneath as context, and the full lifetime totals live in Time Entries and Reports). **Deleting a worker also permanently disables their login account** (the Supabase Auth user is removed server-side, and any open session of theirs is signed out) — they can no longer sign in.
-- **Clock In / Out** *(worker)* — big clock-in button, then break/pause/resume and clock-out; survives a page refresh. At clock-out the worker can attach an **optional note** that is saved on the time entry (the admin's clock-out notification flags that a note was added).
+- **Workers** *(admin)* — add/edit/delete workers, create each worker's login account, set hourly rate, **Project Scope**, & active/inactive status. The **Project Scope** is the work a person is assigned to: once the admin sets it, it **auto-populates the Project field** on that worker's time — it pre-fills the clock-in dialog on their **My Time / Clock In** screen (and the admin's manual-entry form), so their entries are attributed to the right project without anyone retyping it. It stays **editable**, so a one-off shift on something else is still easy to record, and changing the scope applies from the next clock-in onward (past entries keep what they were logged with). Each worker card shows their **live clock status** (Working / On break, with elapsed time) while they are on the clock, and the **hours & earnings still to pay** — only the time that has *not* been settled yet, so both drop back to zero the moment you **Settle & reset** (what has already been settled stays visible underneath as context, and the full lifetime totals live in Time Entries and Reports). **Deleting a worker also permanently disables their login account** (the Supabase Auth user is removed server-side, and any open session of theirs is signed out) — they can no longer sign in.
+- **Clock In / Out** *(worker)* — big clock-in button, then break/pause/resume and clock-out; survives a page refresh. The **Project / task** field comes pre-filled with the **Project Scope** the admin assigned to the worker (editable, with their recent projects offered as suggestions). At clock-out the worker can attach an **optional note** that is saved on the time entry (the admin's clock-out notification flags that a note was added).
 - **Manual entry** *(admin)* — date, start/end time, break, project, notes, auto-calculated hours & earnings (this is how the admin adds time to workers)
 - **Time Entries** — table on desktop / cards on mobile, filters (including **settled / unsettled**), sorting; admin can edit/delete/duplicate, workers see their own. Entries that a settlement paid for carry a **Settled** badge and stay here as history; the summary line also shows the **unsettled** earnings still waiting to be paid out
 - **Notes / chat on entries** — every entry has a conversation thread: workers add notes, the admin replies (and vice versa), both sides are notified
@@ -45,8 +47,20 @@ Workers **clock in, take breaks, and clock out** — their rate is set by the ad
 - **Settings → Profile** *(worker)* — workers upload their own **profile picture** from their account settings. The picture is saved to their worker profile and shows up **for the admin** next to their name on the Workers page, the Dashboard and the "On the clock now" panel — not just a bare name.
 - **Settings → Payment methods** *(worker)* — each worker chooses how they can be paid: **Cash**, **QR Code**, or both. Enabling **QR Code** requires uploading their QR code image (a screenshot/photo of their GCash, Maya, banking-app, etc. QR — the image is automatically downscaled before saving). The methods and QR image are saved on the worker's profile.
 - **Payments** — the admin turns a worker's unsettled time & earnings into a **settlement**: a **Reset & settle** action on a worker creates an **unpaid** payment for the time that has not been settled yet. **Time entries are never deleted by a settlement** — the entries it paid for are marked **Settled** (their hours, notes and comments all stay in Time Entries), so the next settlement only covers time worked since. An entry only disappears when the admin **deletes it by hand**. The admin then drives the status **unpaid → pending → paid** (with a "Back to unpaid" option) and can delete payments. When the admin clicks **Mark paid**, a dialog shows the **payment methods that worker accepts** (Cash / QR Code, with the QR image ready to scan) and the admin **picks the method they are paying with**; it is stored on the payment (`payments.payment_method`, see `supabase/payment-paid-method.sql`) and shown in the **Paid via** column of the history. The **worker** sees their own payments **read-only**, with no edit controls, and their own enabled methods and QR code at the top of the page.
+- **Tasks** *(both roles)* — a **kanban board** with five stages: **To Do → In Progress → Waiting → Approval → Completed**. **Drag and drop** a card between columns to change its stage (a drop indicator shows exactly where it will land, and cards keep their manual order inside a column). On phones — or with a keyboard — the **‹ ›** buttons on each card move it one stage at a time instead of dragging. Each task has a title, optional details, a **priority** (Low / Medium / High) and an optional **due date** (overdue cards are flagged in red).
+  - **Workers** can add tasks, but only ever for **themselves**, and they only ever see, move, edit, and delete **their own** tasks.
+  - The **admin** can add a task for **any** worker and sees **every** worker's cards on one board (each card names its owner), with a **worker filter** and a **stage filter** (and a *Clear filters* button) to narrow the board down to one person, one stage, or both. When the admin assigns a task, the worker gets a notification.
+  - Access is enforced in the backend *and* at the database level with Row Level Security — see `supabase/tasks.sql`.
 - **Auth** — sign in with admin or worker credentials. Only the admin can create worker login accounts.
 - **Change password** — available from the account menu (top-right) for both roles: enter your current password and a new one. Admins can also **reset a worker's password** from the Workers page. In demo mode the new password is set directly; with Supabase, a password reset link is emailed to the worker (the anon key cannot set another user's password).
+
+### Christmas theme 🎄
+The app ships with a **seasonal Christmas skin**, on by default:
+- **Logo wearing a Santa hat** — an SVG hat is tilted over the "S" of the PipelineSync mark (`src/components/SantaHat.tsx`). It is positioned and scaled as a fraction of the logo's *height*, with per-variant offsets measured from the two logo files, so it sits correctly on the light and dark lockups at every size (sidebar, mobile header, sign-in card).
+- **Festive palette** — a Christmas-red primary, evergreen accents and a warm-snow background replace the brand blues, in both light and dark mode. Only the semantic theme tokens are re-pointed, so every component picks it up with no component-level changes. **All text pairings were contrast-checked and meet WCAG AA** (the dark-mode button red was darkened to 46% lightness specifically to clear 4.5:1).
+- **Falling snow** — a semi-transparent snowfall layer (`src/components/Snowfall.tsx`). It is deliberately unobtrusive: it sits at `z-index: -1` **behind all content**, is `pointer-events-none` (never swallows a click), uses small low-opacity flakes (12–38%), and freezes for anyone with `prefers-reduced-motion`. **Text readability is unaffected.**
+
+To ship the normal brand skin instead, build with `VITE_CHRISTMAS_THEME=off` — that removes the hat, the palette and the snow in one switch (`src/lib/christmas.ts`).
 
 ### Notifications
 A notification bell (with an unread badge) appears for both roles. The admin is notified when a worker **clocks in**, **starts a break**, **comes back from a break**, **clocks out**, or **adds a note**. Workers are notified when the **admin replies to a note**, **adds time** for them, creates a **payment**, or changes a **payment status**. Clicking a notification opens the related entry.
@@ -66,17 +80,20 @@ Setup (Supabase-connected deploys):
 
 Messages are posted server-side by the `slack-notify` Netlify Function, which rebuilds each message from the database (worker name, project, hours, earnings, currency, business timezone) — so a client can never forge names or amounts, and a slow/broken Slack hookup can never block clocking in or out.
 
-### Performance (why many tabs at once don't slow it down)
-The app is built so a workspace of several users on phones **and** laptops, all open at the same time, stays fast on a free Supabase plan:
+### Performance & egress (why many tabs at once don't slow it down)
+The app is built to stay inside Supabase's and Netlify's free-tier bandwidth even with a whole team signed in at once.
 
-- **Incremental entry sync** — every 15 s a visible tab re-fetches only the entries *changed* since its last sync (usually zero rows), not the whole history. The newest-entries window (≈1,200 for the admin, ≈300 for a worker) re-loads on refocus (at most once per 90 s) and every 5 minutes, which is also when entries deleted on another device get reconciled. Per-tab bandwidth therefore stays flat as the workspace's history grows.
-- **Bounded lists** — the notification bell fetches the 20 most recent notifications (its badge is an indexed `COUNT` query, so the exact unread number is free), and payments show the 100 most recent.
-- **Load older, on demand** — the Time Entries page renders 200 rows at a time with a *Show more* button, and Reports shows a *Load older entries* button when you pick a custom range that starts before the oldest loaded entry (one tap pulls in the pages the range needs).
-- **Hidden tabs don't poll** — polling pauses while a tab is in the background or the device sleeps.
+**Data sync (Supabase egress)**
+- Every visible tab keeps a **bounded window** of the database in memory (1200 newest entries for the admin, 300 for a worker) — per-tab load stays flat as history grows.
+- The 15 s background poll fetches only what changed: entries sync as a **delta** (`since` the last sync), and the unread badge is a **HEAD count** that ships no rows at all.
+- Heavy-but-rarely-changing lists — **workers, payments, settings, tasks and the notification dropdown** — are skipped on "light" ticks and refresh roughly **once a minute** instead of every 15 s. Anything you change yourself refreshes immediately, so this is invisible in use.
+- Queries name their **columns explicitly** rather than `select('*')`, so the workspace-owner `user_id` (identical on every row, never displayed) never goes over the wire.
+- Background refreshes never stack: focus/visibility events fire in bursts, and a refresh already in flight suppresses the rest.
 
-**No database migration is required for any of this** — the delta sync uses the existing `created_at` / `updated_at` columns, and the unread badge uses the `notifications_user_unread_idx` index that `supabase/perf-rls-and-indexes.sql` already creates. If your `time_entries` table ever grows into the tens of thousands of rows, `supabase/perf-entries-sync-indexes.sql` (optional, safe to re-run) adds two small indexes so the delta query keeps using them.
-
----
+**Static assets (CDN egress)**
+- `public/_headers` marks the fingerprinted `/assets/*` build output **`immutable` for a year**, so returning visitors re-download nothing; `index.html` and `sw.js` always revalidate so deploys still land instantly.
+- Brand images are served at the size they are actually displayed (the logo was a 1052×216 PNG rendered at 28 px) — the brand folder went from **310 KB to 37 KB**.
+- **Recharts (~110 KB gzipped) is admin-only**, so it is pinned to its own `charts-*` chunk that (a) nobody but an admin ever downloads, (b) keeps a stable URL across deploys, and (c) is **excluded from the PWA precache** — otherwise every worker's phone would download the chart library on every deploy. It is cached at runtime on first use instead. The PWA install dropped from **1510 KB to 844 KB**.
 
 ## 1. Install dependencies
 
@@ -118,7 +135,7 @@ Log in as admin to manage workers, set rates, and create worker accounts. Log in
 
 In the Supabase dashboard, open **SQL Editor** → **New query**, paste the entire contents of `supabase/schema.sql`, and click **Run**.
 
-This creates the `workers`, `time_entries`, `active_timers`, `settings`, and `payments` tables with foreign keys, indexes, **Row Level Security policies**, and triggers that auto-set `user_id` and `updated_at`.
+This creates the `workers`, `time_entries`, `active_timers`, `settings`, `payments`, and `tasks` tables with foreign keys, indexes, **Row Level Security policies**, and triggers that auto-set `user_id` and `updated_at`.
 
 > **Upgrading an existing database?** Run `supabase/fix-multiple-active-workers.sql` once — it makes the timer uniqueness rule *one per worker* (older databases allowed only one clocked-in worker per workspace, so the admin dashboard could only ever show a single worker) and allows the new `break_start` / `break_end` notification types.
 >
@@ -131,6 +148,8 @@ This creates the `workers`, `time_entries`, `active_timers`, `settings`, and `pa
 >
 
 
+> For the **Tasks** kanban board, run **`supabase/RUN-THIS-tasks.sql`** once (a copy-paste-ready version of `supabase/tasks.sql`, with a verification query at the end). It creates the `tasks` table (stage, priority, due date, board position) with RLS policies that let a **worker see and manage only their own cards** while the **admin has access to every worker's tasks**. Fresh installs get this automatically from `schema.sql`. It is safe to re-run: if you applied an earlier version with only three stages, re-running it widens the stage constraint to include **Waiting** and **Approval**.
+>
 > For **Slack notifications** (clock in / out, breaks, payments posted to a Slack channel), run `supabase/slack-notifications.sql` once. It creates the admin-only `slack_settings` table (webhook URL + per-event toggles). Then connect the webhook in **Settings → Slack** — see the *Slack notifications* section under Features. Fresh installs get this automatically from `schema.sql`.
 
 ---
@@ -260,12 +279,13 @@ setup and the secrets table live in **[docs/APPS.md](docs/APPS.md)**.
 time-tracker/
 ├─ supabase/schema.sql          # Database tables, RLS, triggers
 ├─ supabase/settle-keeps-entries.sql    # One-time migration: settlements keep time entries
+├─ supabase/tasks.sql           # One-time migration: Tasks kanban board (+ per-role RLS)
 ├─ src/
 │  ├─ lib/                      # types, utils, stats, backend (local + supabase), store, theme
 │  │                          # + platform.ts (shell detection), native.ts (Capacitor bootstrap), useInstallPrompt.ts
 │  ├─ components/               # shared UI + app components (shadcn-style), incl. AvatarBubble
 │  │                          # + InstallAppCard.tsx (Settings → “Get the app”)
-│  ├─ pages/                    # Dashboard, Tracker, Entries, Workers, Reports, Settings, Payments, Auth
+│  ├─ pages/                    # Dashboard, Tracker, Entries, Tasks, Workers, Reports, Settings, Payments, Auth
 │  ├─ App.tsx                   # Routing + auth gate (HashRouter inside native shells)
 │  └─ main.tsx                  # mounts app, registers the PWA service worker (browser shells only)
 ├─ ios/                         # Capacitor iOS project (Xcode) — App Store / TestFlight

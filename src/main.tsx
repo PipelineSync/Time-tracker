@@ -6,6 +6,8 @@ import { StoreProvider } from '@/lib/store'
 import { ThemeProvider } from '@/lib/theme'
 import { initNativeShell } from '@/lib/native'
 import { isNativeShell } from '@/lib/platform'
+import { isChristmasTheme } from '@/lib/christmas'
+import { Snowfall } from '@/components/Snowfall'
 import './index.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
@@ -13,6 +15,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <ThemeProvider>
       <StoreProvider>
         <App />
+        {isChristmasTheme() && <Snowfall />}
         <Toaster position="top-center" richColors closeButton />
       </StoreProvider>
     </ThemeProvider>
