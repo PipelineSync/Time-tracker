@@ -27,6 +27,11 @@ export interface Worker {
   payment_methods: PaymentMethod[]
   /** Uploaded QR code image (data URL), required while 'qr' is enabled. */
   qr_code_url: string | null
+  /**
+   * Admin capabilities granted to this worker (empty for a plain worker).
+   * Enforced in the app, in both backends and — with Supabase — in RLS.
+   */
+  permissions: Permission[]
   created_at: string
   updated_at: string
 }
@@ -86,11 +91,218 @@ export interface Settings {
   avatar_url: string | null
 }
 
+// ---- Worker permissions ----------------------------------------------------
+
+/**
+ * An admin capability that can be handed to an individual worker.
+ *
+ * By default a worker has NONE of these: they clock in, see their own time and
+ * their own board, and that is it. The admin grants extra access per worker
+ * when creating (or editing) them — a `.view` key opens the team-wide read,
+ * a `.manage` key adds the admin's write actions in that area.
+ *
+ * The keys are the single source of truth: the app gates nav, routes and
+ * buttons on them, both backends check them, and (with Supabase) the RLS
+ * policies in supabase/worker-permissions.sql check the very same list, so a
+ * granted worker really can read the rows — and an ungranted one cannot, even
+ * if they call the API directly.
+ */
+export type Permission =
+  | 'dashboard.view'
+  | 'workers.view'
+  | 'workers.manage'
+  | 'entries.view_all'
+  | 'entries.manage'
+  | 'tasks.view_all'
+  | 'tasks.manage_all'
+  | 'payments.view_all'
+  | 'payments.manage'
+  | 'reports.view'
+  | 'clients.manage'
+  | 'settings.manage'
+
+export const PERMISSIONS: Permission[] = [
+  'dashboard.view',
+  'workers.view',
+  'workers.manage',
+  'entries.view_all',
+  'entries.manage',
+  'tasks.view_all',
+  'tasks.manage_all',
+  'payments.view_all',
+  'payments.manage',
+  'reports.view',
+  'clients.manage',
+  'settings.manage',
+]
+
+/**
+ * Capabilities that put other people's data on the screen. Anyone holding one
+ * of them can also read the worker list — team-wide rows are useless without
+ * the names to go with them — even if the Workers page itself is not open to
+ * them. (The `workers` RLS policy checks the same set.)
+ */
+export const TEAM_VIEW_PERMISSIONS: Permission[] = [
+  'workers.view',
+  'dashboard.view',
+  'entries.view_all',
+  'tasks.view_all',
+  'payments.view_all',
+  'reports.view',
+]
+
+/** Grouped for the "Access" section of the worker form. */
+export interface PermissionGroup {
+  key: string
+  label: string
+  description: string
+  items: { key: Permission; label: string; hint: string; /** Needs this one ticked first. */ requires?: Permission }[]
+}
+
+export const PERMISSION_GROUPS: PermissionGroup[] = [
+  {
+    key: 'dashboard',
+    label: 'Dashboard',
+    description: "The admin's overview of the whole team.",
+    items: [
+      { key: 'dashboard.view', label: 'View the team dashboard', hint: 'Totals, who is on the clock, recent activity across every worker.' },
+    ],
+  },
+  {
+    key: 'workers',
+    label: 'Workers',
+    description: 'The team list and worker accounts.',
+    items: [
+      { key: 'workers.view', label: 'View all workers', hint: 'See the team list, rates and live clock status.' },
+      { key: 'workers.manage', label: 'Add, edit and remove workers', hint: 'Create logins, change rates, reset passwords, delete workers — and change what other workers can access.', requires: 'workers.view' },
+    ],
+  },
+  {
+    key: 'entries',
+    label: 'Time entries',
+    description: "Everyone's recorded time.",
+    items: [
+      { key: 'entries.view_all', label: "View the whole team's time", hint: 'Otherwise they only ever see their own entries.' },
+      { key: 'entries.manage', label: 'Add, edit and delete time entries', hint: 'Manual entries for any worker, and editing or deleting existing ones.', requires: 'entries.view_all' },
+    ],
+  },
+  {
+    key: 'tasks',
+    label: 'Tasks',
+    description: 'The kanban board.',
+    items: [
+      { key: 'tasks.view_all', label: "View everyone's board", hint: 'Otherwise they only see the tasks assigned to them.' },
+      { key: 'tasks.manage_all', label: "Assign and edit anyone's tasks", hint: 'Create tasks for other workers, move, edit and delete their cards.', requires: 'tasks.view_all' },
+    ],
+  },
+  {
+    key: 'payments',
+    label: 'Payments',
+    description: 'Settlements and payouts.',
+    items: [
+      { key: 'payments.view_all', label: "View the team's payments", hint: 'Otherwise they only see their own payslips.' },
+      { key: 'payments.manage', label: 'Settle and mark payments paid', hint: 'Run settlements, change payment status, delete payments.', requires: 'payments.view_all' },
+    ],
+  },
+  {
+    key: 'reports',
+    label: 'Reports',
+    description: 'Charts and CSV export.',
+    items: [
+      { key: 'reports.view', label: 'View reports and export CSV', hint: 'Hours and earnings across the team, per worker and per client.' },
+    ],
+  },
+  {
+    key: 'clients',
+    label: 'Clients',
+    description: 'The client master list.',
+    items: [
+      { key: 'clients.manage', label: 'Manage clients', hint: 'Add clients, rename them, and mark them active or inactive.' },
+    ],
+  },
+  {
+    key: 'settings',
+    label: 'Business settings',
+    description: 'Workspace-wide configuration.',
+    items: [
+      { key: 'settings.manage', label: 'Change business settings', hint: 'Business name, currency, timezone, default rate and the Slack integration.' },
+    ],
+  },
+]
+
+/** Ready-made sets, so the common cases are one click in the worker form. */
+export type PermissionPreset = 'worker' | 'supervisor' | 'manager' | 'full'
+
+export const PERMISSION_PRESETS: Record<PermissionPreset, { label: string; description: string; permissions: Permission[] }> = {
+  worker: {
+    label: 'Worker',
+    description: 'Their own time and their own tasks. The default.',
+    permissions: [],
+  },
+  supervisor: {
+    label: 'Supervisor',
+    description: "Sees the team and runs everyone's board, but no money.",
+    permissions: ['dashboard.view', 'workers.view', 'entries.view_all', 'tasks.view_all', 'tasks.manage_all'],
+  },
+  manager: {
+    label: 'Manager',
+    description: 'Supervisor plus time entries, clients, payments and reports.',
+    permissions: [
+      'dashboard.view',
+      'workers.view',
+      'entries.view_all',
+      'entries.manage',
+      'tasks.view_all',
+      'tasks.manage_all',
+      'payments.view_all',
+      'payments.manage',
+      'reports.view',
+      'clients.manage',
+    ],
+  },
+  full: {
+    label: 'Full access',
+    description: 'Everything the admin can do, including worker accounts and settings.',
+    permissions: [...PERMISSIONS],
+  },
+}
+
+/** Keep only real permission keys (rows can be edited outside the app). */
+export function normalizePermissions(value: unknown): Permission[] {
+  if (!Array.isArray(value)) return []
+  const seen = new Set<Permission>()
+  for (const v of value) if (PERMISSIONS.includes(v as Permission)) seen.add(v as Permission)
+  // A `.manage` key without its `.view` parent would be meaningless — the UI
+  // hides the section entirely — so imply the parent instead of dropping it.
+  for (const group of PERMISSION_GROUPS) {
+    for (const item of group.items) {
+      if (item.requires && seen.has(item.key)) seen.add(item.requires)
+    }
+  }
+  return PERMISSIONS.filter((p) => seen.has(p))
+}
+
+/** Which preset (if any) a permission set matches exactly. */
+export function presetFor(permissions: Permission[]): PermissionPreset | null {
+  const sorted = [...permissions].sort().join('|')
+  for (const [name, preset] of Object.entries(PERMISSION_PRESETS)) {
+    if ([...preset.permissions].sort().join('|') === sorted) return name as PermissionPreset
+  }
+  return null
+}
+
 export interface AuthUser {
   id: string
   email: string
   role: Role
   workerId?: string | null
+  /**
+   * The signed-in worker's granted capabilities, resolved at sign-in so the
+   * nav and routes are correct on the very first render. The admin implicitly
+   * has all of them. Refreshed from the worker row on every data sync, so a
+   * change by the admin lands without the worker signing out.
+   */
+  permissions?: Permission[]
 }
 
 export type Theme = 'light' | 'dark' | 'system'

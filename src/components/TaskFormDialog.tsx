@@ -61,7 +61,10 @@ export function TaskFormDialog({
   /** Pre-selected client (the board's client filter, when one is active). */
   defaultClientId?: string
 }) {
-  const { workers, user, isAdmin, activeClients, createTask, updateTask } = useStore()
+  const { workers, user, can, activeClients, createTask, updateTask } = useStore()
+  // Only someone who runs the whole board can assign work to another person.
+  const canAssign = can('tasks.manage_all')
+  const canManageClients = can('clients.manage')
   const [form, setForm] = useState<FormState>(emptyForm(defaultStatus))
   const [saving, setSaving] = useState(false)
   const [clientsOpen, setClientsOpen] = useState(false)
@@ -87,7 +90,7 @@ export function TaskFormDialog({
     } else {
       setForm({
         ...emptyForm(defaultStatus),
-        workerId: isAdmin ? defaultWorkerId || pickable[0]?.id || '' : user?.workerId || '',
+        workerId: canAssign ? defaultWorkerId || pickable[0]?.id || '' : user?.workerId || '',
         // One client on the list is not a choice — pre-pick it.
         clientId: defaultClientId || (activeClients.length === 1 ? activeClients[0].id : ''),
       })
@@ -95,7 +98,7 @@ export function TaskFormDialog({
     // `pickable` is derived from workers; re-running on its identity would
     // reset the form on every background refresh.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, task, defaultStatus, defaultWorkerId, defaultClientId, isAdmin, user?.workerId])
+  }, [open, task, defaultStatus, defaultWorkerId, defaultClientId, canAssign, user?.workerId])
 
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setForm((f) => ({ ...f, [key]: value }))
@@ -107,7 +110,7 @@ export function TaskFormDialog({
       toast.error('Give the task a title.')
       return
     }
-    if (isAdmin && !form.workerId) {
+    if (canAssign && !form.workerId) {
       toast.error('Choose who the task is for.')
       return
     }
@@ -125,13 +128,13 @@ export function TaskFormDialog({
           status: form.status,
           priority: form.priority,
           due_date: form.dueDate || null,
-          ...(isAdmin ? { worker_id: form.workerId } : {}),
+          ...(canAssign ? { worker_id: form.workerId } : {}),
         })
         if (!saved) return
         toast.success('Task updated.')
       } else {
         const created = await createTask({
-          worker_id: isAdmin ? form.workerId : undefined,
+          worker_id: canAssign ? form.workerId : undefined,
           client_id: form.clientId,
           title,
           description: form.description.trim() || null,
@@ -155,14 +158,14 @@ export function TaskFormDialog({
           <DialogHeader>
             <DialogTitle>{task ? 'Edit task' : 'New task'}</DialogTitle>
             <DialogDescription>
-              {isAdmin
+              {canAssign
                 ? 'Assign work to a team member and track it on the board.'
                 : 'Add something to your own board and drag it across as you go.'}
             </DialogDescription>
           </DialogHeader>
 
           <div className="grid gap-4 py-4">
-            {isAdmin && (
+            {canAssign && (
               <div className="grid gap-2">
                 <Label htmlFor="task-worker">Assign to</Label>
                 <Select value={form.workerId} onValueChange={(v) => set('workerId', v)}>
@@ -181,7 +184,7 @@ export function TaskFormDialog({
             <div className="grid gap-2">
               <div className="flex items-center justify-between gap-2">
                 <Label htmlFor="task-client">Client</Label>
-                {isAdmin && (
+                {canManageClients && (
                   <button
                     type="button"
                     onClick={() => setClientsOpen(true)}
@@ -200,7 +203,7 @@ export function TaskFormDialog({
               />
               {noClients && (
                 <p className="text-xs text-muted-foreground">
-                  {isAdmin
+                  {canManageClients
                     ? 'Add a client first — every task is assigned to one.'
                     : 'Ask your admin to add a client before creating tasks.'}
                 </p>
@@ -276,7 +279,7 @@ export function TaskFormDialog({
         </form>
       </DialogContent>
 
-      {isAdmin && <ManageClientsDialog open={clientsOpen} onOpenChange={setClientsOpen} />}
+      {canManageClients && <ManageClientsDialog open={clientsOpen} onOpenChange={setClientsOpen} />}
     </Dialog>
   )
 }

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard,
@@ -16,6 +16,7 @@ import {
   Monitor,
 } from 'lucide-react'
 import { useStore } from '@/lib/store'
+import type { Permission } from '@/lib/types'
 import { useTheme } from '@/lib/theme'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -31,29 +32,53 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 
-const adminNav = [
-  { to: '/', label: 'Dashboard', shortLabel: 'Home', icon: LayoutDashboard },
-  { to: '/entries', label: 'Time Entries', shortLabel: 'Time', icon: ListChecks },
-  { to: '/tasks', label: 'Tasks', shortLabel: 'Tasks', icon: KanbanSquare },
-  { to: '/payments', label: 'Payments', shortLabel: 'Pay', icon: Wallet },
-  { to: '/workers', label: 'Workers', shortLabel: 'Workers', icon: Users },
-  { to: '/reports', label: 'Reports', shortLabel: 'Reports', icon: BarChart3 },
-  { to: '/settings', label: 'Settings', shortLabel: 'Settings', icon: Settings },
-]
+interface NavItem {
+  to: string
+  label: string
+  shortLabel: string
+  icon: typeof LayoutDashboard
+}
 
-const workerNav = [
-  { to: '/tracker', label: 'Clock In / Out', shortLabel: 'Clock', icon: Timer },
-  { to: '/entries', label: 'My Time', shortLabel: 'Time', icon: ListChecks },
-  { to: '/tasks', label: 'My Tasks', shortLabel: 'Tasks', icon: KanbanSquare },
-  { to: '/payments', label: 'Payments', shortLabel: 'Pay', icon: Wallet },
-  { to: '/settings', label: 'Settings', shortLabel: 'Settings', icon: Settings },
-]
+const NAV = {
+  dashboard: { to: '/', label: 'Dashboard', shortLabel: 'Home', icon: LayoutDashboard },
+  tracker: { to: '/tracker', label: 'Clock In / Out', shortLabel: 'Clock', icon: Timer },
+  entriesAll: { to: '/entries', label: 'Time Entries', shortLabel: 'Time', icon: ListChecks },
+  entriesMine: { to: '/entries', label: 'My Time', shortLabel: 'Time', icon: ListChecks },
+  tasksAll: { to: '/tasks', label: 'Tasks', shortLabel: 'Tasks', icon: KanbanSquare },
+  tasksMine: { to: '/tasks', label: 'My Tasks', shortLabel: 'Tasks', icon: KanbanSquare },
+  payments: { to: '/payments', label: 'Payments', shortLabel: 'Pay', icon: Wallet },
+  workers: { to: '/workers', label: 'Workers', shortLabel: 'Workers', icon: Users },
+  reports: { to: '/reports', label: 'Reports', shortLabel: 'Reports', icon: BarChart3 },
+  settings: { to: '/settings', label: 'Settings', shortLabel: 'Settings', icon: Settings },
+} satisfies Record<string, NavItem>
+
+/**
+ * The destinations this account can reach. The admin gets everything; a worker
+ * gets their own screens plus whatever the admin granted them, in the same
+ * order as the admin's menu so the two look alike.
+ */
+function buildNav(isAdmin: boolean, can: (p: Permission) => boolean): NavItem[] {
+  if (isAdmin) {
+    return [NAV.dashboard, NAV.entriesAll, NAV.tasksAll, NAV.payments, NAV.workers, NAV.reports, NAV.settings]
+  }
+  const items: NavItem[] = []
+  if (can('dashboard.view')) items.push(NAV.dashboard)
+  // Only real workers clock in, so this stays first among their own screens.
+  items.push(NAV.tracker)
+  items.push(can('entries.view_all') ? NAV.entriesAll : NAV.entriesMine)
+  items.push(can('tasks.view_all') ? NAV.tasksAll : NAV.tasksMine)
+  items.push(NAV.payments)
+  if (can('workers.view')) items.push(NAV.workers)
+  if (can('reports.view')) items.push(NAV.reports)
+  items.push(NAV.settings)
+  return items
+}
 
 export function AppLayout() {
-  const { user, signOut, isAdmin, workers, settings } = useStore()
+  const { user, signOut, isAdmin, can, workers, settings } = useStore()
   const { setTheme } = useTheme()
   const navigate = useNavigate()
-  const navItems = isAdmin ? adminNav : workerNav
+  const navItems = useMemo(() => buildNav(isAdmin, can), [isAdmin, can])
   const [changePwOpen, setChangePwOpen] = useState(false)
 
   // The signed-in user's avatar, if they have uploaded one. Workers see their

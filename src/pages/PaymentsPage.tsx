@@ -42,7 +42,10 @@ function MethodBadge({ method, className }: { method: PaymentMethod; className?:
 }
 
 export function PaymentsPage() {
-  const { payments, workers, settings, isAdmin, dataLoading, updatePaymentStatus, updatePaymentNote, deletePayment } = useStore()
+  const { payments, workers, settings, isAdmin, can, dataLoading, updatePaymentStatus, updatePaymentNote, deletePayment } = useStore()
+  // Seeing the team's payments and changing them are separate grants.
+  const canViewAll = can('payments.view_all')
+  const canManage = can('payments.manage')
   const currency = settings?.currency || 'USD'
   const [statusFilter, setStatusFilter] = useState<'all' | PaymentStatus>('all')
   const [deleting, setDeleting] = useState<Payment | null>(null)
@@ -114,7 +117,7 @@ export function PaymentsPage() {
     <div className="space-y-6">
       <PageHeader
         title="Payments"
-        description={isAdmin ? 'Settlements from worker time, with payment status.' : 'Your payment history.'}
+        description={canViewAll ? 'Settlements from worker time, with payment status.' : 'Your payment history.'}
       />
 
       {/* Workers see the payment methods they have enabled. The admin picks the
@@ -195,7 +198,7 @@ export function PaymentsPage() {
           icon={Wallet}
           title="No payments"
           description={
-            isAdmin
+            canManage
               ? 'Settle a worker’s unsettled time to create an unpaid payment. Their time entries are kept and marked as settled.'
               : 'You don’t have any payments yet.'
           }
@@ -216,7 +219,7 @@ export function PaymentsPage() {
                   <th className="px-3 py-2 font-medium">Note</th>
                   <th className="px-3 py-2 font-medium">Status</th>
                   <th className="px-3 py-2 font-medium">Paid via</th>
-                  {isAdmin && <th className="px-3 py-2 text-right font-medium">Actions</th>}
+                  {canManage && <th className="px-3 py-2 text-right font-medium">Actions</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -231,7 +234,7 @@ export function PaymentsPage() {
                         <span className="truncate text-xs text-muted-foreground" title={p.note || ''}>
                           {p.note || <span className="italic text-muted-foreground/60">—</span>}
                         </span>
-                        {isAdmin && (
+                        {canManage && (
                           <button
                             className="shrink-0 rounded p-0.5 text-muted-foreground hover:text-foreground hover:bg-muted"
                             onClick={() => { setEditing(p); setEditNote(p.note || '') }}
@@ -252,7 +255,7 @@ export function PaymentsPage() {
                         <span className="text-xs italic text-muted-foreground/60">—</span>
                       )}
                     </td>
-                    {isAdmin && (
+                    {canManage && (
                       <td className="px-3 py-3">
                         <div className="flex items-center justify-end gap-1.5">
                           {p.status !== 'paid' && (

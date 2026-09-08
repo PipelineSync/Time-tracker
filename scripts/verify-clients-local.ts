@@ -103,7 +103,7 @@ async function main() {
   const workerView = (await localBackend.listClients()).data || []
   assert(workerView.length > 0, 'a worker can read the client list (their filters need the names)')
   const rogue = await localBackend.createClient({ name: 'Rogue Co' })
-  assert(!!rogue.error && rogue.error.includes('Only the admin'), 'a worker cannot add a client')
+  assert(!!rogue.error && rogue.error.includes('permission'), 'a worker cannot add a client')
   assert(
     !!(await localBackend.updateClient(seeded[0].id, { status: 'inactive' })).error,
     'a worker cannot deactivate a client'

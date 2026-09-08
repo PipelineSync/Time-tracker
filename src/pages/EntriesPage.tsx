@@ -24,7 +24,10 @@ type SortKey = 'date' | 'worker' | 'hours' | 'earnings'
 type SortDir = 'asc' | 'desc'
 
 export function EntriesPage() {
-  const { workers, entries, clients, deleteEntry, duplicateEntry, settings, dataLoading, isAdmin } = useStore()
+  const { workers, entries, clients, deleteEntry, duplicateEntry, settings, dataLoading, can } = useStore()
+  // Adding, editing and deleting time is an admin capability the admin can
+  // also hand to a worker; without it this page is read-only.
+  const canManage = can('entries.manage')
   const [params, setParams] = useSearchParams()
   const [editing, setEditing] = useState<TimeEntry | null>(null)
   const [formOpen, setFormOpen] = useState(false)
@@ -203,7 +206,7 @@ export function EntriesPage() {
       <td className="px-4 py-3 align-middle">
         <div className="flex items-center justify-end gap-1">
           <Button variant="ghost" size="iconSm" onClick={() => { setChatEntry(e); setChatOpen(true); }} aria-label="Notes"><MessageSquare className="h-4 w-4" /></Button>
-          {isAdmin && (
+          {canManage && (
             <>
               <Button variant="ghost" size="iconSm" onClick={() => { setEditing(e); setFormOpen(true); }} aria-label="Edit"><Pencil className="h-4 w-4" /></Button>
               <Button variant="ghost" size="iconSm" onClick={() => handleDuplicate(e)} aria-label="Duplicate"><Copy className="h-4 w-4" /></Button>
@@ -218,7 +221,7 @@ export function EntriesPage() {
   return (
     <div className="space-y-6">
       <PageHeader title="Time Entries" description="Review and manage all recorded time.">
-        {isAdmin && (
+        {canManage && (
           <Button onClick={() => { setEditing(null); setFormOpen(true); }}>
             <Plus className="mr-1" /> Manual entry
           </Button>
@@ -308,7 +311,7 @@ export function EntriesPage() {
           icon={ListChecks}
           title="No time entries"
           description={hasFilters ? 'No entries match your filters.' : 'Track time with the timer or add a manual entry.'}
-          action={!hasFilters && isAdmin ? <Button onClick={() => { setEditing(null); setFormOpen(true); }}><Plus className="mr-1" /> Add entry</Button> : undefined}
+          action={!hasFilters && canManage ? <Button onClick={() => { setEditing(null); setFormOpen(true); }}><Plus className="mr-1" /> Add entry</Button> : undefined}
         />
       ) : (
         <>
@@ -374,7 +377,7 @@ export function EntriesPage() {
                   {e.notes && <p className="mt-2 text-sm text-muted-foreground">{e.notes}</p>}
                   <div className="mt-3 flex gap-2">
                     <Button variant="outline" size="sm" className="flex-1 gap-1" onClick={() => { setChatEntry(e); setChatOpen(true); }}><MessageSquare className="h-3.5 w-3.5" /> Notes</Button>
-                    {isAdmin && (
+                    {canManage && (
                       <>
                         <Button variant="outline" size="sm" className="flex-1 gap-1" onClick={() => { setEditing(e); setFormOpen(true); }}><Pencil className="h-3.5 w-3.5" /> Edit</Button>
                         <Button variant="outline" size="sm" className="flex-1 gap-1" onClick={() => handleDuplicate(e)}><Copy className="h-3.5 w-3.5" /> Duplicate</Button>

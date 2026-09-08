@@ -19,7 +19,9 @@ import { imageFileToDataUrl, isImageFile } from '@/lib/image'
 import type { PaymentMethod } from '@/lib/types'
 
 export function SettingsPage() {
-  const { settings, saveSettings, resetAllData, workers, entries, backend, user, isAdmin, updateOwnProfile, updateOwnPaymentMethods } = useStore()
+  const { settings, saveSettings, resetAllData, workers, entries, backend, user, isAdmin, can, updateOwnProfile, updateOwnPaymentMethods } = useStore()
+  // Business settings can be handed to a worker; wiping the workspace cannot.
+  const canManageSettings = can('settings.manage')
   const { theme, setTheme } = useTheme()
   const [businessName, setBusinessName] = useState(settings?.business_name || '')
   const [currency, setCurrency] = useState(settings?.currency || 'USD')
@@ -197,11 +199,11 @@ export function SettingsPage() {
     <div className="space-y-6">
       <PageHeader title="Settings" description="Manage your account and preferences." />
 
-      <Tabs defaultValue={workerTabVisible ? 'profile' : isAdmin ? 'general' : 'appearance'}>
+      <Tabs defaultValue={workerTabVisible ? 'profile' : canManageSettings ? 'general' : 'appearance'}>
         <TabsList>
           {workerTabVisible && <TabsTrigger value="profile">Profile</TabsTrigger>}
           {workerTabVisible && <TabsTrigger value="payment">Payment methods</TabsTrigger>}
-          {isAdmin && <TabsTrigger value="general">General</TabsTrigger>}
+          {canManageSettings && <TabsTrigger value="general">General</TabsTrigger>}
           <TabsTrigger value="appearance">Appearance</TabsTrigger>
           <TabsTrigger value="apps">Get the app</TabsTrigger>
           {isAdmin && <TabsTrigger value="data">Data</TabsTrigger>}
@@ -394,7 +396,7 @@ export function SettingsPage() {
           </TabsContent>
         )}
 
-        {isAdmin && (
+        {canManageSettings && (
         <TabsContent value="general" className="mt-4">
           <Card>
             <CardHeader>

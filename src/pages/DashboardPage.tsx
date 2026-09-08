@@ -14,7 +14,7 @@ import { money, formatMinutes, formatDate } from '@/lib/utils'
 import { dateRangeFor, filterEntriesInRange, summarizeEntries, hoursByWorker } from '@/lib/stats'
 
 export function DashboardPage() {
-  const { entries, workers, clients, settings, dataLoading } = useStore()
+  const { entries, workers, clients, settings, dataLoading, can } = useStore()
   const navigate = useNavigate()
   const currency = settings?.currency || 'USD'
 
@@ -130,7 +130,7 @@ export function DashboardPage() {
         </Card>
       </div>
 
-      {!dataLoading && workers.length > 0 && (
+      {!dataLoading && workers.length > 0 && can('entries.manage') && (
         <Button className="w-full sm:w-auto" onClick={() => navigate('/entries?new=1')}>
           <Plus className="mr-1 h-4 w-4" /> Add time
         </Button>

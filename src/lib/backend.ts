@@ -15,6 +15,7 @@ import type {
   Task,
   TaskStatus,
   Client,
+  Permission,
 } from './types'
 
 export interface BackendResult<T> {
@@ -32,6 +33,8 @@ export interface CreateWorkerInput {
   hourly_rate: number
   status?: Worker['status']
   position?: string
+  /** Admin capabilities to grant this worker (default: none). */
+  permissions?: Permission[]
   // Login details for the worker's account (admin-created).
   accountEmail?: string
   accountPassword?: string

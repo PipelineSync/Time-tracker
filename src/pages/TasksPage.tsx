@@ -56,7 +56,11 @@ function isOverdue(task: Task): boolean {
 }
 
 export function TasksPage() {
-  const { tasks, workers, clients, user, isAdmin, dataLoading, moveTask, deleteTask } = useStore()
+  const { tasks, workers, clients, user, can, dataLoading, moveTask, deleteTask } = useStore()
+  // Seeing everyone's board and running it are separate grants; the admin has
+  // both, a worker has whatever was ticked on their row.
+  const canViewAll = can('tasks.view_all')
+  const canManageAll = can('tasks.manage_all')
 
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<Task | null>(null)
@@ -106,15 +110,15 @@ export function TasksPage() {
   const workerAvatar = (id: string) => workers.find((w) => w.id === id)?.avatar_url ?? null
   const clientOf = (id: string | null) => (id ? clients.find((c) => c.id === id) ?? null : null)
 
-  // Workers only ever receive their own tasks from the backend; this keeps the
-  // UI honest even if a stale row slipped into the cache.
+  // Without tasks.view_all the backend only ever returns the signed-in
+  // worker's own tasks; this keeps the UI honest if a stale row is cached.
   const visible = useMemo(() => {
-    let rows = isAdmin ? tasks : tasks.filter((t) => t.worker_id === user?.workerId)
+    let rows = canViewAll ? tasks : tasks.filter((t) => t.worker_id === user?.workerId)
     if (workerFilter !== 'all') rows = rows.filter((t) => t.worker_id === workerFilter)
     if (clientFilter !== 'all') rows = rows.filter((t) => t.client_id === clientFilter)
     if (priorityFilter !== 'all') rows = rows.filter((t) => t.priority === priorityFilter)
     return rows
-  }, [tasks, isAdmin, user?.workerId, workerFilter, clientFilter, priorityFilter])
+  }, [tasks, canViewAll, user?.workerId, workerFilter, clientFilter, priorityFilter])
 
   const filtersActive = workerFilter !== 'all' || stageFilter !== 'all' || clientFilter !== 'all' || priorityFilter !== 'all'
 
@@ -236,14 +240,14 @@ export function TasksPage() {
                   {formatDate(task.due_date)}
                 </Badge>
               )}
-              {/* Admins work across everyone's cards, so each one names its owner. */}
-              {isAdmin && (
+              {/* On a team-wide board every card names its owner. */}
+              {canViewAll && (
                 <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
                   <AvatarBubble name={workerName(task.worker_id)} avatarUrl={workerAvatar(task.worker_id)} size="sm" className="h-5 w-5 text-[9px]" />
                   {workerName(task.worker_id)}
                 </span>
               )}
-              {!isAdmin && task.created_by_role === 'admin' && (
+              {!canViewAll && task.created_by_role === 'admin' && (
                 <span className="text-[11px] text-muted-foreground">Assigned by admin</span>
               )}
             </div>
@@ -374,14 +378,14 @@ export function TasksPage() {
       <PageHeader
         title="Tasks"
         description={
-          isAdmin
+          canViewAll
             ? "Every worker's board. Drag a card between stages to update it."
             : 'Your board. Drag a card between stages as you work through it.'
         }
       >
-        {/* Worker + stage are the admin's cross-team filters; client and
-            priority narrow anyone's own board the same way. */}
-        {isAdmin && (
+        {/* Worker + stage are the cross-team filters, shown to anyone who can
+            see the whole board; client and priority narrow any board. */}
+        {canViewAll && (
           <>
             <Select value={workerFilter} onValueChange={setWorkerFilter}>
               <SelectTrigger className="w-[150px]">
@@ -442,7 +446,7 @@ export function TasksPage() {
           </Button>
         )}
 
-        {isAdmin && (
+        {can('clients.manage') && (
           <Button variant="outline" onClick={() => setClientsOpen(true)}>
             <Building2 className="mr-2 h-4 w-4" /> Clients
           </Button>
@@ -485,7 +489,7 @@ export function TasksPage() {
           icon={KanbanSquare}
           title="No tasks yet"
           description={
-            isAdmin
+            canManageAll
               ? 'Add a task and assign it to a worker. It shows up on their board straight away.'
               : 'Add your first task, then drag it across the board as you make progress.'
           }
@@ -511,11 +515,11 @@ export function TasksPage() {
         onOpenChange={setFormOpen}
         task={editing}
         defaultStatus={formStatus}
-        defaultWorkerId={isAdmin && workerFilter !== 'all' ? workerFilter : undefined}
+        defaultWorkerId={canManageAll && workerFilter !== 'all' ? workerFilter : undefined}
         defaultClientId={clientFilter !== 'all' ? clientFilter : undefined}
       />
 
-      {isAdmin && <ManageClientsDialog open={clientsOpen} onOpenChange={setClientsOpen} />}
+      {can('clients.manage') && <ManageClientsDialog open={clientsOpen} onOpenChange={setClientsOpen} />}
 
       <ConfirmDialog
         open={!!deleting}

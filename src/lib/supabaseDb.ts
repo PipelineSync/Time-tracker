@@ -14,8 +14,9 @@ import type {
   Task,
   TaskStatus,
   Client,
+  Permission,
 } from './types'
-import { DEFAULT_SLACK_SETTINGS, DEFAULT_CLIENT_COLOR } from './types'
+import { DEFAULT_SLACK_SETTINGS, DEFAULT_CLIENT_COLOR, PERMISSIONS, TEAM_VIEW_PERMISSIONS, normalizePermissions } from './types'
 import type { BackendResult, DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput } from './backend'
 import { ACCOUNT_DEACTIVATED_MESSAGE } from './backend'
 import {
@@ -29,6 +30,10 @@ import { computeEarnings, computeTotalMinutes, formatMinutes, formatDate } from 
 
 const url = import.meta.env.VITE_SUPABASE_URL as string | undefined
 const anonKey = (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY) as string | undefined
+
+/** Shown when the admin edits access on a database without the migration. */
+const PERMISSIONS_MIGRATION_MESSAGE =
+  'Worker access levels need the database migration supabase/worker-permissions.sql to be applied. Everything else was saved.'
 
 export function isSupabaseConfigured(): boolean {
   return Boolean(url && anonKey)
@@ -367,6 +372,7 @@ async function loadAuthUser(): Promise<AuthLookup> {
     // one is not a member (never fall back to 'admin').
     return { status: 'deactivated' }
   }
+  let permissions: Permission[] = []
   if (profile.role === 'worker') {
     if (!profile.worker_id) {
       // The link could not be repaired — the worker was deleted or never
@@ -374,13 +380,20 @@ async function loadAuthUser(): Promise<AuthLookup> {
       return { status: 'deactivated' }
     }
     // The profile points at a worker row that no longer exists → deleted.
-    const { data: workerRow, error: workerError } = await sb
+    // The same read fetches the capabilities the admin granted this worker.
+    let workerRes = await sb
       .from('workers')
-      .select('id')
+      .select('id, permissions')
       .eq('id', profile.worker_id)
       .maybeSingle()
-    if (workerError) return { status: 'unknown', error: workerError.message }
-    if (!workerRow) return { status: 'deactivated' }
+    if (workerRes.error && isMissingColumn(workerRes.error, 'permissions')) {
+      // Database without supabase/worker-permissions.sql: nobody has extra
+      // access yet, which is exactly the safe default.
+      workerRes = await sb.from('workers').select('id').eq('id', profile.worker_id).maybeSingle()
+    }
+    if (workerRes.error) return { status: 'unknown', error: workerRes.error.message }
+    if (!workerRes.data) return { status: 'deactivated' }
+    permissions = normalizePermissions((workerRes.data as { permissions?: unknown }).permissions)
   }
 
   return {
@@ -390,8 +403,26 @@ async function loadAuthUser(): Promise<AuthLookup> {
       email: user.email ?? '',
       role: profile.role === 'admin' ? 'admin' : 'worker',
       workerId: profile.worker_id ?? null,
+      // The admin owns the workspace, so they hold every capability.
+      permissions: profile.role === 'admin' ? [...PERMISSIONS] : permissions,
     },
   }
+}
+
+/** Does the signed-in account hold this capability? (The admin holds all.) */
+function canDo(user: AuthUser, permission: Permission): boolean {
+  if (user.role === 'admin') return true
+  return (user.permissions ?? []).includes(permission)
+}
+
+/** Anyone who sees team-wide data also needs the names behind it. */
+function canSeeTeam(user: AuthUser): boolean {
+  return TEAM_VIEW_PERMISSIONS.some((p) => canDo(user, p))
+}
+
+/** Standard refusal for a worker who was not granted the capability. */
+function denied<T>(what: string): BackendResult<T> {
+  return fail<T>(`You do not have permission to ${what}.`)
 }
 
 async function requireUser(): Promise<BackendResult<AuthUser>> {
@@ -643,7 +674,7 @@ export const supabaseBackend: DataBackend = {
   async resetWorkerPassword(workerId, newPassword) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    if (me.data!.role !== 'admin') return fail('Only the admin can reset worker passwords.')
+    if (!canDo(me.data!, 'workers.manage')) return denied('reset worker passwords')
     const { data: worker } = await client().from('workers').select('email').eq('id', workerId).single()
     if (!worker?.email) return fail('This worker has no email linked. Add an email to send a password reset.')
     // With the anon key only we cannot set another user's password directly;
@@ -728,7 +759,8 @@ export const supabaseBackend: DataBackend = {
     const stripImages = (rows: Worker[]): Worker[] =>
       normalizeWorkers(rows).map((w) => ({ ...w, avatar_url: null, qr_code_url: null }))
     const fetchRows = async () => {
-      if (me.data!.role === 'worker' && me.data!.workerId) {
+      // A worker with no team-wide capability only sees their own row.
+      if (!canSeeTeam(me.data!) && me.data!.workerId) {
         return client().from('workers').select(columns).eq('id', me.data!.workerId)
       }
       return client().from('workers').select(columns).order('name')
@@ -751,7 +783,7 @@ export const supabaseBackend: DataBackend = {
     const me = await requireUser()
     if (me.error) return fail(me.error)
     let q = client().from('workers').select('id, avatar_url, qr_code_url')
-    if (me.data!.role === 'worker' && me.data!.workerId) q = q.eq('id', me.data!.workerId)
+    if (!canSeeTeam(me.data!) && me.data!.workerId) q = q.eq('id', me.data!.workerId)
     const { data, error } = await q
     if (error) return fail(error.message)
     return ok(((data as WorkerAvatar[]) ?? []).map((r) => ({
@@ -764,7 +796,7 @@ export const supabaseBackend: DataBackend = {
   async createWorker(input: CreateWorkerInput) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    if (me.data!.role !== 'admin') return fail('Only the admin can add workers.')
+    if (!canDo(me.data!, 'workers.manage')) return denied('add workers')
 
     const accountEmail = (input.accountEmail || input.email || '').trim().toLowerCase()
     if (!accountEmail) return fail('A login email is required.')
@@ -787,6 +819,7 @@ export const supabaseBackend: DataBackend = {
           hourly_rate: input.hourly_rate,
           status: input.status || 'active',
           position: input.position?.trim() || null,
+          permissions: normalizePermissions(input.permissions),
           accountEmail,
           accountPassword: input.accountPassword,
         }),
@@ -802,9 +835,18 @@ export const supabaseBackend: DataBackend = {
   async updateWorker(id, patch) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    if (me.data!.role !== 'admin') return fail('Only the admin can edit workers.')
+    if (!canDo(me.data!, 'workers.manage')) return denied('edit workers')
     const { newPassword, ...rest } = patch as { newPassword?: string } & Partial<Worker>
-    const { data, error } = await client().from('workers').update(rest).eq('id', id).select().single()
+    if (rest.permissions) rest.permissions = normalizePermissions(rest.permissions)
+    let upd = await client().from('workers').update(rest).eq('id', id).select().single()
+    if (upd.error && isMissingColumn(upd.error, 'permissions') && rest.permissions) {
+      // Database without supabase/worker-permissions.sql: save everything else
+      // and tell the admin why the access tick boxes did not stick.
+      const { permissions: _drop, ...withoutPermissions } = rest
+      upd = await client().from('workers').update(withoutPermissions).eq('id', id).select().single()
+      if (!upd.error) return fail(PERMISSIONS_MIGRATION_MESSAGE)
+    }
+    const { data, error } = upd
     if (error) return fail(error.message)
     if (newPassword) {
       if (newPassword.length < 6) return fail('New password must be at least 6 characters.')
@@ -832,7 +874,7 @@ export const supabaseBackend: DataBackend = {
   async getWorkerLogin(id) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    if (me.data!.role !== 'admin') return fail('Only the admin can view login details.')
+    if (!canDo(me.data!, 'workers.manage')) return denied('view login details')
     const { data: worker } = await client().from('workers').select('email').eq('id', id).single()
     if (!worker) return fail('Worker not found.')
     // Passwords are hashed in Supabase Auth and can never be read back.
@@ -842,7 +884,7 @@ export const supabaseBackend: DataBackend = {
   async deleteWorker(id) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    if (me.data!.role !== 'admin') return fail('Only the admin can delete workers.')
+    if (!canDo(me.data!, 'workers.manage')) return denied('delete workers')
 
     // Preferred path: the privileged function also deletes the worker's
     // Supabase Auth account, which permanently disables their login and
@@ -887,10 +929,11 @@ export const supabaseBackend: DataBackend = {
   async listEntries(opts) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    // Worker rows are scoped to the worker; admins see the whole workspace.
+    // Scoped to the worker's own rows unless they hold entries.view_all
+    // (the admin, and anyone the admin granted the team-wide read).
     const build = (columns: string) => {
       let q = client().from('time_entries').select(columns)
-      if (me.data!.role === 'worker' && me.data!.workerId) q = q.eq('worker_id', me.data!.workerId)
+      if (!canDo(me.data!, 'entries.view_all') && me.data!.workerId) q = q.eq('worker_id', me.data!.workerId)
       // Incremental sync: only rows created or updated since the last sync.
       // (updated_at is kept current by the set_updated_at trigger.)
       if (opts?.since) q = q.or(`created_at.gte.${opts.since},updated_at.gte.${opts.since}`)
@@ -906,7 +949,7 @@ export const supabaseBackend: DataBackend = {
     if (me.error) return fail(me.error)
     const build = (columns: string) => {
       let q = client().from('time_entries').select(columns).lte('start_time', before)
-      if (me.data!.role === 'worker' && me.data!.workerId) q = q.eq('worker_id', me.data!.workerId)
+      if (!canDo(me.data!, 'entries.view_all') && me.data!.workerId) q = q.eq('worker_id', me.data!.workerId)
       return q.order('start_time', { ascending: false }).limit(limit)
     }
     return selectEntries(build)
@@ -915,7 +958,7 @@ export const supabaseBackend: DataBackend = {
   async createEntry(input) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    if (me.data!.role !== 'admin') return fail('Only the admin can add manual entries.')
+    if (!canDo(me.data!, 'entries.manage')) return denied('add manual entries')
     const totalMinutes = Math.max(0, Math.round(computeTotalMinutes(new Date(input.start_time), new Date(input.end_time), input.break_minutes)))
     const earnings = computeEarnings(totalMinutes, input.hourly_rate)
     const { data, error } = await withClientColumn<TimeEntry>((withClient) => {
@@ -935,7 +978,7 @@ export const supabaseBackend: DataBackend = {
   async updateEntry(id, patch) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    if (me.data!.role !== 'admin') return fail('Only the admin can edit entries.')
+    if (!canDo(me.data!, 'entries.manage')) return denied('edit time entries')
     let p: Partial<TimeEntry> = { ...patch }
     if (patch.start_time && patch.end_time && patch.break_minutes !== undefined && patch.hourly_rate !== undefined) {
       const totalMinutes = Math.max(0, Math.round(computeTotalMinutes(new Date(patch.start_time), new Date(patch.end_time), patch.break_minutes)))
@@ -952,7 +995,7 @@ export const supabaseBackend: DataBackend = {
   async deleteEntry(id) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    if (me.data!.role !== 'admin') return fail('Only the admin can delete entries.')
+    if (!canDo(me.data!, 'entries.manage')) return denied('delete time entries')
     const { error } = await client().from('time_entries').delete().eq('id', id)
     if (error) return fail(error.message)
     return ok(null)
@@ -968,7 +1011,7 @@ export const supabaseBackend: DataBackend = {
     const me = await requireUser()
     if (me.error) return fail(me.error)
     const sb = client()
-    if (me.data!.role === 'worker' && me.data!.workerId) {
+    if (!canDo(me.data!, 'entries.view_all') && me.data!.workerId) {
       const wid = me.data!.workerId
       // Fetch timers that belong to this worker OR occupy this auth user's
       // single-timer slot (unique index on user_id). A stale row whose
@@ -1173,7 +1216,7 @@ export const supabaseBackend: DataBackend = {
   async saveSettings(patch) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    if (me.data!.role !== 'admin') return fail('Only the admin can change settings.')
+    if (!canDo(me.data!, 'settings.manage')) return denied('change business settings')
     const cur = await this.getSettings()
     if (!cur.data) return fail('Settings not found.')
     const { data, error } = await client().from('settings').update(patch).eq('id', cur.data.id).select().single()
@@ -1184,7 +1227,7 @@ export const supabaseBackend: DataBackend = {
   async getSlackSettings() {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    if (me.data!.role !== 'admin') return fail('Only the admin can view Slack settings.')
+    if (!canDo(me.data!, 'settings.manage')) return denied('view the Slack settings')
     // Admin-only RLS on slack_settings keeps the webhook URL away from workers.
     const { data, error } = await client().from('slack_settings').select('*').maybeSingle()
     if (error) {
@@ -1207,7 +1250,7 @@ export const supabaseBackend: DataBackend = {
   async saveSlackSettings(patch) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    if (me.data!.role !== 'admin') return fail('Only the admin can change Slack settings.')
+    if (!canDo(me.data!, 'settings.manage')) return denied('change the Slack settings')
     const cur = await this.getSlackSettings()
     if (!cur.data) return fail('Slack settings unavailable.')
     const next = { ...cur.data, ...patch }
@@ -1308,7 +1351,7 @@ export const supabaseBackend: DataBackend = {
     const me = await requireUser()
     if (me.error) return fail(me.error)
     let q = client().from('payments').select('id, worker_id, amount, hours, status, period_start, period_end, created_at, paid_at, note, payment_method')
-    if (me.data!.role === 'worker' && me.data!.workerId) q = q.eq('worker_id', me.data!.workerId)
+    if (!canDo(me.data!, 'payments.view_all') && me.data!.workerId) q = q.eq('worker_id', me.data!.workerId)
     q = q.order('created_at', { ascending: false })
     if (limit) q = q.limit(limit)
     const { data, error } = await q
@@ -1319,7 +1362,7 @@ export const supabaseBackend: DataBackend = {
   async settleWorker(workerId, note) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    if (me.data!.role !== 'admin') return fail('Only the admin can settle worker time.')
+    if (!canDo(me.data!, 'payments.manage')) return denied('settle worker time')
     const sb = client()
 
     // Settling never deletes time entries: it pays out the worker's unsettled
@@ -1397,7 +1440,7 @@ export const supabaseBackend: DataBackend = {
   async updatePaymentStatus(id, status: PaymentStatus, paymentMethod?: PaymentMethod | null) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    if (me.data!.role !== 'admin') return fail('Only the admin can update payment status.')
+    if (!canDo(me.data!, 'payments.manage')) return denied('update payment status')
     const method: PaymentMethod | null =
       paymentMethod === 'cash' || paymentMethod === 'qr' ? paymentMethod : null
     if (status === 'paid' && paymentMethod && !method) {
@@ -1431,7 +1474,7 @@ export const supabaseBackend: DataBackend = {
   async updatePaymentNote(id, note: string | null) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    if (me.data!.role !== 'admin') return fail('Only the admin can update payment notes.')
+    if (!canDo(me.data!, 'payments.manage')) return denied('edit payment notes')
     const { data, error } = await client().from('payments').update({ note }).eq('id', id).select().single()
     if (error) return fail(error.message)
     return ok(data as Payment)
@@ -1440,7 +1483,7 @@ export const supabaseBackend: DataBackend = {
   async deletePayment(id) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    if (me.data!.role !== 'admin') return fail('Only the admin can delete payments.')
+    if (!canDo(me.data!, 'payments.manage')) return denied('delete payments')
     const { error } = await client().from('payments').delete().eq('id', id)
     if (error) return fail(error.message)
     return ok(null)
@@ -1472,7 +1515,7 @@ export const supabaseBackend: DataBackend = {
   async createClient(input: CreateClientInput) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    if (me.data!.role !== 'admin') return fail('Only the admin can manage clients.')
+    if (!canDo(me.data!, 'clients.manage')) return denied('manage clients')
     const name = input.name.trim()
     if (!name) return fail('Give the client a name.')
     if (name.length > 80) return fail('Client names are limited to 80 characters.')
@@ -1495,7 +1538,7 @@ export const supabaseBackend: DataBackend = {
   async updateClient(id, patch) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    if (me.data!.role !== 'admin') return fail('Only the admin can manage clients.')
+    if (!canDo(me.data!, 'clients.manage')) return denied('manage clients')
     const update: Record<string, unknown> = {}
     if (patch.name !== undefined) {
       const name = patch.name.trim()
@@ -1515,7 +1558,7 @@ export const supabaseBackend: DataBackend = {
   async deleteClient(id) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    if (me.data!.role !== 'admin') return fail('Only the admin can manage clients.')
+    if (!canDo(me.data!, 'clients.manage')) return denied('manage clients')
     const sb = client()
     // Deleting would strip the label off work that has already happened, so a
     // client in use can only be marked inactive.
@@ -1542,7 +1585,7 @@ export const supabaseBackend: DataBackend = {
     // `user_id` is the workspace owner — constant across rows, never read.
     const build = (columns: string) => {
       let q = client().from('tasks').select(columns)
-      if (me.data!.role === 'worker' && me.data!.workerId) q = q.eq('worker_id', me.data!.workerId)
+      if (!canDo(me.data!, 'tasks.view_all') && me.data!.workerId) q = q.eq('worker_id', me.data!.workerId)
       return q.order('position', { ascending: true }).order('created_at', { ascending: false })
     }
     const columns = 'id, worker_id, client_id, title, description, status, priority, due_date, position, created_by_role, completed_at, created_at, updated_at'
@@ -1560,8 +1603,9 @@ export const supabaseBackend: DataBackend = {
     if (me.error) return fail(me.error)
     const title = input.title.trim()
     if (!title) return fail('Give the task a title.')
-    // Workers can only ever create tasks for themselves (RLS enforces it too).
-    const workerId = me.data!.role === 'admin' ? input.worker_id : me.data!.workerId
+    // Without tasks.manage_all a worker can only create tasks for themselves
+    // (RLS enforces it too).
+    const workerId = canDo(me.data!, 'tasks.manage_all') ? input.worker_id : me.data!.workerId
     if (!workerId) return fail('Choose who the task is for.')
     const status: TaskStatus = input.status ?? 'todo'
     const sb = client()
@@ -1609,8 +1653,8 @@ export const supabaseBackend: DataBackend = {
     if (patch.priority !== undefined) update.priority = patch.priority
     if (patch.due_date !== undefined) update.due_date = patch.due_date || null
     if (patch.client_id !== undefined) update.client_id = patch.client_id || null
-    // Only the admin may hand a task to a different worker.
-    if (patch.worker_id !== undefined && me.data!.role === 'admin') update.worker_id = patch.worker_id
+    // Only a task manager may hand a task to a different worker.
+    if (patch.worker_id !== undefined && canDo(me.data!, 'tasks.manage_all')) update.worker_id = patch.worker_id
     if (patch.status !== undefined) {
       update.status = patch.status
       // Stamp the first time it reaches Completed; clear it when it moves back.

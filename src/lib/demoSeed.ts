@@ -1,4 +1,5 @@
 import type { Worker, TimeEntry, Settings, Client } from './types'
+import { PERMISSION_PRESETS } from './types'
 import { uid } from './utils'
 
 /**
@@ -53,10 +54,13 @@ export function buildDemoSeed() {
 
   const nowIso = () => new Date().toISOString()
 
+  // Sarah doubles as the permissions demo: the admin has given her the
+  // Supervisor set, so signing in as her shows the team board and team time
+  // without any of the money screens.
   const workers: Worker[] = [
-    { id: 'w-seed-1', name: 'John Smith', email: 'john@example.com', hourly_rate: 20, status: 'active', position: 'Team member', avatar_url: null, payment_methods: ['cash'], qr_code_url: null, created_at: daysAgo(40).toISOString(), updated_at: daysAgo(40).toISOString() },
-    { id: 'w-seed-2', name: 'Sarah Johnson', email: 'sarah@example.com', hourly_rate: 25, status: 'active', position: 'Team member', avatar_url: null, payment_methods: ['cash', 'qr'], qr_code_url: demoQrDataUrl('sarah@example.com'), created_at: daysAgo(30).toISOString(), updated_at: daysAgo(30).toISOString() },
-    { id: 'w-seed-3', name: 'Mike Brown', email: 'mike@example.com', hourly_rate: 18, status: 'inactive', position: 'Team member', avatar_url: null, payment_methods: ['qr'], qr_code_url: demoQrDataUrl('mike@example.com'), created_at: daysAgo(20).toISOString(), updated_at: daysAgo(20).toISOString() },
+    { id: 'w-seed-1', name: 'John Smith', email: 'john@example.com', hourly_rate: 20, status: 'active', position: 'Team member', avatar_url: null, payment_methods: ['cash'], qr_code_url: null, permissions: [], created_at: daysAgo(40).toISOString(), updated_at: daysAgo(40).toISOString() },
+    { id: 'w-seed-2', name: 'Sarah Johnson', email: 'sarah@example.com', hourly_rate: 25, status: 'active', position: 'Team member', avatar_url: null, payment_methods: ['cash', 'qr'], qr_code_url: demoQrDataUrl('sarah@example.com'), permissions: [...PERMISSION_PRESETS.supervisor.permissions], created_at: daysAgo(30).toISOString(), updated_at: daysAgo(30).toISOString() },
+    { id: 'w-seed-3', name: 'Mike Brown', email: 'mike@example.com', hourly_rate: 18, status: 'inactive', position: 'Team member', avatar_url: null, payment_methods: ['qr'], qr_code_url: demoQrDataUrl('mike@example.com'), permissions: [], created_at: daysAgo(20).toISOString(), updated_at: daysAgo(20).toISOString() },
   ]
 
   // A small master list so the client dropdowns, filters and the "Hours by

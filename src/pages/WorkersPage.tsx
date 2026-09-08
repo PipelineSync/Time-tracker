@@ -18,7 +18,11 @@ import type { Worker } from '@/lib/types'
 import { cn, money, formatDate, formatMinutes, formatMsShort, timerBreakMs, timerElapsedMs } from '@/lib/utils'
 
 export function WorkersPage() {
-  const { workers, entries, activeTimers, deleteWorker, settings, dataLoading } = useStore()
+  const { workers, entries, activeTimers, deleteWorker, settings, dataLoading, can } = useStore()
+  // A worker granted workers.view sees the team; the buttons that change
+  // accounts or money need their own capabilities.
+  const canManage = can('workers.manage')
+  const canSettle = can('payments.manage')
   const navigate = useNavigate()
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<Worker | null>(null)
@@ -71,10 +75,15 @@ export function WorkersPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Workers" description="Manage workers and their hourly rates.">
-        <Button onClick={() => { setEditing(null); setFormOpen(true); }}>
-          <Plus className="mr-1" /> Add worker
-        </Button>
+      <PageHeader
+        title="Workers"
+        description={canManage ? 'Manage workers and their hourly rates.' : 'The team and their hourly rates.'}
+      >
+        {canManage && (
+          <Button onClick={() => { setEditing(null); setFormOpen(true); }}>
+            <Plus className="mr-1" /> Add worker
+          </Button>
+        )}
       </PageHeader>
 
       {dataLoading && workers.length === 0 ? (
@@ -86,7 +95,7 @@ export function WorkersPage() {
           icon={Users}
           title="No workers yet"
           description="Add workers with their hourly rate to start tracking time and earnings."
-          action={<Button onClick={() => { setEditing(null); setFormOpen(true); }}><Plus className="mr-1" /> Add worker</Button>}
+          action={canManage ? <Button onClick={() => { setEditing(null); setFormOpen(true); }}><Plus className="mr-1" /> Add worker</Button> : undefined}
         />
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -164,26 +173,36 @@ export function WorkersPage() {
                     <div className="flex justify-between"><span className="text-muted-foreground">Added</span><span>{formatDate(w.created_at)}</span></div>
                   </div>
 
-                  <div className="mt-3">
-                    <WorkerLoginDetails workerId={w.id} />
-                  </div>
+                  {canManage && (
+                    <div className="mt-3">
+                      <WorkerLoginDetails workerId={w.id} />
+                    </div>
+                  )}
 
                   <div className="mt-3 flex flex-wrap gap-2">
                     <Button variant="outline" size="sm" className="flex-1 gap-1" onClick={() => navigate(`/entries?worker=${w.id}`)}>
                       <History className="h-4 w-4" /> History
                     </Button>
-                    <Button variant="outline" size="sm" className="gap-1" onClick={() => { setEditing(w); setFormOpen(true); }}>
-                      <Pencil className="h-4 w-4" /> Edit
-                    </Button>
-                    <Button variant="outline" size="sm" className="gap-1" onClick={() => setSettling(w)} title="Settle unsettled time into a payment — time entries are kept">
-                      <RotateCcw className="h-4 w-4" /> Reset
-                    </Button>
-                    <Button variant="outline" size="sm" className="gap-1" onClick={() => setResettingPw(w)} title="Reset worker password">
-                      <KeyRound className="h-4 w-4" /> Password
-                    </Button>
-                    <Button variant="ghost" size="iconSm" className="text-destructive" onClick={() => setDeleting(w)}>
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                    {canManage && (
+                      <Button variant="outline" size="sm" className="gap-1" onClick={() => { setEditing(w); setFormOpen(true); }}>
+                        <Pencil className="h-4 w-4" /> Edit
+                      </Button>
+                    )}
+                    {canSettle && (
+                      <Button variant="outline" size="sm" className="gap-1" onClick={() => setSettling(w)} title="Settle unsettled time into a payment — time entries are kept">
+                        <RotateCcw className="h-4 w-4" /> Reset
+                      </Button>
+                    )}
+                    {canManage && (
+                      <>
+                        <Button variant="outline" size="sm" className="gap-1" onClick={() => setResettingPw(w)} title="Reset worker password">
+                          <KeyRound className="h-4 w-4" /> Password
+                        </Button>
+                        <Button variant="ghost" size="iconSm" className="text-destructive" onClick={() => setDeleting(w)}>
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </>
+                    )}
                   </div>
                 </CardContent>
               </Card>

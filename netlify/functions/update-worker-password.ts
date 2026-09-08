@@ -1,8 +1,8 @@
-import { adminClient, json, requireAdmin } from './lib/supabase'
+import { adminClient, json, requireCapability } from './lib/supabase'
 
 export default async function handler(request: Request) {
   if (request.method !== 'POST') return json(405, { error: 'Method not allowed.' })
-  const auth = await requireAdmin(request)
+  const auth = await requireCapability(request, 'workers.manage')
   if ('error' in auth) return auth.error
   const { sb } = auth
 

@@ -23,7 +23,9 @@ import type {
   Task,
   TaskStatus,
   Client,
+  Permission,
 } from './types'
+import { PERMISSIONS, normalizePermissions } from './types'
 import type { DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, BackendResult } from './backend'
 import { localBackend } from './localDb'
 import { supabaseBackend, isSupabaseConfigured, ACCOUNT_DEACTIVATED_MESSAGE } from './supabaseDb'
@@ -86,6 +88,15 @@ interface StoreValue {
   backend: DataBackend
   user: AuthUser | null
   isAdmin: boolean
+  /** Capabilities the signed-in user holds (the admin holds every one). */
+  permissions: Permission[]
+  /**
+   * Gate for anything beyond a worker's own time and tasks. Always true for
+   * the admin; for a worker it is whatever the admin ticked on their row.
+   * Use this instead of `isAdmin` for capability checks — keep `isAdmin` for
+   * things that are about *being* the admin (no clock-in timer, for example).
+   */
+  can: (permission: Permission) => boolean
   authLoading: boolean
 
   workers: Worker[]
@@ -208,6 +219,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const loadOlderInFlight = useRef(false)
 
   const isAdmin = user?.role === 'admin'
+
+  // Permissions come with the session, and are then kept in step with the
+  // worker's row: if the admin changes them, the next data sync applies the
+  // change without the worker having to sign out.
+  const myWorker = user?.workerId ? workers.find((w) => w.id === user.workerId) : undefined
+  const permissions = useMemo<Permission[]>(() => {
+    if (isAdmin) return [...PERMISSIONS]
+    if (myWorker) return normalizePermissions(myWorker.permissions)
+    return normalizePermissions(user?.permissions)
+  }, [isAdmin, myWorker, user])
+  const can = useCallback(
+    (permission: Permission) => isAdmin || permissions.includes(permission),
+    [isAdmin, permissions],
+  )
 
   // Only active clients may be picked for new work; inactive ones stay in
   // `clients` so existing tasks, entries and reports keep their label.
@@ -843,6 +868,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     backend,
     user,
     isAdmin,
+    permissions,
+    can,
     authLoading,
     workers,
     entries,

@@ -161,7 +161,7 @@ async function main() {
 
   // 9) A worker cannot settle anybody.
   const workerSettle = await localBackend.settleWorker(john.id)
-  assert(workerSettle.error === 'Only the admin can settle worker time.', 'a worker cannot settle time')
+  assert(workerSettle.error === 'You do not have permission to settle worker time.', 'a worker cannot settle time')
 }
 
 main().then(

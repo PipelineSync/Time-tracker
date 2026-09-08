@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { json, requireAdmin } from './lib/supabase'
+import { json, requireAdmin, requireCapability } from './lib/supabase'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -44,13 +44,20 @@ async function deleteAuthAccountForWorker(
 
 export default async function handler(request: Request) {
   if (request.method !== 'POST') return json(405, { error: 'Method not allowed.' })
-  const auth = await requireAdmin(request)
+  const body = (await request.json().catch(() => ({}))) as { workerId?: string; all?: boolean }
+  // Wiping the workspace stays admin-only; deleting a single worker is the
+  // "Add, edit and remove workers" capability, which the admin can delegate.
+  const auth = body.all === true
+    ? await requireAdmin(request)
+    : await requireCapability(request, 'workers.manage')
   if ('error' in auth) return auth.error
   const { sb } = auth
+  // A delegate must not delete their own account out from under themselves.
+  if ('workerId' in auth && auth.workerId && auth.workerId === (body.workerId || '').trim()) {
+    return json(403, { error: 'You cannot delete your own worker account.' })
+  }
 
   try {
-    const body = (await request.json().catch(() => ({}))) as { workerId?: string; all?: boolean }
-
     // Full reset (Settings → delete all data): remove every worker's login
     // account and all worker data.
     if (body.all === true) {

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Worker } from '@/lib/types'
+import type { Permission, Worker } from '@/lib/types'
+import { normalizePermissions } from '@/lib/types'
 import { useStore } from '@/lib/store'
 import {
   Dialog,
@@ -12,6 +13,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { WorkerPermissionsField } from '@/components/WorkerPermissionsField'
 import { toast } from 'sonner'
 
 export function WorkerFormDialog({
@@ -32,6 +34,7 @@ export function WorkerFormDialog({
   const [accountEmail, setAccountEmail] = useState('')
   const [password, setPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
+  const [permissions, setPermissions] = useState<Permission[]>([])
   const [saving, setSaving] = useState(false)
   const seededKeyRef = useRef<string | null>(null)
 
@@ -57,6 +60,7 @@ export function WorkerFormDialog({
     setAccountEmail(worker?.email || '')
     setPassword('')
     setNewPassword('')
+    setPermissions(normalizePermissions(worker?.permissions))
   }, [open, worker, settings])
 
   async function handleSubmit(e: React.FormEvent) {
@@ -86,6 +90,7 @@ export function WorkerFormDialog({
         hourly_rate: parsedRate,
         status,
         position: position.trim(),
+        permissions,
         newPassword: newPassword || undefined,
       })
       if (!res) toast.error('Failed to update worker.')
@@ -97,6 +102,7 @@ export function WorkerFormDialog({
         hourly_rate: parsedRate,
         status,
         position: position.trim(),
+        permissions,
         accountEmail: accountEmail.trim(),
         accountPassword: password,
       })
@@ -109,7 +115,7 @@ export function WorkerFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{worker ? 'Edit worker' : 'Add worker'}</DialogTitle>
           <DialogDescription>
@@ -171,6 +177,8 @@ export function WorkerFormDialog({
               <Button type="button" variant={status === 'inactive' ? 'secondary' : 'outline'} className="flex-1" onClick={() => setStatus('inactive')}>Inactive</Button>
             </div>
           </div>
+
+          <WorkerPermissionsField value={permissions} onChange={setPermissions} disabled={saving} />
 
           <DialogFooter className="gap-2">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>

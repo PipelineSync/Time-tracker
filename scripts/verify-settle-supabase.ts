@@ -143,7 +143,7 @@ async function scenario3_worker_cannot_settle() {
   seedWorkspace()
   state.authUser = JOHN
   const res = await supabaseBackend.settleWorker('w-john')
-  assert(res.error === 'Only the admin can settle worker time.', 'a worker cannot settle time')
+  assert(res.error === 'You do not have permission to settle worker time.', 'a worker cannot settle time')
   assert(johnEntries().length === 3, 'nothing was stamped or removed')
 }
 
