@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import {
   KanbanSquare,
   Plus,
@@ -66,6 +66,18 @@ export function TasksPage() {
   // column (and index) it would land in — used to draw the placeholder.
   const [dragging, setDragging] = useState<Task | null>(null)
   const [dropTarget, setDropTarget] = useState<{ status: TaskStatus; index: number } | null>(null)
+
+  // The lane row scrolls sideways when the stages do not all fit; dragging a
+  // card to either edge nudges it along so cross-board drops stay possible.
+  const rowRef = useRef<HTMLDivElement | null>(null)
+  function edgeScroll(e: React.DragEvent<HTMLDivElement>) {
+    const row = rowRef.current
+    if (!row || !dragging) return
+    const box = row.getBoundingClientRect()
+    const edge = 72
+    if (e.clientX < box.left + edge) row.scrollLeft -= 18
+    else if (e.clientX > box.right - edge) row.scrollLeft += 18
+  }
 
   const workerName = (id: string) => workers.find((w) => w.id === id)?.name || 'Worker'
   const workerAvatar = (id: string) => workers.find((w) => w.id === id)?.avatar_url ?? null
@@ -264,21 +276,22 @@ export function TasksPage() {
           void commitDrop(status, isTarget ? dropTarget.index : items.length)
         }}
         className={cn(
-          'flex min-h-[9rem] flex-col rounded-2xl border bg-muted/40 p-3 transition',
-          dragging && 'border-dashed',
+          // One lane of the row. `flex: 1 0 15.5rem` lets the lanes share the
+          // board evenly when there is room and keeps them readable (scrolling
+          // the row sideways, one snapped lane at a time) when there is not.
+          'flex min-h-[14rem] flex-[1_0_15.5rem] snap-start flex-col rounded-xl px-2.5 py-2 transition',
+          dragging && 'bg-muted/40',
           isTarget && cn('bg-muted ring-2', style.ring)
         )}
       >
-        <div className="mb-3 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <span className={cn('h-2.5 w-2.5 rounded-full', style.dot)} aria-hidden />
-            <h2 className="text-sm font-semibold">{TaskStatusNames[status]}</h2>
-            <Badge variant="muted" className="text-[10px]">{items.length}</Badge>
-          </div>
+        <div className="relative mb-3 flex items-center justify-center gap-2 px-7">
+          <span className={cn('h-2.5 w-2.5 shrink-0 rounded-full', style.dot)} aria-hidden />
+          <h2 className="truncate text-sm font-semibold">{TaskStatusNames[status]}</h2>
+          <Badge variant="muted" className="text-[10px]">{items.length}</Badge>
           <Button
             variant="ghost"
             size="icon"
-            className="h-7 w-7"
+            className="absolute right-0 top-1/2 h-7 w-7 -translate-y-1/2"
             aria-label={`Add a task to ${TaskStatusNames[status]}`}
             onClick={() => openNew(status)}
           >
@@ -303,7 +316,7 @@ export function TasksPage() {
             <button
               type="button"
               onClick={() => openNew(status)}
-              className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-dashed p-5 text-xs text-muted-foreground transition hover:border-primary/40 hover:text-foreground"
+              className="flex flex-1 flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed p-4 text-center text-xs text-muted-foreground transition hover:border-primary/40 hover:text-foreground"
             >
               <Plus className="h-4 w-4" />
               {status === 'todo' ? 'Add a task' : `Drag a task here`}
@@ -368,10 +381,12 @@ export function TasksPage() {
       </PageHeader>
 
       {showSkeleton ? (
-        <div className="flex flex-col gap-4">
-          {TASK_STATUSES.map((s) => (
-            <Skeleton key={s} className="h-40 rounded-2xl" />
-          ))}
+        <div className="rounded-2xl border bg-muted/30 p-2 sm:p-3">
+          <div className="flex gap-2 overflow-hidden">
+            {TASK_STATUSES.map((s) => (
+              <Skeleton key={s} className="h-56 flex-[1_0_15.5rem] rounded-xl" />
+            ))}
+          </div>
         </div>
       ) : visible.length === 0 ? (
         <EmptyState
@@ -385,12 +400,19 @@ export function TasksPage() {
           action={<Button onClick={() => openNew('todo')}><Plus className="mr-2 h-4 w-4" /> New task</Button>}
         />
       ) : (
-        // Vertical board: the three stages stack top-to-bottom, each one a
-        // full-width lane you scroll through and drag between.
-        <div className="flex flex-col gap-4">
-          {shownStages.map((status) => (
-            <Column key={status} status={status} />
-          ))}
+        // Horizontal board: the stages sit side by side in a single row inside
+        // one framed board, divided by hairlines. When the row is wider than the
+        // screen it scrolls sideways, one snapped lane at a time.
+        <div className="rounded-2xl border bg-muted/30 p-2 sm:p-3">
+          <div
+            ref={rowRef}
+            onDragOver={edgeScroll}
+            className="flex snap-x snap-mandatory divide-x overflow-x-auto"
+          >
+            {shownStages.map((status) => (
+              <Column key={status} status={status} />
+            ))}
+          </div>
         </div>
       )}
 
