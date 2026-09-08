@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import {
+  Building2,
   KanbanSquare,
   Plus,
   Pencil,
@@ -24,6 +25,9 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/EmptyState'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { TaskFormDialog } from '@/components/TaskFormDialog'
+import { ManageClientsDialog } from '@/components/ManageClientsDialog'
+import { ClientBadge } from '@/components/ClientBadge'
+import { ClientSelect } from '@/components/ClientSelect'
 import { AvatarBubble } from '@/components/AvatarBubble'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn, formatDate } from '@/lib/utils'
@@ -52,16 +56,20 @@ function isOverdue(task: Task): boolean {
 }
 
 export function TasksPage() {
-  const { tasks, workers, user, isAdmin, dataLoading, moveTask, deleteTask } = useStore()
+  const { tasks, workers, clients, user, isAdmin, dataLoading, moveTask, deleteTask } = useStore()
 
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<Task | null>(null)
   const [formStatus, setFormStatus] = useState<TaskStatus>('todo')
   const [deleting, setDeleting] = useState<Task | null>(null)
+  const [clientsOpen, setClientsOpen] = useState(false)
   // Admin-only filters: one worker's board (or everyone's) and one stage (or
   // all of them). Both narrow the same board rather than changing its shape.
   const [workerFilter, setWorkerFilter] = useState<string>('all')
   const [stageFilter, setStageFilter] = useState<'all' | TaskStatus>('all')
+  // Filters both roles get: narrow the board to one client and/or one priority.
+  const [clientFilter, setClientFilter] = useState<string>('all')
+  const [priorityFilter, setPriorityFilter] = useState<'all' | TaskPriority>('all')
   // Drag state. `dragging` is the card under the pointer; `dropTarget` is the
   // column (and index) it would land in — used to draw the placeholder.
   const [dragging, setDragging] = useState<Task | null>(null)
@@ -81,13 +89,19 @@ export function TasksPage() {
 
   const workerName = (id: string) => workers.find((w) => w.id === id)?.name || 'Worker'
   const workerAvatar = (id: string) => workers.find((w) => w.id === id)?.avatar_url ?? null
+  const clientOf = (id: string | null) => (id ? clients.find((c) => c.id === id) ?? null : null)
 
   // Workers only ever receive their own tasks from the backend; this keeps the
   // UI honest even if a stale row slipped into the cache.
   const visible = useMemo(() => {
-    const mine = isAdmin ? tasks : tasks.filter((t) => t.worker_id === user?.workerId)
-    return workerFilter === 'all' ? mine : mine.filter((t) => t.worker_id === workerFilter)
-  }, [tasks, isAdmin, user?.workerId, workerFilter])
+    let rows = isAdmin ? tasks : tasks.filter((t) => t.worker_id === user?.workerId)
+    if (workerFilter !== 'all') rows = rows.filter((t) => t.worker_id === workerFilter)
+    if (clientFilter !== 'all') rows = rows.filter((t) => t.client_id === clientFilter)
+    if (priorityFilter !== 'all') rows = rows.filter((t) => t.priority === priorityFilter)
+    return rows
+  }, [tasks, isAdmin, user?.workerId, workerFilter, clientFilter, priorityFilter])
+
+  const filtersActive = workerFilter !== 'all' || stageFilter !== 'all' || clientFilter !== 'all' || priorityFilter !== 'all'
 
   const columns = useMemo(() => {
     // Derived from TASK_STATUSES so adding a stage never needs a change here.
@@ -190,6 +204,8 @@ export function TasksPage() {
             )}
 
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              {/* Every card names its client — the board is read across accounts. */}
+              <ClientBadge client={clientOf(task.client_id)} showInactive={false} />
               <Badge variant={priority.variant} className="text-[10px]">{priority.label}</Badge>
               {task.due_date && (
                 <Badge variant={overdue ? 'destructive' : 'muted'} className="gap-1 text-[10px]">
@@ -339,10 +355,12 @@ export function TasksPage() {
             : 'Your board. Drag a card between stages as you work through it.'
         }
       >
+        {/* Worker + stage are the admin's cross-team filters; client and
+            priority narrow anyone's own board the same way. */}
         {isAdmin && (
           <>
             <Select value={workerFilter} onValueChange={setWorkerFilter}>
-              <SelectTrigger className="w-[170px]">
+              <SelectTrigger className="w-[150px]">
                 <SelectValue placeholder="All workers" />
               </SelectTrigger>
               <SelectContent>
@@ -354,7 +372,7 @@ export function TasksPage() {
             </Select>
 
             <Select value={stageFilter} onValueChange={(v) => setStageFilter(v as 'all' | TaskStatus)}>
-              <SelectTrigger className="w-[170px]">
+              <SelectTrigger className="w-[150px]">
                 <SelectValue placeholder="All stages" />
               </SelectTrigger>
               <SelectContent>
@@ -364,16 +382,46 @@ export function TasksPage() {
                 ))}
               </SelectContent>
             </Select>
-
-            {(workerFilter !== 'all' || stageFilter !== 'all') && (
-              <Button
-                variant="ghost"
-                onClick={() => { setWorkerFilter('all'); setStageFilter('all') }}
-              >
-                Clear filters
-              </Button>
-            )}
           </>
+        )}
+
+        <ClientSelect
+          value={clientFilter}
+          onValueChange={setClientFilter}
+          includeAll
+          className="w-[150px]"
+        />
+
+        <Select value={priorityFilter} onValueChange={(v) => setPriorityFilter(v as 'all' | TaskPriority)}>
+          <SelectTrigger className="w-[150px]">
+            <SelectValue placeholder="All priorities" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All priorities</SelectItem>
+            {(['high', 'medium', 'low'] as TaskPriority[]).map((p) => (
+              <SelectItem key={p} value={p}>{TaskPriorityNames[p]}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        {filtersActive && (
+          <Button
+            variant="ghost"
+            onClick={() => {
+              setWorkerFilter('all')
+              setStageFilter('all')
+              setClientFilter('all')
+              setPriorityFilter('all')
+            }}
+          >
+            Clear filters
+          </Button>
+        )}
+
+        {isAdmin && (
+          <Button variant="outline" onClick={() => setClientsOpen(true)}>
+            <Building2 className="mr-2 h-4 w-4" /> Clients
+          </Button>
         )}
         <Button onClick={() => openNew('todo')}>
           <Plus className="mr-2 h-4 w-4" /> New task
@@ -388,6 +436,26 @@ export function TasksPage() {
             ))}
           </div>
         </div>
+      ) : visible.length === 0 && filtersActive ? (
+        // The board is not empty — the filters just hide everything.
+        <EmptyState
+          icon={KanbanSquare}
+          title="No tasks match these filters"
+          description="Nothing on the board fits the client, priority, worker or stage you picked."
+          action={
+            <Button
+              variant="outline"
+              onClick={() => {
+                setWorkerFilter('all')
+                setStageFilter('all')
+                setClientFilter('all')
+                setPriorityFilter('all')
+              }}
+            >
+              Clear filters
+            </Button>
+          }
+        />
       ) : visible.length === 0 ? (
         <EmptyState
           icon={KanbanSquare}
@@ -422,7 +490,10 @@ export function TasksPage() {
         task={editing}
         defaultStatus={formStatus}
         defaultWorkerId={isAdmin && workerFilter !== 'all' ? workerFilter : undefined}
+        defaultClientId={clientFilter !== 'all' ? clientFilter : undefined}
       />
+
+      {isAdmin && <ManageClientsDialog open={clientsOpen} onOpenChange={setClientsOpen} />}
 
       <ConfirmDialog
         open={!!deleting}

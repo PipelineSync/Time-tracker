@@ -34,6 +34,13 @@ export interface Worker {
 export interface TimeEntry {
   id: string
   worker_id: string
+  /** The client this time was worked for (see the Clients master list). */
+  client_id: string | null
+  /**
+   * Legacy free-text scope, replaced by `client_id`. Entries logged before
+   * clients existed keep their text so nothing is lost; new entries leave it
+   * null and the UI shows the client instead.
+   */
   project: string | null
   start_time: string // ISO
   end_time: string // ISO
@@ -57,6 +64,9 @@ export interface TimeEntry {
 export interface ActiveTimer {
   id: string
   worker_id: string
+  /** The client picked at clock-in; copied onto the entry at clock-out. */
+  client_id: string | null
+  /** @deprecated legacy free-text scope, kept for timers started before clients. */
   project: string | null
   start_time: string // ISO
   notes: string | null
@@ -196,6 +206,55 @@ export const DEFAULT_SLACK_SETTINGS: SlackSettings = {
   notify_payment_paid: true,
 }
 
+
+// ---- Clients ---------------------------------------------------------------
+
+export type ClientStatus = 'active' | 'inactive'
+
+/**
+ * Colour tag on a client, used for its badge on kanban cards / entries and for
+ * its slice of the "Hours by client" chart. Deliberately a small fixed set so
+ * the board stays legible and the palette survives a theme switch.
+ */
+export type ClientColor = 'blue' | 'aqua' | 'violet' | 'emerald' | 'amber' | 'orange' | 'rose' | 'slate'
+
+export const CLIENT_COLORS: ClientColor[] = ['blue', 'aqua', 'violet', 'emerald', 'amber', 'orange', 'rose', 'slate']
+
+export const DEFAULT_CLIENT_COLOR: ClientColor = 'blue'
+
+/** Badge / dot classes plus the hex recharts needs for the client charts. */
+export const ClientColorStyles: Record<ClientColor, { badge: string; dot: string; chart: string }> = {
+  blue: { badge: 'border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-300', dot: 'bg-blue-500', chart: '#0868D9' },
+  aqua: { badge: 'border-cyan-500/30 bg-cyan-500/10 text-cyan-700 dark:text-cyan-300', dot: 'bg-cyan-500', chart: '#36B7C9' },
+  violet: { badge: 'border-violet-500/30 bg-violet-500/10 text-violet-700 dark:text-violet-300', dot: 'bg-violet-500', chart: '#8B5CF6' },
+  emerald: { badge: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300', dot: 'bg-emerald-500', chart: '#10B981' },
+  amber: { badge: 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300', dot: 'bg-amber-500', chart: '#F59E0B' },
+  orange: { badge: 'border-orange-500/30 bg-orange-500/10 text-orange-700 dark:text-orange-300', dot: 'bg-orange-500', chart: '#F77A0A' },
+  rose: { badge: 'border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-300', dot: 'bg-rose-500', chart: '#F43F5E' },
+  slate: { badge: 'border-slate-500/30 bg-slate-500/10 text-slate-700 dark:text-slate-300', dot: 'bg-slate-500', chart: '#64748B' },
+}
+
+/**
+ * The client rows created by the migration/backfill for work logged before
+ * clients existed. Kept by name so both backends agree on it.
+ */
+export const UNASSIGNED_CLIENT_NAME = 'Unassigned'
+
+/**
+ * A customer the team does work for. The admin keeps the master list: any
+ * number of clients, each active or inactive. Only ACTIVE clients are offered
+ * when assigning a task or clocking in; inactive ones stay on their existing
+ * tasks and entries (and in reports) so history never loses its label.
+ */
+export interface Client {
+  id: string
+  name: string
+  color: ClientColor
+  status: ClientStatus
+  created_at: string
+  updated_at: string
+}
+
 /**
  * Columns of the task board. Tasks move between them by drag & drop (or the
  * "Move to" menu on touch devices); the order is the order they appear in.
@@ -232,6 +291,12 @@ export interface Task {
   id: string
   /** The worker the task belongs to. */
   worker_id: string
+  /**
+   * The client the task is for. Required on everything created from the app;
+   * nullable only so rows written before clients existed still load (the
+   * migration backfills those to the "Unassigned" client).
+   */
+  client_id: string | null
   title: string
   description: string | null
   status: TaskStatus

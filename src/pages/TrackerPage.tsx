@@ -16,7 +16,7 @@ import { formatMinutes, money, timerElapsedMs } from '@/lib/utils'
  * The admin has no start-timer — they add time via manual entries.
  */
 export function TrackerPage() {
-  const { workers, entries, activeTimer, startTimer, pauseTimer, resumeTimer, stopTimer, cancelTimer, settings, user, dataLoading } = useStore()
+  const { workers, entries, clients, activeTimer, startTimer, pauseTimer, resumeTimer, stopTimer, cancelTimer, settings, user, dataLoading } = useStore()
 
   const [starting, setStarting] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -38,29 +38,30 @@ export function TrackerPage() {
 
   const elapsedMs = myTimer ? timerElapsedMs(myTimer, new Date(now)) : 0
 
-  /** Projects this worker has logged before — offered in the clock-in dialog. */
-  const projectSuggestions = useMemo(() => {
-    const seen = new Map<string, number>()
+  /** The client from this worker's most recent shift — the clock-in default. */
+  const lastClientId = useMemo(() => {
+    let latest: { at: number; clientId: string } | null = null
     for (const e of entries) {
-      if (!e.project) continue
+      if (!e.client_id) continue
       if (currentWorkerId && e.worker_id !== currentWorkerId) continue
-      seen.set(e.project, Math.max(seen.get(e.project) || 0, new Date(e.start_time).getTime()))
+      const at = new Date(e.start_time).getTime()
+      if (!latest || at > latest.at) latest = { at, clientId: e.client_id }
     }
-    return Array.from(seen.entries()).sort((a, b) => b[1] - a[1]).map(([p]) => p).slice(0, 8)
+    return latest?.clientId ?? null
   }, [entries, currentWorkerId])
 
-  async function handleClockIn(input?: { project?: string; notes?: string }) {
+  async function handleClockIn(input?: { clientId?: string; notes?: string }) {
     if (!currentWorkerId) {
       toast.error('No worker profile linked to this account. Please contact your administrator.')
       return
     }
     setStarting(true)
-    // Fall back to the worker's assigned Project Scope if no project was given
-    // (e.g. a clock-in that skips the dialog), so entries stay attributed.
-    const project = input?.project?.trim() || workerProfile?.position?.trim() || undefined
+    // Fall back to the client of the last shift when the dialog was skipped, so
+    // the hours still land against someone.
+    const clientId = input?.clientId || lastClientId || undefined
     const res = await startTimer({
       worker_id: currentWorkerId,
-      project,
+      client_id: clientId,
       notes: input?.notes?.trim() || undefined,
     })
     setStarting(false)
@@ -75,7 +76,8 @@ export function TrackerPage() {
     if (startedAgoMs > 2 * 60 * 1000) {
       toast.success(`Resumed your unfinished timer from ${new Date(res.data.start_time).toLocaleString()} — clock out when ready.`, { duration: 8000 })
     } else {
-      toast.success(`Clocked in${res.data.project ? ` — ${res.data.project}` : ''}.`)
+      const scope = clients.find((c) => c.id === res.data!.client_id)?.name || res.data.project
+      toast.success(`Clocked in${scope ? ` — ${scope}` : ''}.`)
     }
   }
 
@@ -209,10 +211,9 @@ export function TrackerPage() {
         open={clockInOpen}
         onOpenChange={setClockInOpen}
         workerName={workerProfile?.name || null}
-        projectSuggestions={projectSuggestions}
-        projectScope={workerProfile?.position ?? null}
-        onConfirm={async ({ project, notes }) => {
-          await handleClockIn({ project, notes })
+        defaultClientId={lastClientId}
+        onConfirm={async ({ clientId, notes }) => {
+          await handleClockIn({ clientId, notes })
         }}
       />
 

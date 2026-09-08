@@ -14,7 +14,7 @@ import { money, formatMinutes, formatDate } from '@/lib/utils'
 import { dateRangeFor, filterEntriesInRange, summarizeEntries, hoursByWorker } from '@/lib/stats'
 
 export function DashboardPage() {
-  const { entries, workers, settings, dataLoading } = useStore()
+  const { entries, workers, clients, settings, dataLoading } = useStore()
   const navigate = useNavigate()
   const currency = settings?.currency || 'USD'
 
@@ -114,7 +114,7 @@ export function DashboardPage() {
                         </div>
                         <div>
                           <p className="font-medium">{w?.name || 'Unknown'}</p>
-                          <p className="text-xs text-muted-foreground">{formatDate(e.start_time)} · {e.project || 'No project'}</p>
+                          <p className="text-xs text-muted-foreground">{formatDate(e.start_time)} · {clients.find((c) => c.id === e.client_id)?.name || e.project || 'No client'}</p>
                         </div>
                       </div>
                       <div className="text-right">

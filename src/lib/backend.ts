@@ -14,6 +14,7 @@ import type {
   WorkerAvatar,
   Task,
   TaskStatus,
+  Client,
 } from './types'
 
 export interface BackendResult<T> {
@@ -36,10 +37,19 @@ export interface CreateWorkerInput {
   accountPassword?: string
 }
 
+/** Fields the admin may set when adding a client to the master list. */
+export interface CreateClientInput {
+  name: string
+  color?: Client['color']
+  status?: Client['status']
+}
+
 /** Fields callers may set when creating a task. */
 export interface CreateTaskInput {
   /** Admin only — defaults to the signed-in worker's own id. */
   worker_id?: string
+  /** The client the task is for (required by the UI for both roles). */
+  client_id?: string | null
   title: string
   description?: string | null
   status?: TaskStatus
@@ -110,7 +120,7 @@ export interface DataBackend {
    * clock (working or on break), a worker only gets their own.
    */
   listActiveTimers(): Promise<BackendResult<ActiveTimer[]>>
-  startTimer(input: { worker_id: string; project?: string; notes?: string; start_time?: string; hourly_rate?: number }): Promise<BackendResult<ActiveTimer>>
+  startTimer(input: { worker_id: string; client_id?: string | null; project?: string; notes?: string; start_time?: string; hourly_rate?: number }): Promise<BackendResult<ActiveTimer>>
   /** Start a break. Without `timerId` the caller's own timer is used. */
   pauseTimer(timerId?: string): Promise<BackendResult<ActiveTimer>>
   /** End a break. Without `timerId` the caller's own timer is used. */
@@ -151,6 +161,18 @@ export interface DataBackend {
   updatePaymentStatus(id: string, status: PaymentStatus, paymentMethod?: PaymentMethod | null): Promise<BackendResult<Payment>>
   updatePaymentNote(id: string, note: string | null): Promise<BackendResult<Payment>>
   deletePayment(id: string): Promise<BackendResult<null>>
+
+  /**
+   * The client master list. Both roles read it (a worker needs the names and
+   * colours of the clients on their own board); only the admin may change it.
+   * Inactive clients are returned too — they still label existing work — and
+   * the UI offers only the active ones when assigning new work.
+   */
+  listClients(): Promise<BackendResult<Client[]>>
+  createClient(input: CreateClientInput): Promise<BackendResult<Client>>
+  updateClient(id: string, patch: Partial<Pick<Client, 'name' | 'color' | 'status'>>): Promise<BackendResult<Client>>
+  /** Remove a client outright. Refused while tasks or entries still use it. */
+  deleteClient(id: string): Promise<BackendResult<null>>
 
   /**
    * Tasks on the kanban board. Scoped by role: the admin gets every worker's

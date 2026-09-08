@@ -13,9 +13,10 @@ import type {
   WorkerAvatar,
   Task,
   TaskStatus,
+  Client,
 } from './types'
-import { DEFAULT_SLACK_SETTINGS } from './types'
-import type { BackendResult, DataBackend, CreateWorkerInput, CreateTaskInput } from './backend'
+import { DEFAULT_SLACK_SETTINGS, DEFAULT_CLIENT_COLOR } from './types'
+import type { BackendResult, DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput } from './backend'
 import { ACCOUNT_DEACTIVATED_MESSAGE } from './backend'
 import {
   createClient,
@@ -106,10 +107,14 @@ function mapErr(e: unknown): string {
  * ~44 KB on a full 1200-row admin sync.
  */
 const ENTRY_COLUMNS =
-  'id, worker_id, project, start_time, end_time, break_minutes, notes, hourly_rate, total_minutes, earnings, settled_at, created_at, updated_at'
-/** Same list for databases that predate `settled_at`. */
-const ENTRY_COLUMNS_LEGACY =
-  'id, worker_id, project, start_time, end_time, break_minutes, notes, hourly_rate, total_minutes, earnings, created_at, updated_at'
+  'id, worker_id, client_id, project, start_time, end_time, break_minutes, notes, hourly_rate, total_minutes, earnings, settled_at, created_at, updated_at'
+/**
+ * Columns a database may not have yet, newest migration first. A select that
+ * fails on one of them is retried without it, so the app keeps working on a
+ * database that has not run supabase/clients.sql (client_id) or
+ * supabase/settle-keeps-entries.sql (settled_at) yet.
+ */
+const OPTIONAL_ENTRY_COLUMNS = ['client_id', 'settled_at'] as const
 
 const ok = <T,>(data: T | null): BackendResult<T> => ({ data, error: null })
 const fail = <T,>(error: string): BackendResult<T> => ({ data: null, error })
@@ -425,6 +430,73 @@ function isMissingColumn(error: { code?: string; message?: string } | null, colu
   if (!new RegExp(column, 'i').test(message)) return false
   // 42703 = undefined_column, PGRST204 = column not found in the schema cache.
   return error.code === '42703' || error.code === 'PGRST204' || /column/i.test(message)
+}
+
+/** True when the whole table is absent (migration not applied yet). */
+function isMissingTable(error: { code?: string; message?: string } | null, table: string): boolean {
+  if (!error) return false
+  const message = error.message ?? ''
+  // 42P01 = undefined_table, PGRST205 = table not found in the schema cache.
+  if (error.code === '42P01' || error.code === 'PGRST205') return true
+  return new RegExp(`relation .*${table}.* does not exist`, 'i').test(message)
+}
+
+/** A client's name for notification text, or null when unknown/unset. */
+async function clientNameById(clientId: string | null | undefined): Promise<string | null> {
+  if (!clientId) return null
+  try {
+    const { data } = await client().from('clients').select('name').eq('id', clientId).maybeSingle()
+    return (data as { name?: string } | null)?.name ?? null
+  } catch {
+    return null
+  }
+}
+
+/** Defensive defaults for client rows written before/outside the app. */
+function normalizeClientRow(c: Client): Client {
+  return {
+    ...c,
+    name: (c.name ?? '').trim() || 'Client',
+    color: c.color ?? DEFAULT_CLIENT_COLOR,
+    status: c.status === 'inactive' ? 'inactive' : 'active',
+  }
+}
+
+type QueryResult = { data: unknown; error: { code?: string; message?: string } | null }
+
+/**
+ * Run an entries query, dropping any column the database does not have yet and
+ * retrying. Rows that come back without `client_id` are normalized to null so
+ * the rest of the app never has to care which migrations have been applied.
+ */
+async function selectEntries(build: (columns: string) => PromiseLike<QueryResult>): Promise<BackendResult<TimeEntry[]>> {
+  let columns = ENTRY_COLUMNS
+  for (let attempt = 0; attempt <= OPTIONAL_ENTRY_COLUMNS.length; attempt++) {
+    const res = await build(columns)
+    if (!res.error) {
+      const rows = (res.data as TimeEntry[] | null) ?? []
+      return ok(rows.map((r) => ({ ...r, client_id: r.client_id ?? null })))
+    }
+    const missing = OPTIONAL_ENTRY_COLUMNS.find((col) => columns.includes(col) && isMissingColumn(res.error, col))
+    if (!missing) return fail(res.error.message ?? 'Could not load time entries.')
+    columns = columns.replace(`${missing}, `, '')
+  }
+  return fail('Could not load time entries.')
+}
+
+/**
+ * Insert/update a row that carries `client_id`, retrying without it on a
+ * database that has not run supabase/clients.sql yet.
+ */
+async function withClientColumn<T>(
+  run: (withClient: boolean) => PromiseLike<{ data: T | null; error: { code?: string; message?: string } | null }>
+): Promise<{ data: T | null; error: { code?: string; message?: string } | null }> {
+  const first = await run(true)
+  if (first.error && isMissingColumn(first.error, 'client_id')) {
+    console.warn('[work-tracker] clients are not set up on this database yet — run supabase/clients.sql to enable them.')
+    return run(false)
+  }
+  return first
 }
 
 /**
@@ -826,17 +898,7 @@ export const supabaseBackend: DataBackend = {
       if (opts?.limit) q = q.limit(opts.limit)
       return q
     }
-    const { data, error } = await build(ENTRY_COLUMNS)
-    if (error) {
-      // Database predating settle-keeps-entries.sql: retry without the column.
-      if (isMissingColumn(error as { code?: string; message?: string }, 'settled_at')) {
-        const retry = await build(ENTRY_COLUMNS_LEGACY)
-        if (retry.error) return fail(retry.error.message)
-        return ok(retry.data as unknown as TimeEntry[])
-      }
-      return fail(error.message)
-    }
-    return ok(data as unknown as TimeEntry[])
+    return selectEntries(build)
   },
 
   async listOlderEntries(before, limit = 500) {
@@ -847,16 +909,7 @@ export const supabaseBackend: DataBackend = {
       if (me.data!.role === 'worker' && me.data!.workerId) q = q.eq('worker_id', me.data!.workerId)
       return q.order('start_time', { ascending: false }).limit(limit)
     }
-    const { data, error } = await build(ENTRY_COLUMNS)
-    if (error) {
-      if (isMissingColumn(error as { code?: string; message?: string }, 'settled_at')) {
-        const retry = await build(ENTRY_COLUMNS_LEGACY)
-        if (retry.error) return fail(retry.error.message)
-        return ok(retry.data as unknown as TimeEntry[])
-      }
-      return fail(error.message)
-    }
-    return ok(data as unknown as TimeEntry[])
+    return selectEntries(build)
   },
 
   async createEntry(input) {
@@ -865,8 +918,12 @@ export const supabaseBackend: DataBackend = {
     if (me.data!.role !== 'admin') return fail('Only the admin can add manual entries.')
     const totalMinutes = Math.max(0, Math.round(computeTotalMinutes(new Date(input.start_time), new Date(input.end_time), input.break_minutes)))
     const earnings = computeEarnings(totalMinutes, input.hourly_rate)
-    const { data, error } = await client().from('time_entries').insert({ ...input, total_minutes: totalMinutes, earnings }).select().single()
-    if (error) return fail(error.message)
+    const { data, error } = await withClientColumn<TimeEntry>((withClient) => {
+      const { client_id, ...rest } = input
+      const row = withClient ? { ...rest, client_id: client_id ?? null } : rest
+      return client().from('time_entries').insert({ ...row, total_minutes: totalMinutes, earnings }).select().single() as PromiseLike<{ data: TimeEntry | null; error: { code?: string; message?: string } | null }>
+    })
+    if (error || !data) return fail(error?.message ?? 'Could not add the entry.')
     const entry = data as TimeEntry
     const wid = await getWorkerUserId(entry.worker_id)
     if (wid) {
@@ -884,8 +941,11 @@ export const supabaseBackend: DataBackend = {
       const totalMinutes = Math.max(0, Math.round(computeTotalMinutes(new Date(patch.start_time), new Date(patch.end_time), patch.break_minutes)))
       p = { ...p, total_minutes: totalMinutes, earnings: computeEarnings(totalMinutes, patch.hourly_rate) }
     }
-    const { data, error } = await client().from('time_entries').update(p).eq('id', id).select().single()
-    if (error) return fail(error.message)
+    const { data, error } = await withClientColumn<TimeEntry>((withClient) => {
+      const payload = withClient ? p : (({ client_id: _drop, ...rest }) => rest)(p)
+      return client().from('time_entries').update(payload).eq('id', id).select().single() as PromiseLike<{ data: TimeEntry | null; error: { code?: string; message?: string } | null }>
+    })
+    if (error || !data) return fail(error?.message ?? 'Could not save the entry.')
     return ok(data as TimeEntry)
   },
 
@@ -963,8 +1023,9 @@ export const supabaseBackend: DataBackend = {
       if (me.data!.role === 'worker') return ok(existing)
       return fail('That worker already has a running timer.')
     }
-    const { data, error } = await client().from('active_timers').insert({
+    const { data, error } = await withClientColumn<ActiveTimer>((withClient) => client().from('active_timers').insert({
       worker_id: workerId,
+      ...(withClient ? { client_id: input.client_id ?? null } : {}),
       project: input.project || null,
       start_time: input.start_time || new Date().toISOString(),
       notes: input.notes || null,
@@ -972,21 +1033,24 @@ export const supabaseBackend: DataBackend = {
       paused: false,
       pause_start: null,
       total_pause_ms: 0,
-    }).select().single()
+    }).select().single() as PromiseLike<{ data: ActiveTimer | null; error: { code?: string; message?: string } | null }>)
     if (error) {
       // 23505 = unique violation on active_timers_one_per_worker: this
       // worker already has an unfinished timer row.
       if ((error as { code?: string }).code === '23505') {
         return fail('You have an unfinished timer from a previous session. Refresh the page to load it, then clock out before starting a new one.')
       }
-      return fail(error.message)
+      return fail(error.message ?? 'Could not start the timer.')
     }
     // Notify the admin when a worker clocks in.
     if (me.data!.role === 'worker') {
       const adminId = await getAdminUserId()
       if (adminId) {
         const t = data as ActiveTimer
-        const detail = [t.project ? t.project : null, t.notes ? t.notes.replace(/\s+/g, ' ').slice(0, 140) : null].filter(Boolean).join(' · ')
+        const detail = [
+          (await clientNameById(t.client_id)) || t.project || null,
+          t.notes ? t.notes.replace(/\s+/g, ' ').slice(0, 140) : null,
+        ].filter(Boolean).join(' · ')
         await pushNotification(adminId, { entry_id: null, type: 'time_in', message: `${await workerName(workerId)} clocked in${detail ? ` — ${detail}` : ''}` })
       }
     }
@@ -1042,6 +1106,7 @@ export const supabaseBackend: DataBackend = {
     const breakMinutes = Math.max(0, Math.round(totalPause / 60000))
     const entry = {
       worker_id: timer.worker_id,
+      client_id: timer.client_id ?? null,
       project: timer.project || null,
       start_time: timer.start_time,
       end_time: end.toISOString(),
@@ -1051,8 +1116,12 @@ export const supabaseBackend: DataBackend = {
       total_minutes: totalMinutes,
       earnings: computeEarnings(totalMinutes, timer.hourly_rate ?? 0),
     }
-    const { data, error } = await client().from('time_entries').insert(entry).select().single()
-    if (error) return fail(error.message)
+    const { data, error } = await withClientColumn<TimeEntry>((withClient) => {
+      const { client_id, ...rest } = entry
+      const row = withClient ? { ...rest, client_id } : rest
+      return client().from('time_entries').insert(row).select().single() as PromiseLike<{ data: TimeEntry | null; error: { code?: string; message?: string } | null }>
+    })
+    if (error || !data) return fail(error?.message ?? 'Could not save the entry.')
     await client().from('active_timers').delete().eq('id', timerId)
     const created = data as TimeEntry
     // Notify the admin when a worker clocks out. This must happen whether or
@@ -1062,7 +1131,8 @@ export const supabaseBackend: DataBackend = {
         const adminId = await getAdminUserId()
         if (adminId) {
           const parts = [formatMinutes(created.total_minutes)]
-          if (created.project) parts.push(created.project)
+          const scope = (await clientNameById(created.client_id)) || created.project
+          if (scope) parts.push(scope)
           parts.push(clockOutNote ? 'added a note' : 'no note')
           await pushNotification(adminId, {
             entry_id: created.id,
@@ -1376,6 +1446,91 @@ export const supabaseBackend: DataBackend = {
     return ok(null)
   },
 
+  // ---- Clients (master list) ----------------------------------------------
+  // supabase/clients.sql owns the real boundary: the admin (workspace owner)
+  // may insert / update / delete, both roles may read. A database that has not
+  // run the migration answers "relation does not exist"; that is reported as an
+  // empty list so the rest of the app degrades instead of erroring.
+
+  async listClients() {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    const { data, error } = await client()
+      .from('clients')
+      .select('id, name, color, status, created_at, updated_at')
+      .order('name', { ascending: true })
+    if (error) {
+      if (isMissingTable(error as { code?: string; message?: string }, 'clients')) {
+        console.warn('[work-tracker] the clients table is missing — run supabase/clients.sql to enable clients.')
+        return ok([] as Client[])
+      }
+      return fail(error.message)
+    }
+    return ok(((data as Client[]) ?? []).map(normalizeClientRow))
+  },
+
+  async createClient(input: CreateClientInput) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (me.data!.role !== 'admin') return fail('Only the admin can manage clients.')
+    const name = input.name.trim()
+    if (!name) return fail('Give the client a name.')
+    if (name.length > 80) return fail('Client names are limited to 80 characters.')
+    const { data, error } = await client()
+      .from('clients')
+      .insert({ name, color: input.color ?? DEFAULT_CLIENT_COLOR, status: input.status ?? 'active' })
+      .select()
+      .single()
+    if (error) {
+      if (isMissingTable(error as { code?: string; message?: string }, 'clients')) {
+        return fail('Clients are not set up on this database yet. Run supabase/clients.sql in the Supabase SQL editor.')
+      }
+      // 23505 = unique violation on clients_user_name_key.
+      if ((error as { code?: string }).code === '23505') return fail(`"${name}" is already on the list.`)
+      return fail(error.message)
+    }
+    return ok(normalizeClientRow(data as Client))
+  },
+
+  async updateClient(id, patch) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (me.data!.role !== 'admin') return fail('Only the admin can manage clients.')
+    const update: Record<string, unknown> = {}
+    if (patch.name !== undefined) {
+      const name = patch.name.trim()
+      if (!name) return fail('Give the client a name.')
+      update.name = name
+    }
+    if (patch.color !== undefined) update.color = patch.color
+    if (patch.status !== undefined) update.status = patch.status
+    const { data, error } = await client().from('clients').update(update).eq('id', id).select().single()
+    if (error) {
+      if ((error as { code?: string }).code === '23505') return fail(`"${String(update.name)}" is already on the list.`)
+      return fail(error.message)
+    }
+    return ok(normalizeClientRow(data as Client))
+  },
+
+  async deleteClient(id) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (me.data!.role !== 'admin') return fail('Only the admin can manage clients.')
+    const sb = client()
+    // Deleting would strip the label off work that has already happened, so a
+    // client in use can only be marked inactive.
+    const [tasksUsing, entriesUsing] = await Promise.all([
+      sb.from('tasks').select('id', { count: 'exact', head: true }).eq('client_id', id),
+      sb.from('time_entries').select('id', { count: 'exact', head: true }).eq('client_id', id),
+    ])
+    if ((tasksUsing.count ?? 0) > 0 || (entriesUsing.count ?? 0) > 0) {
+      return fail('This client is used by existing tasks or time entries. Mark it inactive instead.')
+    }
+    const { error } = await sb.from('clients').delete().eq('id', id)
+    if (error) return fail(error.message)
+    return ok(null)
+  },
+
   // ---- Tasks (kanban board) ----------------------------------------------
   // RLS (supabase/tasks.sql) is the real boundary: a worker can only select /
   // insert / update / delete rows whose worker_id is their own, the admin owns
@@ -1385,11 +1540,19 @@ export const supabaseBackend: DataBackend = {
     const me = await requireUser()
     if (me.error) return fail(me.error)
     // `user_id` is the workspace owner — constant across rows, never read.
-    let q = client().from('tasks').select('id, worker_id, title, description, status, priority, due_date, position, created_by_role, completed_at, created_at, updated_at')
-    if (me.data!.role === 'worker' && me.data!.workerId) q = q.eq('worker_id', me.data!.workerId)
-    const { data, error } = await q.order('position', { ascending: true }).order('created_at', { ascending: false })
-    if (error) return fail(error.message)
-    return ok((data as Task[]) ?? [])
+    const build = (columns: string) => {
+      let q = client().from('tasks').select(columns)
+      if (me.data!.role === 'worker' && me.data!.workerId) q = q.eq('worker_id', me.data!.workerId)
+      return q.order('position', { ascending: true }).order('created_at', { ascending: false })
+    }
+    const columns = 'id, worker_id, client_id, title, description, status, priority, due_date, position, created_by_role, completed_at, created_at, updated_at'
+    let res = await build(columns)
+    if (res.error && isMissingColumn(res.error as { code?: string; message?: string }, 'client_id')) {
+      // Database without supabase/clients.sql: the board still loads, unlabelled.
+      res = await build(columns.replace('client_id, ', ''))
+    }
+    if (res.error) return fail(res.error.message)
+    return ok(((res.data as unknown as Task[]) ?? []).map((t) => ({ ...t, client_id: t.client_id ?? null })))
   },
 
   async createTask(input: CreateTaskInput) {
@@ -1402,23 +1565,25 @@ export const supabaseBackend: DataBackend = {
     if (!workerId) return fail('Choose who the task is for.')
     const status: TaskStatus = input.status ?? 'todo'
     const sb = client()
-    const { data, error } = await sb
+    // Bottom of the column.
+    const position = await nextTaskPosition(workerId, status)
+    const { data, error } = await withClientColumn<Task>((withClient) => sb
       .from('tasks')
       .insert({
         worker_id: workerId,
+        ...(withClient ? { client_id: input.client_id ?? null } : {}),
         title,
         description: input.description?.trim() || null,
         status,
         priority: input.priority ?? 'medium',
         due_date: input.due_date || null,
-        // Bottom of the column.
-        position: await nextTaskPosition(workerId, status),
+        position,
         created_by_role: me.data!.role,
         completed_at: status === 'completed' ? new Date().toISOString() : null,
       })
       .select()
-      .single()
-    if (error) return fail(error.message)
+      .single() as PromiseLike<{ data: Task | null; error: { code?: string; message?: string } | null }>)
+    if (error) return fail(error.message ?? 'Could not add the task.')
     // Tell the worker when the admin assigns them something.
     if (me.data!.role === 'admin') {
       const recipient = await getWorkerUserId(workerId)
@@ -1443,6 +1608,7 @@ export const supabaseBackend: DataBackend = {
     if (patch.description !== undefined) update.description = patch.description?.trim() || null
     if (patch.priority !== undefined) update.priority = patch.priority
     if (patch.due_date !== undefined) update.due_date = patch.due_date || null
+    if (patch.client_id !== undefined) update.client_id = patch.client_id || null
     // Only the admin may hand a task to a different worker.
     if (patch.worker_id !== undefined && me.data!.role === 'admin') update.worker_id = patch.worker_id
     if (patch.status !== undefined) {
@@ -1456,8 +1622,11 @@ export const supabaseBackend: DataBackend = {
       update.position = await nextTaskPosition(nextWorker, nextStatus)
     }
 
-    const { data, error } = await sb.from('tasks').update(update).eq('id', id).select().single()
-    if (error) return fail(error.message)
+    const { data, error } = await withClientColumn<Task>((withClient) => {
+      const payload = withClient ? update : (({ client_id: _drop, ...rest }) => rest)(update)
+      return sb.from('tasks').update(payload).eq('id', id).select().single() as PromiseLike<{ data: Task | null; error: { code?: string; message?: string } | null }>
+    })
+    if (error) return fail(error.message ?? 'Could not save the task.')
     return ok(data as Task)
   },
 
@@ -1540,6 +1709,7 @@ export const supabaseBackend: DataBackend = {
 
     await client().from('tasks').delete().neq('id', '')
     await client().from('time_entries').delete().neq('id', '')
+    await client().from('clients').delete().neq('id', '')
     await client().from('active_timers').delete().neq('id', '')
     await client().from('workers').delete().neq('id', '')
     return ok(null)
@@ -1550,19 +1720,29 @@ export const supabaseBackend: DataBackend = {
     if (me.error) return fail(me.error)
     if (me.data!.role !== 'admin') return fail('Only the admin can load sample data.')
     const sb = client()
-    const { workers, entries, settings } = (await import('./demoSeed')).buildDemoSeed()
+    const { workers, clients, entries, settings } = (await import('./demoSeed')).buildDemoSeed()
     const realIdBySeedId = new Map<string, string>()
+    // Sample clients first, so the seeded entries can point at them.
+    const clientIdBySeedId = new Map<string, string>()
+    for (const cl of clients) {
+      const { data } = await sb.from('clients').insert({ name: cl.name, color: cl.color, status: cl.status }).select().maybeSingle()
+      const cid = (data as { id?: string } | null)?.id
+      if (cid) clientIdBySeedId.set(cl.id, cid)
+    }
     for (const w of workers) {
       const { data } = await sb.from('workers').insert({ name: w.name, email: w.email, hourly_rate: w.hourly_rate, status: w.status }).select().single()
       const wid = data?.id as string
       if (wid) realIdBySeedId.set(w.id, wid)
       for (const e of entries) {
         if (e.worker_id === w.id) {
-          await sb.from('time_entries').insert({
-            worker_id: wid, project: e.project, start_time: e.start_time, end_time: e.end_time,
+          const seededClientId = e.client_id ? clientIdBySeedId.get(e.client_id) ?? null : null
+          await withClientColumn((withClient) => sb.from('time_entries').insert({
+            worker_id: wid,
+            ...(withClient && seededClientId ? { client_id: seededClientId } : {}),
+            project: e.project, start_time: e.start_time, end_time: e.end_time,
             break_minutes: e.break_minutes, notes: e.notes, hourly_rate: e.hourly_rate,
             total_minutes: e.total_minutes, earnings: e.earnings,
-          })
+          }) as PromiseLike<{ data: unknown; error: { code?: string; message?: string } | null }>)
         }
       }
     }

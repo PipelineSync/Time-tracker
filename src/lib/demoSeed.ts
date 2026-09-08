@@ -1,4 +1,4 @@
-import type { Worker, TimeEntry, Settings } from './types'
+import type { Worker, TimeEntry, Settings, Client } from './types'
 import { uid } from './utils'
 
 /**
@@ -59,13 +59,24 @@ export function buildDemoSeed() {
     { id: 'w-seed-3', name: 'Mike Brown', email: 'mike@example.com', hourly_rate: 18, status: 'inactive', position: 'Team member', avatar_url: null, payment_methods: ['qr'], qr_code_url: demoQrDataUrl('mike@example.com'), created_at: daysAgo(20).toISOString(), updated_at: daysAgo(20).toISOString() },
   ]
 
-  function entry(worker_id: string, start: Date, end: Date, project: string | null, break_minutes: number, notes: string | null, hourly_rate: number): TimeEntry {
+  // A small master list so the client dropdowns, filters and the "Hours by
+  // client" chart all have something to show in demo mode.
+  const clients: Client[] = [
+    { id: 'c-seed-1', name: 'Acme Corp', color: 'blue', status: 'active', created_at: daysAgo(40).toISOString(), updated_at: daysAgo(40).toISOString() },
+    { id: 'c-seed-2', name: 'Northwind Traders', color: 'aqua', status: 'active', created_at: daysAgo(38).toISOString(), updated_at: daysAgo(38).toISOString() },
+    { id: 'c-seed-3', name: 'Globex', color: 'violet', status: 'active', created_at: daysAgo(25).toISOString(), updated_at: daysAgo(25).toISOString() },
+    { id: 'c-seed-4', name: 'Internal', color: 'slate', status: 'active', created_at: daysAgo(25).toISOString(), updated_at: daysAgo(25).toISOString() },
+    { id: 'c-seed-5', name: 'Initech (past project)', color: 'amber', status: 'inactive', created_at: daysAgo(60).toISOString(), updated_at: daysAgo(10).toISOString() },
+  ]
+
+  function entry(worker_id: string, start: Date, end: Date, client_id: string, project: string | null, break_minutes: number, notes: string | null, hourly_rate: number): TimeEntry {
     const totalMinutes = Math.round((end.getTime() - start.getTime()) / 60000) - break_minutes
     const earnings = Math.round((Math.max(0, totalMinutes) / 60) * hourly_rate * 100) / 100
     const created = start.toISOString()
     return {
       id: 'e-' + uid(),
       worker_id,
+      client_id,
       project,
       start_time: start.toISOString(),
       end_time: end.toISOString(),
@@ -81,18 +92,18 @@ export function buildDemoSeed() {
 
   const entries: TimeEntry[] = [
     // Today
-    entry('w-seed-1', at(0, 8, 0), at(0, 12, 0), 'Website Redesign', 15, 'Morning block on landing page', 20),
-    entry('w-seed-1', at(0, 13, 0), at(0, 16, 30), 'Website Redesign', 30, 'Afternoon – build components', 20),
-    entry('w-seed-2', at(0, 9, 0), at(0, 13, 0), 'Client Meeting Prep', 0, 'Prep and call with client', 25),
+    entry('w-seed-1', at(0, 8, 0), at(0, 12, 0), 'c-seed-1', 'Website Redesign', 15, 'Morning block on landing page', 20),
+    entry('w-seed-1', at(0, 13, 0), at(0, 16, 30), 'c-seed-1', 'Website Redesign', 30, 'Afternoon – build components', 20),
+    entry('w-seed-2', at(0, 9, 0), at(0, 13, 0), 'c-seed-2', 'Client Meeting Prep', 0, 'Prep and call with client', 25),
     // Yesterday
-    entry('w-seed-1', at(-1, 9, 0), at(-1, 13, 0), 'Website Redesign', 30, 'Wireframes', 20),
-    entry('w-seed-2', at(-1, 10, 0), at(-1, 14, 0), 'Marketing Content', 15, 'Wrote blog drafts', 25),
+    entry('w-seed-1', at(-1, 9, 0), at(-1, 13, 0), 'c-seed-1', 'Website Redesign', 30, 'Wireframes', 20),
+    entry('w-seed-2', at(-1, 10, 0), at(-1, 14, 0), 'c-seed-3', 'Marketing Content', 15, 'Wrote blog drafts', 25),
     // Earlier this week
-    entry('w-seed-3', at(-3, 8, 30), at(-3, 15, 0), 'Inventory Audit', 45, 'Counted stock', 18),
-    entry('w-seed-1', at(-4, 8, 0), at(-4, 12, 30), 'Support Tickets', 0, 'Resolved customer issues', 20),
+    entry('w-seed-3', at(-3, 8, 30), at(-3, 15, 0), 'c-seed-4', 'Inventory Audit', 45, 'Counted stock', 18),
+    entry('w-seed-1', at(-4, 8, 0), at(-4, 12, 30), 'c-seed-2', 'Support Tickets', 0, 'Resolved customer issues', 20),
     // Last month
-    entry('w-seed-2', at(-20, 9, 0), at(-20, 17, 0), 'Q3 Report', 60, 'Compiled quarterly numbers', 25),
-    entry('w-seed-1', at(-22, 10, 0), at(-22, 14, 30), 'Training', 30, 'Onboarding session', 20),
+    entry('w-seed-2', at(-20, 9, 0), at(-20, 17, 0), 'c-seed-5', 'Q3 Report', 60, 'Compiled quarterly numbers', 25),
+    entry('w-seed-1', at(-22, 10, 0), at(-22, 14, 30), 'c-seed-4', 'Training', 30, 'Onboarding session', 20),
   ]
 
   const settings: Settings = {
@@ -104,7 +115,7 @@ export function buildDemoSeed() {
     avatar_url: null,
   }
 
-  return { workers, entries, settings }
+  return { workers, clients, entries, settings }
 }
 
 // Re-export uid for convenience

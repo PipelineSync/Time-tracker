@@ -154,7 +154,8 @@ export function WorkerFormDialog({
               required
             />
             <p className="text-xs text-muted-foreground">
-              The work this person is assigned to. It fills in the project on their time entries automatically when they clock in.
+              The work this person is assigned to, shown on their profile. Time entries are tagged with the
+              client they pick when clocking in.
             </p>
           </div>
 

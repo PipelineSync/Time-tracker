@@ -8,54 +8,54 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { LogIn } from 'lucide-react'
+import { useStore } from '@/lib/store'
+import { ClientSelect } from '@/components/ClientSelect'
 
 /**
- * Shown when a worker clocks in: lets them say which project/task they are
- * starting and leave a note. Both are stored on the running timer and carried
- * over to the time entry when they clock out.
+ * Shown when a worker clocks in: they pick the client they are working for and
+ * can leave a note. Both are stored on the running timer and carried over to
+ * the time entry when they clock out, so every hour is attributed.
  *
- * The project is pre-filled with the **Project Scope** the admin assigned to
- * this worker, so the common case is just "Clock In". It stays editable —
- * a worker can still type something else for a one-off shift.
+ * The client is pre-filled with the one from their last shift (or the only
+ * active client), so the common case is still just "Clock In".
  */
 export function ClockInDialog({
   open,
   onOpenChange,
   workerName,
-  /** Projects already used by this workspace — offered as quick suggestions. */
-  projectSuggestions = [],
-  /** The worker's assigned Project Scope, used to pre-fill the project. */
-  projectScope,
+  /** Client to start from — usually the one from this worker's last shift. */
+  defaultClientId,
   onConfirm,
 }: {
   open: boolean
   onOpenChange: (v: boolean) => void
   workerName?: string | null
-  projectSuggestions?: string[]
-  projectScope?: string | null
-  onConfirm: (input: { project: string; notes: string }) => Promise<void> | void
+  defaultClientId?: string | null
+  onConfirm: (input: { clientId: string; notes: string }) => Promise<void> | void
 }) {
-  const [project, setProject] = useState('')
+  const { activeClients } = useStore()
+  const [clientId, setClientId] = useState('')
   const [notes, setNotes] = useState('')
   const [loading, setLoading] = useState(false)
 
-  // Every time the dialog opens, start from the worker's assigned Project
-  // Scope (blank when the admin has not set one) and a clean note.
+  const noClients = activeClients.length === 0
+
+  // Every time the dialog opens, start from the worker's usual client (their
+  // last shift, or the only one there is) and a clean note.
   useEffect(() => {
-    if (open) {
-      setProject(projectScope?.trim() || '')
-      setNotes('')
-    }
-  }, [open, projectScope])
+    if (!open) return
+    const stillActive = activeClients.some((c) => c.id === defaultClientId)
+    setClientId(stillActive ? defaultClientId! : activeClients.length === 1 ? activeClients[0].id : '')
+    setNotes('')
+  }, [open, defaultClientId, activeClients])
 
   async function handleConfirm() {
     setLoading(true)
     try {
-      await onConfirm({ project: project.trim(), notes: notes.trim() })
+      await onConfirm({ clientId, notes: notes.trim() })
     } finally {
       setLoading(false)
     }
@@ -67,46 +67,26 @@ export function ClockInDialog({
         <DialogHeader>
           <DialogTitle>Clock in{workerName ? `, ${workerName}` : ''}?</DialogTitle>
           <DialogDescription>
-            Tell your admin what you're working on. The project/task and note are saved on this
-            shift and appear on the time entry when you clock out.
+            Pick who you're working for. The client and note are saved on this shift and appear on the
+            time entry when you clock out.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="clock-in-project">Project / task</Label>
-            <Input
-              id="clock-in-project"
-              value={project}
-              onChange={(e) => setProject(e.target.value)}
-              placeholder="e.g. Website redesign"
-              maxLength={120}
-              list="clock-in-project-suggestions"
-              autoFocus
+            <Label htmlFor="clock-in-client">Client</Label>
+            <ClientSelect
+              id="clock-in-client"
+              value={clientId}
+              onValueChange={setClientId}
+              disabled={noClients}
+              placeholder={noClients ? 'No active clients yet' : 'Choose a client'}
             />
-            {projectScope?.trim() && project.trim() === projectScope.trim() && (
+            {noClients && (
               <p className="text-xs text-muted-foreground">
-                From your assigned Project Scope — change it if this shift is for something else.
+                Your admin hasn't added any clients yet — you can still clock in, and they can tag this
+                shift later.
               </p>
-            )}
-            {projectSuggestions.length > 0 && (
-              <>
-                <datalist id="clock-in-project-suggestions">
-                  {projectSuggestions.map((p) => <option key={p} value={p} />)}
-                </datalist>
-                <div className="flex flex-wrap gap-1.5 pt-0.5">
-                  {projectSuggestions.slice(0, 5).map((p) => (
-                    <button
-                      key={p}
-                      type="button"
-                      onClick={() => setProject(p)}
-                      className="rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
-                    >
-                      {p}
-                    </button>
-                  ))}
-                </div>
-              </>
             )}
           </div>
 
@@ -129,7 +109,8 @@ export function ClockInDialog({
           </Button>
           <Button
             onClick={handleConfirm}
-            disabled={loading}
+            disabled={loading || (!clientId && !noClients)}
+            title={!clientId && !noClients ? 'Choose a client first' : undefined}
             className="gap-2 bg-[#06245B] hover:bg-[#0a306e] dark:bg-white dark:text-[#06245B] dark:hover:bg-white/90"
           >
             <LogIn className="h-4 w-4" />

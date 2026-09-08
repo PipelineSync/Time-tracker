@@ -22,8 +22,9 @@ import type {
   WorkerAvatar,
   Task,
   TaskStatus,
+  Client,
 } from './types'
-import type { DataBackend, CreateWorkerInput, CreateTaskInput, BackendResult } from './backend'
+import type { DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, BackendResult } from './backend'
 import { localBackend } from './localDb'
 import { supabaseBackend, isSupabaseConfigured, ACCOUNT_DEACTIVATED_MESSAGE } from './supabaseDb'
 import { toast } from 'sonner'
@@ -98,6 +99,10 @@ interface StoreValue {
   payments: Payment[]
   /** Kanban tasks the signed-in user may see (admin: all, worker: their own). */
   tasks: Task[]
+  /** The client master list, active and inactive, A→Z. */
+  clients: Client[]
+  /** Only the clients that may be picked for new work. */
+  activeClients: Client[]
   unreadCount: number
   dataLoading: boolean
   /** Fetch the next page of entries older than everything currently loaded
@@ -130,7 +135,7 @@ interface StoreValue {
   deleteEntry: (id: string) => Promise<boolean>
   duplicateEntry: (entry: TimeEntry) => Promise<boolean>
 
-  startTimer: (input: { worker_id: string; project?: string; notes?: string; hourly_rate?: number }) => Promise<BackendResult<ActiveTimer>>
+  startTimer: (input: { worker_id: string; client_id?: string | null; project?: string; notes?: string; hourly_rate?: number }) => Promise<BackendResult<ActiveTimer>>
   pauseTimer: (timerId?: string) => Promise<BackendResult<ActiveTimer>>
   resumeTimer: (timerId?: string) => Promise<BackendResult<ActiveTimer>>
   stopTimer: (note?: string) => Promise<BackendResult<TimeEntry>>
@@ -146,6 +151,13 @@ interface StoreValue {
   listEntryComments: (entryId: string) => Promise<TimeEntryComment[]>
   addEntryComment: (entryId: string, body: string) => Promise<TimeEntryComment | null>
   markNotificationsRead: () => Promise<void>
+
+  /** Admin only: add a client to the master list. */
+  createClient: (input: CreateClientInput) => Promise<Client | null>
+  /** Admin only: rename, re-colour, or activate/deactivate a client. */
+  updateClient: (id: string, patch: Partial<Pick<Client, 'name' | 'color' | 'status'>>) => Promise<Client | null>
+  /** Admin only: remove an unused client (in-use ones must be deactivated). */
+  deleteClient: (id: string) => Promise<boolean>
 
   createTask: (input: CreateTaskInput) => Promise<Task | null>
   updateTask: (id: string, patch: Partial<Omit<Task, 'id' | 'created_at' | 'updated_at'>>) => Promise<Task | null>
@@ -173,6 +185,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [notifications, setNotifications] = useState<AppNotification[]>([])
   const [payments, setPayments] = useState<Payment[]>([])
   const [tasks, setTasks] = useState<Task[]>([])
+  const [clients, setClients] = useState<Client[]>([])
   const [dataLoading, setDataLoading] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
   const dataVersion = useRef(0)
@@ -195,6 +208,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const loadOlderInFlight = useRef(false)
 
   const isAdmin = user?.role === 'admin'
+
+  // Only active clients may be picked for new work; inactive ones stay in
+  // `clients` so existing tasks, entries and reports keep their label.
+  const activeClients = useMemo(() => clients.filter((c) => c.status === 'active'), [clients])
+  const clientsRef = useRef<Client[]>(clients)
+  useEffect(() => { clientsRef.current = clients }, [clients])
 
   /** A BackendResult-shaped "don't refetch this" placeholder for light refreshes. */
   function skipped<T>(): { data: T | null; error: null } {
@@ -229,7 +248,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // Captured BEFORE the query: rows updated after this instant are picked
       // up by the next delta; duplicates are harmless (merged by id).
       const syncTime = new Date().toISOString()
-      const [w, e, s, at, n, p, u, t] = await Promise.all([
+      const [w, e, s, at, n, p, u, t, cl] = await Promise.all([
         light ? skipped<Worker[]>() : backend.listWorkers(),
         useDelta
           ? backend.listEntries({ since, limit: ENTRY_DELTA_LIMIT })
@@ -248,6 +267,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         // entirely and they refresh ~once a minute instead of every 15 s. Any
         // local edit refreshes the board immediately via refreshTasks().
         light ? skipped<Task[]>() : backend.listTasks(),
+        // The client master list changes rarely too — same group as tasks.
+        light ? skipped<Client[]>() : backend.listClients(),
       ])
       if (token !== dataVersion.current) return
       if (w.data) setWorkers(withAvatars(w.data, avatarsRef.current))
@@ -285,6 +306,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (p.data) setPayments(p.data)
       if (u.data != null) setUnreadCount(u.data)
       if (t.data) setTasks(t.data)
+      if (cl.data) setClients(cl.data)
     } finally {
       refreshInFlight.current = false
       if (token === dataVersion.current) setDataLoading(false)
@@ -516,6 +538,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const duplicateEntry = useCallback(async (entry: TimeEntry) => {
     const res = await backend.createEntry({
       worker_id: entry.worker_id,
+      client_id: entry.client_id,
       project: entry.project,
       start_time: entry.start_time,
       end_time: entry.end_time,
@@ -551,16 +574,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     })
   }, [])
 
-  const startTimer = useCallback(async (input: { worker_id: string; project?: string; notes?: string; hourly_rate?: number }) => {
+  const startTimer = useCallback(async (input: { worker_id: string; client_id?: string | null; project?: string; notes?: string; hourly_rate?: number }) => {
     const res = await backend.startTimer(input)
     if (res.error || !res.data) return { data: null, error: res.error }
     if (!userRef.current || userRef.current.role === 'worker') setActiveTimer(res.data)
     upsertActiveTimer(res.data)
     // Mirror to Slack (fire-and-forget; failures are logged, never thrown).
     const workerName = workers.find((w) => w.id === input.worker_id)?.name || 'Someone'
+    const scope = clientsRef.current.find((c) => c.id === input.client_id)?.name || input.project
     notifySlack('clock_in', {
       timer_id: res.data.id,
-      demoText: `🟢 ${workerName} just clocked in${input.project ? ` — ${input.project}` : ''}.`,
+      demoText: `🟢 ${workerName} just clocked in${scope ? ` — ${scope}` : ''}.`,
     })
     return { data: res.data, error: null }
   }, [backend, upsertActiveTimer, workers])
@@ -685,6 +709,45 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [backend])
 
+  // ---- Clients ------------------------------------------------------------
+  // The master list is small and admin-managed, so every mutation just re-reads
+  // it — the backend stays the source of truth for ordering and validation.
+
+  const refreshClients = useCallback(async () => {
+    const res = await backend.listClients()
+    if (res.data) setClients(res.data)
+  }, [backend])
+
+  const createClient = useCallback(async (input: CreateClientInput) => {
+    const res = await backend.createClient(input)
+    if (res.error || !res.data) {
+      toast.error(res.error || 'Could not add the client.')
+      return null
+    }
+    await refreshClients()
+    return res.data
+  }, [backend, refreshClients])
+
+  const updateClient = useCallback(async (id: string, patch: Partial<Pick<Client, 'name' | 'color' | 'status'>>) => {
+    const res = await backend.updateClient(id, patch)
+    if (res.error || !res.data) {
+      toast.error(res.error || 'Could not save the client.')
+      return null
+    }
+    await refreshClients()
+    return res.data
+  }, [backend, refreshClients])
+
+  const deleteClient = useCallback(async (id: string) => {
+    const res = await backend.deleteClient(id)
+    if (res.error) {
+      toast.error(res.error)
+      return false
+    }
+    await refreshClients()
+    return true
+  }, [backend, refreshClients])
+
   // ---- Tasks --------------------------------------------------------------
   // Each mutation refreshes the board from the backend so the positions the
   // backend assigned (and anything another device changed) win.
@@ -789,6 +852,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     notifications,
     payments,
     tasks,
+    clients,
+    activeClients,
     unreadCount,
     dataLoading,
     loadOlderEntries,
@@ -822,6 +887,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     listEntryComments,
     addEntryComment,
     markNotificationsRead,
+    createClient,
+    updateClient,
+    deleteClient,
     createTask,
     updateTask,
     moveTask,

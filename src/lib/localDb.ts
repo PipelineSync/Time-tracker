@@ -15,9 +15,18 @@ import type {
   Task,
   TaskStatus,
   TaskPriority,
+  Client,
+  ClientColor,
+  ClientStatus,
 } from './types'
-import { DEFAULT_SLACK_SETTINGS, TASK_STATUSES } from './types'
-import type { BackendResult, DataBackend, CreateWorkerInput, CreateTaskInput } from './backend'
+import {
+  CLIENT_COLORS,
+  DEFAULT_CLIENT_COLOR,
+  DEFAULT_SLACK_SETTINGS,
+  TASK_STATUSES,
+  UNASSIGNED_CLIENT_NAME,
+} from './types'
+import type { BackendResult, DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput } from './backend'
 import { ACCOUNT_DEACTIVATED_MESSAGE } from './backend'
 import { buildDemoSeed } from './demoSeed'
 import { uid, computeEarnings, computeTotalMinutes, formatMinutes, formatDate } from './utils'
@@ -47,6 +56,8 @@ interface UserData {
   payments: Payment[]
   /** Kanban tasks (see the Tasks page). */
   tasks: Task[]
+  /** Client master list (admin-managed, see the Tasks page → Clients). */
+  clients: Client[]
 }
 
 const USERS_KEY = 'wt_users'
@@ -77,7 +88,7 @@ function writeUsers(users: StoredUser[]) {
 }
 
 function emptyData(): UserData {
-  return { workers: [], entries: [], activeTimers: [], settings: null, comments: [], notifications: [], payments: [], tasks: [] }
+  return { workers: [], entries: [], activeTimers: [], settings: null, comments: [], notifications: [], payments: [], tasks: [], clients: [] }
 }
 
 /** The method the admin paid a settlement with, or null when unknown/invalid. */
@@ -123,6 +134,7 @@ function normalizeTask(t: Task): Task {
     status,
     priority: normalizeTaskPriority(t.priority),
     description: t.description ?? null,
+    client_id: t.client_id ?? null,
     due_date: t.due_date ?? null,
     position: Number.isFinite(t.position) ? t.position : 0,
     created_by_role: t.created_by_role === 'admin' ? 'admin' : 'worker',
@@ -154,6 +166,73 @@ function reindexTaskColumn(tasks: Task[], workerId: string, status: TaskStatus, 
   column.forEach((t, i) => { t.position = i })
 }
 
+/** Valid colour tag, defaulting anything unknown to the first brand colour. */
+function normalizeClientColor(color: unknown): ClientColor {
+  return CLIENT_COLORS.includes(color as ClientColor) ? (color as ClientColor) : DEFAULT_CLIENT_COLOR
+}
+
+function normalizeClientStatus(status: unknown): ClientStatus {
+  return status === 'inactive' ? 'inactive' : 'active'
+}
+
+function normalizeClient(c: Client): Client {
+  return {
+    ...c,
+    name: (c.name ?? '').trim() || 'Client',
+    color: normalizeClientColor(c.color),
+    status: normalizeClientStatus(c.status),
+  }
+}
+
+/** Clients A→Z with the inactive ones last — the order every list shows. */
+function sortClients(rows: Client[]): Client[] {
+  return [...rows].sort(
+    (a, b) =>
+      Number(a.status === 'inactive') - Number(b.status === 'inactive') ||
+      a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+  )
+}
+
+/** The client's display name, or null when there is none / it is unknown. */
+function clientName(d: UserData, clientId: string | null | undefined): string | null {
+  if (!clientId) return null
+  return d.clients.find((c) => c.id === clientId)?.name ?? null
+}
+
+/** Keep a client reference only when it actually points at a known client. */
+function resolveClientId(d: UserData, clientId: string | null | undefined): string | null {
+  if (!clientId) return null
+  return d.clients.some((c) => c.id === clientId) ? clientId : null
+}
+
+/**
+ * One-time migration for workspaces that predate clients: everything without a
+ * client is attached to a single "Unassigned" client so no task or entry is
+ * left dangling (the admin can rename it, re-tag the work, or retire it).
+ * Returns true when something changed and the workspace needs saving.
+ */
+function backfillClients(d: UserData): boolean {
+  const orphanTasks = d.tasks.filter((t) => !t.client_id)
+  const orphanEntries = d.entries.filter((e) => !e.client_id)
+  if (orphanTasks.length === 0 && orphanEntries.length === 0) return false
+  const now = new Date().toISOString()
+  let fallback = d.clients.find((c) => c.name.trim().toLowerCase() === UNASSIGNED_CLIENT_NAME.toLowerCase())
+  if (!fallback) {
+    fallback = {
+      id: uid(),
+      name: UNASSIGNED_CLIENT_NAME,
+      color: 'slate',
+      status: 'active',
+      created_at: now,
+      updated_at: now,
+    }
+    d.clients.push(fallback)
+  }
+  for (const t of orphanTasks) t.client_id = fallback.id
+  for (const e of orphanEntries) e.client_id = fallback.id
+  return true
+}
+
 function readData(userId: string): UserData {
   const d = read<UserData>(dataKey(userId), emptyData())
   d.workers = (d.workers || []).map(normalizeWorker)
@@ -169,6 +248,11 @@ function readData(userId: string): UserData {
   d.notifications = d.notifications || []
   d.payments = d.payments || []
   d.tasks = (d.tasks || []).map(normalizeTask)
+  d.clients = (d.clients || []).map(normalizeClient)
+  d.entries = d.entries.map((e) => ({ ...e, client_id: e.client_id ?? null }))
+  // Workspaces saved before clients existed get their work attached to the
+  // "Unassigned" client the first time they are read.
+  if (backfillClients(d)) write(dataKey(userId), d)
   return d
 }
 
@@ -296,8 +380,16 @@ function maybeAutoSeed(data: UserData) {
       }
     }
     writeUsers(users)
+    const seededClients: Client[] = seed.clients.map((cl) => ({ ...cl, id: uid() }))
+    const clientMap = new Map(seed.clients.map((cl, i) => [cl.id, seededClients[i].id]))
     data.workers = seededWorkers
-    data.entries = seed.entries.map((e) => ({ ...e, worker_id: idMap.get(e.worker_id) || e.worker_id, id: uid() }))
+    data.clients = seededClients
+    data.entries = seed.entries.map((e) => ({
+      ...e,
+      worker_id: idMap.get(e.worker_id) || e.worker_id,
+      client_id: e.client_id ? clientMap.get(e.client_id) ?? null : null,
+      id: uid(),
+    }))
     data.settings = seed.settings
   }
 }
@@ -565,6 +657,7 @@ export const localBackend: DataBackend = {
     const entry: TimeEntry = {
       id: uid(),
       worker_id: input.worker_id,
+      client_id: resolveClientId(c.data, input.client_id),
       project: input.project || null,
       start_time: input.start_time,
       end_time: input.end_time,
@@ -654,6 +747,7 @@ export const localBackend: DataBackend = {
     const timer: ActiveTimer = {
       id: uid(),
       worker_id: workerId,
+      client_id: resolveClientId(c.data, input.client_id),
       project: input.project || null,
       start_time: input.start_time || new Date().toISOString(),
       notes: input.notes || null,
@@ -666,7 +760,10 @@ export const localBackend: DataBackend = {
     c.data.activeTimers.push(timer)
     // Notify the admin when a worker clocks in.
     if (c.user.role === 'worker') {
-      const detail = [timer.project, timer.notes ? timer.notes.replace(/\s+/g, ' ').slice(0, 140) : null].filter(Boolean).join(' · ')
+      const detail = [
+        clientName(c.data, timer.client_id) || timer.project,
+        timer.notes ? timer.notes.replace(/\s+/g, ' ').slice(0, 140) : null,
+      ].filter(Boolean).join(' · ')
       pushNotification(c.data, c.admin.id, {
         entry_id: null,
         type: 'time_in',
@@ -740,6 +837,7 @@ export const localBackend: DataBackend = {
     const entry: TimeEntry = {
       id: uid(),
       worker_id: timer.worker_id,
+      client_id: timer.client_id ?? null,
       project: timer.project || null,
       start_time: timer.start_time,
       end_time: end.toISOString(),
@@ -757,7 +855,8 @@ export const localBackend: DataBackend = {
     // Always notify on clock out — with or without a note.
     if (c.user.role === 'worker') {
       const parts = [formatMinutes(entry.total_minutes)]
-      if (entry.project) parts.push(entry.project)
+      const scope = clientName(c.data, entry.client_id) || entry.project
+      if (scope) parts.push(scope)
       parts.push(clockOutNote ? 'added a note' : 'no note')
       pushNotification(c.data, c.admin.id, {
         entry_id: entry.id,
@@ -1018,6 +1117,83 @@ export const localBackend: DataBackend = {
     return { data: null, error: null }
   },
 
+  // ---- Clients (master list) ----------------------------------------------
+  // Both roles read the list (a worker needs the name/colour of the clients on
+  // their own board and in their filters); only the admin may change it.
+  // Inactive clients stay in the list so historical work keeps its label — the
+  // UI is what limits new work to the active ones.
+
+  async listClients() {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    return { data: sortClients(c.data.clients), error: null }
+  },
+
+  async createClient(input: CreateClientInput) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (c.user.role !== 'admin') return { data: null, error: 'Only the admin can manage clients.' }
+    const name = input.name.trim()
+    if (!name) return { data: null, error: 'Give the client a name.' }
+    if (name.length > 80) return { data: null, error: 'Client names are limited to 80 characters.' }
+    if (c.data.clients.some((x) => x.name.toLowerCase() === name.toLowerCase())) {
+      return { data: null, error: `"${name}" is already on the list.` }
+    }
+    const now = new Date().toISOString()
+    const client: Client = {
+      id: uid(),
+      name,
+      color: normalizeClientColor(input.color),
+      status: normalizeClientStatus(input.status),
+      created_at: now,
+      updated_at: now,
+    }
+    c.data.clients.push(client)
+    save(c.data)
+    return { data: client, error: null }
+  },
+
+  async updateClient(id, patch) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (c.user.role !== 'admin') return { data: null, error: 'Only the admin can manage clients.' }
+    const idx = c.data.clients.findIndex((x) => x.id === id)
+    if (idx === -1) return { data: null, error: 'Client not found.' }
+    const current = c.data.clients[idx]
+    const name = patch.name !== undefined ? patch.name.trim() : current.name
+    if (!name) return { data: null, error: 'Give the client a name.' }
+    if (c.data.clients.some((x) => x.id !== id && x.name.toLowerCase() === name.toLowerCase())) {
+      return { data: null, error: `"${name}" is already on the list.` }
+    }
+    const next: Client = normalizeClient({
+      ...current,
+      ...patch,
+      name,
+      id: current.id,
+      created_at: current.created_at,
+      updated_at: new Date().toISOString(),
+    })
+    c.data.clients[idx] = next
+    save(c.data)
+    return { data: next, error: null }
+  },
+
+  async deleteClient(id) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (c.user.role !== 'admin') return { data: null, error: 'Only the admin can manage clients.' }
+    // Deleting would strip the label off work that has already happened, so a
+    // client in use can only be marked inactive.
+    const usedByTasks = c.data.tasks.some((t) => t.client_id === id)
+    const usedByEntries = c.data.entries.some((e) => e.client_id === id)
+    if (usedByTasks || usedByEntries) {
+      return { data: null, error: 'This client is used by existing tasks or time entries. Mark it inactive instead.' }
+    }
+    c.data.clients = c.data.clients.filter((x) => x.id !== id)
+    save(c.data)
+    return { data: null, error: null }
+  },
+
   // ---- Tasks (kanban board) ----------------------------------------------
   // A worker only ever sees and touches their own tasks; the admin sees and
   // manages every worker's. Both roles can add tasks — a worker's new task is
@@ -1046,6 +1222,7 @@ export const localBackend: DataBackend = {
     const task: Task = {
       id: uid(),
       worker_id: workerId,
+      client_id: resolveClientId(c.data, input.client_id),
       title,
       description: input.description?.trim() || null,
       status,
@@ -1087,6 +1264,7 @@ export const localBackend: DataBackend = {
       ...current,
       ...patch,
       worker_id: workerId,
+      client_id: patch.client_id !== undefined ? resolveClientId(c.data, patch.client_id) : current.client_id,
       status,
       title: patch.title !== undefined ? String(patch.title).trim() || current.title : current.title,
       // Stamp the first time it reaches Completed; clear it when it moves back.
@@ -1153,6 +1331,8 @@ export const localBackend: DataBackend = {
     const seed = buildDemoSeed()
     const seededWorkers: Worker[] = seed.workers.map((w) => ({ ...w, id: uid() }))
     const idMap = new Map(seed.workers.map((w, i) => [w.id, seededWorkers[i].id]))
+    const seedClients: Client[] = seed.clients.map((cl) => ({ ...cl, id: uid() }))
+    const seedClientMap = new Map(seed.clients.map((cl, i) => [cl.id, seedClients[i].id]))
     const users = readUsers()
     for (const w of seededWorkers) {
       if (w.email && !users.some((u) => u.email === w.email)) {
@@ -1162,13 +1342,19 @@ export const localBackend: DataBackend = {
     writeUsers(users)
     const next: UserData = {
       workers: seededWorkers,
-      entries: seed.entries.map((e) => ({ ...e, worker_id: idMap.get(e.worker_id) || e.worker_id, id: uid() })),
+      entries: seed.entries.map((e) => ({
+        ...e,
+        worker_id: idMap.get(e.worker_id) || e.worker_id,
+        client_id: e.client_id ? seedClientMap.get(e.client_id) ?? null : null,
+        id: uid(),
+      })),
       activeTimers: [],
       settings: seed.settings,
       comments: [],
       notifications: [],
       payments: [],
       tasks: [],
+      clients: seedClients,
     }
     save(next)
     return { data: null, error: null }

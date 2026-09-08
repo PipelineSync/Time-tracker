@@ -15,10 +15,13 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { ClientSelect } from '@/components/ClientSelect'
+import { ManageClientsDialog } from '@/components/ManageClientsDialog'
 import { toast } from 'sonner'
 
 interface FormState {
   workerId: string
+  clientId: string
   title: string
   description: string
   status: TaskStatus
@@ -28,6 +31,7 @@ interface FormState {
 
 const emptyForm = (status: TaskStatus): FormState => ({
   workerId: '',
+  clientId: '',
   title: '',
   description: '',
   status,
@@ -46,6 +50,7 @@ export function TaskFormDialog({
   task,
   defaultStatus = 'todo',
   defaultWorkerId,
+  defaultClientId,
 }: {
   open: boolean
   onOpenChange: (v: boolean) => void
@@ -53,19 +58,26 @@ export function TaskFormDialog({
   /** Column the "Add task" button belongs to. */
   defaultStatus?: TaskStatus
   defaultWorkerId?: string
+  /** Pre-selected client (the board's client filter, when one is active). */
+  defaultClientId?: string
 }) {
-  const { workers, user, isAdmin, createTask, updateTask } = useStore()
+  const { workers, user, isAdmin, activeClients, createTask, updateTask } = useStore()
   const [form, setForm] = useState<FormState>(emptyForm(defaultStatus))
   const [saving, setSaving] = useState(false)
+  const [clientsOpen, setClientsOpen] = useState(false)
 
   const activeWorkers = workers.filter((w) => w.status === 'active')
   const pickable = activeWorkers.length > 0 ? activeWorkers : workers
+  // Every task belongs to a client. With an empty master list there is nothing
+  // to pick, so the form says so instead of failing on save.
+  const noClients = activeClients.length === 0
 
   useEffect(() => {
     if (!open) return
     if (task) {
       setForm({
         workerId: task.worker_id,
+        clientId: task.client_id || '',
         title: task.title,
         description: task.description || '',
         status: task.status,
@@ -76,12 +88,14 @@ export function TaskFormDialog({
       setForm({
         ...emptyForm(defaultStatus),
         workerId: isAdmin ? defaultWorkerId || pickable[0]?.id || '' : user?.workerId || '',
+        // One client on the list is not a choice — pre-pick it.
+        clientId: defaultClientId || (activeClients.length === 1 ? activeClients[0].id : ''),
       })
     }
     // `pickable` is derived from workers; re-running on its identity would
     // reset the form on every background refresh.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, task, defaultStatus, defaultWorkerId, isAdmin, user?.workerId])
+  }, [open, task, defaultStatus, defaultWorkerId, defaultClientId, isAdmin, user?.workerId])
 
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setForm((f) => ({ ...f, [key]: value }))
@@ -97,10 +111,15 @@ export function TaskFormDialog({
       toast.error('Choose who the task is for.')
       return
     }
+    if (!form.clientId) {
+      toast.error(noClients ? 'Add a client first — every task belongs to one.' : 'Choose the client this task is for.')
+      return
+    }
     setSaving(true)
     try {
       if (task) {
         const saved = await updateTask(task.id, {
+          client_id: form.clientId,
           title,
           description: form.description.trim() || null,
           status: form.status,
@@ -113,6 +132,7 @@ export function TaskFormDialog({
       } else {
         const created = await createTask({
           worker_id: isAdmin ? form.workerId : undefined,
+          client_id: form.clientId,
           title,
           description: form.description.trim() || null,
           status: form.status,
@@ -157,6 +177,35 @@ export function TaskFormDialog({
                 </Select>
               </div>
             )}
+
+            <div className="grid gap-2">
+              <div className="flex items-center justify-between gap-2">
+                <Label htmlFor="task-client">Client</Label>
+                {isAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => setClientsOpen(true)}
+                    className="text-xs font-medium text-primary underline-offset-2 hover:underline"
+                  >
+                    Manage clients
+                  </button>
+                )}
+              </div>
+              <ClientSelect
+                id="task-client"
+                value={form.clientId}
+                onValueChange={(v) => set('clientId', v)}
+                disabled={noClients}
+                placeholder={noClients ? 'No active clients yet' : 'Choose a client'}
+              />
+              {noClients && (
+                <p className="text-xs text-muted-foreground">
+                  {isAdmin
+                    ? 'Add a client first — every task is assigned to one.'
+                    : 'Ask your admin to add a client before creating tasks.'}
+                </p>
+              )}
+            </div>
 
             <div className="grid gap-2">
               <Label htmlFor="task-title">Title</Label>
@@ -226,6 +275,8 @@ export function TaskFormDialog({
           </DialogFooter>
         </form>
       </DialogContent>
+
+      {isAdmin && <ManageClientsDialog open={clientsOpen} onOpenChange={setClientsOpen} />}
     </Dialog>
   )
 }

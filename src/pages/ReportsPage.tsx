@@ -14,14 +14,16 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { toast } from 'sonner'
 import { Download, BarChart3, Clock, DollarSign, Hash, TrendingUp } from 'lucide-react'
 import { money, formatMinutes } from '@/lib/utils'
-import { dateRangeFor, filterEntriesInRange, summarizeEntries, hoursByWorker, hoursByProject } from '@/lib/stats'
+import { dateRangeFor, filterEntriesInRange, summarizeEntries, hoursByWorker, hoursByClient } from '@/lib/stats'
+import { ClientColorStyles } from '@/lib/types'
+import { ClientDot } from '@/components/ClientBadge'
 
 const COLORS = ['#3b82f6', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899', '#84cc16']
 
 type Period = 'today' | 'week' | 'month' | 'custom'
 
 export function ReportsPage() {
-  const { entries, workers, settings, dataLoading, loadOlderEntries, oldestEntryTime } = useStore()
+  const { entries, workers, clients, settings, dataLoading, loadOlderEntries, oldestEntryTime } = useStore()
   const currency = settings?.currency || 'USD'
   const [period, setPeriod] = useState<Period>('week')
   const [fromDate, setFromDate] = useState('')
@@ -55,7 +57,7 @@ export function ReportsPage() {
   const summary = useMemo(() => summarizeEntries(filtered), [filtered])
 
   const byWorker = useMemo(() => hoursByWorker(filtered, workers), [filtered, workers])
-  const byProject = useMemo(() => hoursByProject(filtered), [filtered])
+  const byClient = useMemo(() => hoursByClient(filtered, clients), [filtered, clients])
 
   // Group by day for over-time charts
   const overTime = useMemo(() => {
@@ -71,6 +73,18 @@ export function ReportsPage() {
       .map(([day, v]) => ({ day, hours: Math.round(v.hours * 100) / 100, earnings: Math.round(v.earnings * 100) / 100 }))
       .sort((a, b) => a.day.localeCompare(b.day, undefined, { numeric: true }))
   }, [filtered])
+
+  // Each slice keeps its client's colour tag, so the chart matches the badges
+  // on the board and the entries list.
+  const clientChartData = useMemo(
+    () =>
+      byClient.map((c) => ({
+        name: c.label,
+        hours: Math.round(c.hours * 100) / 100,
+        fill: c.client ? ClientColorStyles[c.client.color].chart : '#94a3b8',
+      })),
+    [byClient]
+  )
 
   const workerChartData = useMemo(
     () => byWorker.map((w) => ({ name: w.worker.name.split(' ')[0], hours: Math.round(w.hours * 100) / 100, earnings: Math.round(w.earnings * 100) / 100 })),
@@ -129,14 +143,14 @@ export function ReportsPage() {
 
     // ---- Detailed entries ----
     lines.push(line(['DETAILED ENTRIES']))
-    lines.push(line(['Date', 'Worker', 'Project', 'Start', 'End', 'Break (min)', 'Hours', 'Rate', 'Earnings', 'Notes']))
+    lines.push(line(['Date', 'Worker', 'Client', 'Start', 'End', 'Break (min)', 'Hours', 'Rate', 'Earnings', 'Notes']))
     const sorted = [...filtered].sort((a, b) => a.start_time.localeCompare(b.start_time))
     for (const e of sorted) {
       const w = workers.find((x) => x.id === e.worker_id)?.name || 'Unknown'
       lines.push(line([
         new Date(e.start_time).toLocaleDateString(),
         w,
-        e.project || '',
+        clients.find((c) => c.id === e.client_id)?.name || e.project || '',
         new Date(e.start_time).toLocaleTimeString(),
         new Date(e.end_time).toLocaleTimeString(),
         e.break_minutes,
@@ -272,6 +286,26 @@ export function ReportsPage() {
           </CardContent>
         </Card>
 
+        {/* Hours by client */}
+        <Card>
+          <CardHeader><CardTitle className="text-base">Hours by client</CardTitle></CardHeader>
+          <CardContent>
+            {dataLoading ? <Skeleton className="h-64" /> : clientChartData.length === 0 ? (
+              <p className="py-10 text-center text-sm text-muted-foreground">No data for this period.</p>
+            ) : (
+              <ResponsiveContainer width="100%" height={260}>
+                <PieChart>
+                  <Pie data={clientChartData} dataKey="hours" nameKey="name" cx="50%" cy="50%" outerRadius={90} label>
+                    {clientChartData.map((c, i) => <Cell key={i} fill={c.fill} />)}
+                  </Pie>
+                  <Legend />
+                  <Tooltip formatter={(v: number) => [`${v}h`, 'Hours']} />
+                </PieChart>
+              </ResponsiveContainer>
+            )}
+          </CardContent>
+        </Card>
+
         {/* Detail tables */}
         <Card>
           <CardHeader><CardTitle className="flex items-center gap-2 text-base"><BarChart3 className="h-4 w-4" /> Breakdown</CardTitle></CardHeader>
@@ -292,15 +326,18 @@ export function ReportsPage() {
               )}
             </div>
             <div>
-              <h4 className="mb-2 text-sm font-semibold">Hours per project</h4>
-              {byProject.length === 0 ? (
+              <h4 className="mb-2 text-sm font-semibold">Hours &amp; earnings per client</h4>
+              {byClient.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No data.</p>
               ) : (
                 <div className="space-y-1.5 text-sm">
-                  {byProject.map((p) => (
-                    <div key={p.project} className="flex items-center justify-between rounded-md bg-muted/50 px-3 py-2">
-                      <span className="font-medium">{p.project}</span>
-                      <span className="text-muted-foreground">{formatMinutes(p.hours * 60)} · {money(p.earnings, currency)}</span>
+                  {byClient.map((c) => (
+                    <div key={c.key} className="flex items-center justify-between gap-3 rounded-md bg-muted/50 px-3 py-2">
+                      <span className="flex min-w-0 items-center gap-2 font-medium">
+                        <ClientDot client={c.client} />
+                        <span className="truncate">{c.label}</span>
+                      </span>
+                      <span className="whitespace-nowrap text-muted-foreground">{formatMinutes(c.hours * 60)} · {money(c.earnings, currency)}</span>
                     </div>
                   ))}
                 </div>
