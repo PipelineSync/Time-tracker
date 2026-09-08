@@ -154,16 +154,16 @@ export function WorkerFormDialog({
             )}
 
             <div className="space-y-2">
-              <Label htmlFor="w-position">Project Scope *</Label>
+              <Label htmlFor="w-position">Position/Role *</Label>
               <Input
                 id="w-position"
                 value={position}
                 onChange={(e) => setPosition(e.target.value)}
-                placeholder="e.g. Website redesign"
+                placeholder="e.g. Frontend developer"
                 required
               />
               <p className="text-xs text-muted-foreground">
-                The work this person is assigned to, shown on their profile. Time entries are tagged with the
+                Their position or role, shown on their profile. Time entries are tagged with the
                 client they pick when clocking in.
               </p>
             </div>

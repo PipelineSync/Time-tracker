@@ -16,10 +16,10 @@ export interface Worker {
   hourly_rate: number
   status: WorkerStatus
   /**
-   * The worker's assigned **Project Scope** — the work they are on. Set by the
-   * admin, and used to pre-fill the project on their time entries when they
-   * clock in. (The column is still named `position` for backwards
-   * compatibility with existing databases.)
+   * The worker's **Position/Role** — the position or role they hold, set by
+   * the admin and shown on their profile and worker card. (The column is
+   * still named `position` for backwards compatibility with existing
+   * databases.)
    */
   position: string | null
   avatar_url: string | null
