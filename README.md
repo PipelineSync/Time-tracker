@@ -54,6 +54,14 @@ Workers **clock in, take breaks, and clock out** — their rate is set by the ad
 - **Auth** — sign in with admin or worker credentials. Only the admin can create worker login accounts.
 - **Change password** — available from the account menu (top-right) for both roles: enter your current password and a new one. Admins can also **reset a worker's password** from the Workers page. In demo mode the new password is set directly; with Supabase, a password reset link is emailed to the worker (the anon key cannot set another user's password).
 
+### Christmas theme 🎄
+The app ships with a **seasonal Christmas skin**, on by default:
+- **Logo wearing a Santa hat** — an SVG hat is tilted over the "S" of the PipelineSync mark (`src/components/SantaHat.tsx`). It is positioned and scaled as a fraction of the logo's *height*, with per-variant offsets measured from the two logo files, so it sits correctly on the light and dark lockups at every size (sidebar, mobile header, sign-in card).
+- **Festive palette** — a Christmas-red primary, evergreen accents and a warm-snow background replace the brand blues, in both light and dark mode. Only the semantic theme tokens are re-pointed, so every component picks it up with no component-level changes. **All text pairings were contrast-checked and meet WCAG AA** (the dark-mode button red was darkened to 46% lightness specifically to clear 4.5:1).
+- **Falling snow** — a semi-transparent snowfall layer (`src/components/Snowfall.tsx`). It is deliberately unobtrusive: it sits at `z-index: -1` **behind all content**, is `pointer-events-none` (never swallows a click), uses small low-opacity flakes (12–38%), and freezes for anyone with `prefers-reduced-motion`. **Text readability is unaffected.**
+
+To ship the normal brand skin instead, build with `VITE_CHRISTMAS_THEME=off` — that removes the hat, the palette and the snow in one switch (`src/lib/christmas.ts`).
+
 ### Notifications
 A notification bell (with an unread badge) appears for both roles. The admin is notified when a worker **clocks in**, **starts a break**, **comes back from a break**, **clocks out**, or **adds a note**. Workers are notified when the **admin replies to a note**, **adds time** for them, creates a **payment**, or changes a **payment status**. Clicking a notification opens the related entry.
 
