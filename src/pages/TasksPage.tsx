@@ -72,15 +72,30 @@ export function TasksPage() {
   const [priorityFilter, setPriorityFilter] = useState<'all' | TaskPriority>('all')
   // Drag state. `dragging` is the card under the pointer; `dropTarget` is the
   // column (and index) it would land in — used to draw the placeholder.
+  // The ref mirrors `dragging` synchronously: dragover fires before React has
+  // re-rendered with the new state, and a poll landing mid-drag must not make
+  // the handlers think nothing is being dragged.
+  const draggingRef = useRef<Task | null>(null)
   const [dragging, setDragging] = useState<Task | null>(null)
   const [dropTarget, setDropTarget] = useState<{ status: TaskStatus; index: number } | null>(null)
+
+  function startDrag(task: Task) {
+    draggingRef.current = task
+    setDragging(task)
+  }
+
+  function endDrag() {
+    draggingRef.current = null
+    setDragging(null)
+    setDropTarget(null)
+  }
 
   // The lane row scrolls sideways when the stages do not all fit; dragging a
   // card to either edge nudges it along so cross-board drops stay possible.
   const rowRef = useRef<HTMLDivElement | null>(null)
   function edgeScroll(e: React.DragEvent<HTMLDivElement>) {
     const row = rowRef.current
-    if (!row || !dragging) return
+    if (!row || !draggingRef.current) return
     const box = row.getBoundingClientRect()
     const edge = 72
     if (e.clientX < box.left + edge) row.scrollLeft -= 18
@@ -136,9 +151,8 @@ export function TasksPage() {
 
   /** Commit a drop: the card goes into `status` at `index`. */
   async function commitDrop(status: TaskStatus, index: number) {
-    const task = dragging
-    setDragging(null)
-    setDropTarget(null)
+    const task = draggingRef.current
+    endDrag()
     if (!task) return
     const column = columns[status].filter((t) => t.id !== task.id)
     const target = Math.max(0, Math.min(index, column.length))
@@ -155,7 +169,19 @@ export function TasksPage() {
     await moveTask(task.id, next, columns[next].length)
   }
 
-  const TaskCard = ({ task, index, status }: { task: Task; index: number; status: TaskStatus }) => {
+  /**
+   * A card, rendered as a plain function call rather than a nested component.
+   *
+   * Declaring `<TaskCard>` inside TasksPage made React see a BRAND-NEW
+   * component type on every render, so the first `setDragging` of a drag
+   * unmounted and re-created the very node the browser was dragging — the
+   * drag died on the spot and only the second attempt (which re-set the same
+   * state value, so React bailed out of re-rendering) actually worked. Calling
+   * the function inlines the elements into this component's own tree, so the
+   * card keeps its DOM node across renders and a drag survives from grab to
+   * drop. Same reason for renderColumn below.
+   */
+  function renderTaskCard({ task, index, status }: { task: Task; index: number; status: TaskStatus }) {
     const overdue = isOverdue(task)
     const priority = priorityBadge[task.priority]
     const stageIndex = TASK_STATUSES.indexOf(task.status)
@@ -163,17 +189,14 @@ export function TasksPage() {
       <div
         draggable
         onDragStart={(e) => {
-          setDragging(task)
+          startDrag(task)
           e.dataTransfer.effectAllowed = 'move'
           // Firefox refuses to start a drag without data on the transfer.
           e.dataTransfer.setData('text/plain', task.id)
         }}
-        onDragEnd={() => {
-          setDragging(null)
-          setDropTarget(null)
-        }}
+        onDragEnd={endDrag}
         onDragOver={(e) => {
-          if (!dragging) return
+          if (!draggingRef.current) return
           e.preventDefault()
           e.stopPropagation()
           // Drop above or below this card depending on which half we are over.
@@ -187,7 +210,7 @@ export function TasksPage() {
           void commitDrop(status, dropTarget?.status === status ? dropTarget.index : index)
         }}
         className={cn(
-          'group cursor-grab rounded-xl border bg-card p-3 shadow-sm transition active:cursor-grabbing',
+          'group cursor-grab select-none rounded-xl border bg-card p-3 shadow-sm transition active:cursor-grabbing',
           'hover:border-primary/40 hover:shadow-md',
           dragging?.id === task.id && 'opacity-40',
           overdue && 'border-destructive/40'
@@ -270,14 +293,15 @@ export function TasksPage() {
     )
   }
 
-  const Column = ({ status }: { status: TaskStatus }) => {
+  function renderColumn(status: TaskStatus) {
     const style = columnStyles[status]
     const items = columns[status]
     const isTarget = dropTarget?.status === status
     return (
       <div
+        key={status}
         onDragOver={(e) => {
-          if (!dragging) return
+          if (!draggingRef.current) return
           e.preventDefault()
           // Empty space below the cards drops at the end of the column.
           if (!isTarget) setDropTarget({ status, index: items.length })
@@ -321,7 +345,7 @@ export function TasksPage() {
               {isTarget && dropTarget.index === index && (
                 <div className="mb-2 h-1.5 rounded-full bg-primary/60" aria-hidden />
               )}
-              <TaskCard task={task} index={index} status={status} />
+              {renderTaskCard({ task, index, status })}
             </div>
           ))}
           {isTarget && dropTarget.index >= items.length && (
@@ -477,9 +501,7 @@ export function TasksPage() {
             onDragOver={edgeScroll}
             className="flex snap-x snap-mandatory divide-x overflow-x-auto"
           >
-            {shownStages.map((status) => (
-              <Column key={status} status={status} />
-            ))}
+            {shownStages.map((status) => renderColumn(status))}
           </div>
         </div>
       )}
