@@ -148,7 +148,7 @@ This creates the `workers`, `time_entries`, `active_timers`, `settings`, `paymen
 >
 
 
-> For the **Tasks** kanban board, run `supabase/tasks.sql` once. It creates the `tasks` table (stage, priority, due date, board position) with RLS policies that let a **worker see and manage only their own cards** while the **admin has access to every worker's tasks**. Fresh installs get this automatically from `schema.sql`. It is safe to re-run: if you applied an earlier version with only three stages, re-running it widens the stage constraint to include **Waiting** and **Approval**.
+> For the **Tasks** kanban board, run **`supabase/RUN-THIS-tasks.sql`** once (a copy-paste-ready version of `supabase/tasks.sql`, with a verification query at the end). It creates the `tasks` table (stage, priority, due date, board position) with RLS policies that let a **worker see and manage only their own cards** while the **admin has access to every worker's tasks**. Fresh installs get this automatically from `schema.sql`. It is safe to re-run: if you applied an earlier version with only three stages, re-running it widens the stage constraint to include **Waiting** and **Approval**.
 >
 > For **Slack notifications** (clock in / out, breaks, payments posted to a Slack channel), run `supabase/slack-notifications.sql` once. It creates the admin-only `slack_settings` table (webhook URL + per-event toggles). Then connect the webhook in **Settings → Slack** — see the *Slack notifications* section under Features. Fresh installs get this automatically from `schema.sql`.
 
