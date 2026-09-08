@@ -238,12 +238,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         // One query covers both "everyone on the clock" and the signed-in
         // worker's own timer — getActiveTimer() re-runs this exact query.
         backend.listActiveTimers(),
-        backend.listNotifications(NOTIF_WINDOW),
+        // The unread badge is a separate HEAD count (no rows), so the
+        // dropdown's rows only need refreshing on a full tick.
+        light ? skipped<AppNotification[]>() : backend.listNotifications(NOTIF_WINDOW),
         light ? skipped<Payment[]>() : backend.listPayments(PAYMENT_WINDOW),
         backend.countUnreadNotifications(),
-        // The board is small (a handful of cards per worker) and needs to
-        // reflect a drag another device made, so it rides along every refresh.
-        backend.listTasks(),
+        // Tasks are part of the "heavy list" group (with workers / payments /
+        // settings): they change rarely, so a light background tick skips them
+        // entirely and they refresh ~once a minute instead of every 15 s. Any
+        // local edit refreshes the board immediately via refreshTasks().
+        light ? skipped<Task[]>() : backend.listTasks(),
       ])
       if (token !== dataVersion.current) return
       if (w.data) setWorkers(withAvatars(w.data, avatarsRef.current))

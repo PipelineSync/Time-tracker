@@ -1,0 +1,40 @@
+# Netlify cache headers.
+#
+# Egress: without these, a returning visitor re-downloads the whole bundle on
+# every visit. Vite fingerprints every file in /assets (index-CwjJ9514.js), so
+# those URLs are safe to cache forever — a new build produces a new URL. The
+# HTML entry point must NOT be cached, or browsers would keep booting an old
+# build that points at deleted asset URLs.
+
+# Fingerprinted build output — immutable, cache for a year.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# Brand images and PWA icons are not fingerprinted, so use a shorter TTL with
+# revalidation: cached for a day, then a cheap 304 instead of a re-download.
+/brand/*
+  Cache-Control: public, max-age=86400, stale-while-revalidate=604800
+/pwa/*
+  Cache-Control: public, max-age=86400, stale-while-revalidate=604800
+/favicon.svg
+  Cache-Control: public, max-age=86400, stale-while-revalidate=604800
+/favicon.png
+  Cache-Control: public, max-age=86400, stale-while-revalidate=604800
+/favicon.ico
+  Cache-Control: public, max-age=86400, stale-while-revalidate=604800
+
+# Entry point and service worker: always revalidate so a deploy is picked up
+# immediately (both are small, and 304s cost almost nothing).
+/index.html
+  Cache-Control: public, max-age=0, must-revalidate
+/sw.js
+  Cache-Control: public, max-age=0, must-revalidate
+/manifest.webmanifest
+  Cache-Control: public, max-age=0, must-revalidate
+
+# Security headers (no egress impact, but cheap to set correctly here).
+# Deliberately no X-Frame-Options: the app is embedded in preview iframes
+# during development, and it is not a clickjacking-sensitive surface.
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin

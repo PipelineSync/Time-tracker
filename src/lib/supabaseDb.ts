@@ -99,6 +99,18 @@ function mapErr(e: unknown): string {
   return 'Something went wrong.'
 }
 
+/**
+ * Columns the app actually reads from `time_entries`. `user_id` is the
+ * workspace owner — identical on every row and never used by the UI — so
+ * naming the columns explicitly keeps ~37 bytes/row off the wire, which is
+ * ~44 KB on a full 1200-row admin sync.
+ */
+const ENTRY_COLUMNS =
+  'id, worker_id, project, start_time, end_time, break_minutes, notes, hourly_rate, total_minutes, earnings, settled_at, created_at, updated_at'
+/** Same list for databases that predate `settled_at`. */
+const ENTRY_COLUMNS_LEGACY =
+  'id, worker_id, project, start_time, end_time, break_minutes, notes, hourly_rate, total_minutes, earnings, created_at, updated_at'
+
 const ok = <T,>(data: T | null): BackendResult<T> => ({ data, error: null })
 const fail = <T,>(error: string): BackendResult<T> => ({ data: null, error })
 
@@ -804,8 +816,8 @@ export const supabaseBackend: DataBackend = {
     const me = await requireUser()
     if (me.error) return fail(me.error)
     // Worker rows are scoped to the worker; admins see the whole workspace.
-    const build = () => {
-      let q = client().from('time_entries').select('*')
+    const build = (columns: string) => {
+      let q = client().from('time_entries').select(columns)
       if (me.data!.role === 'worker' && me.data!.workerId) q = q.eq('worker_id', me.data!.workerId)
       // Incremental sync: only rows created or updated since the last sync.
       // (updated_at is kept current by the set_updated_at trigger.)
@@ -814,19 +826,37 @@ export const supabaseBackend: DataBackend = {
       if (opts?.limit) q = q.limit(opts.limit)
       return q
     }
-    const { data, error } = await build()
-    if (error) return fail(error.message)
-    return ok(data as TimeEntry[])
+    const { data, error } = await build(ENTRY_COLUMNS)
+    if (error) {
+      // Database predating settle-keeps-entries.sql: retry without the column.
+      if (isMissingColumn(error as { code?: string; message?: string }, 'settled_at')) {
+        const retry = await build(ENTRY_COLUMNS_LEGACY)
+        if (retry.error) return fail(retry.error.message)
+        return ok(retry.data as unknown as TimeEntry[])
+      }
+      return fail(error.message)
+    }
+    return ok(data as unknown as TimeEntry[])
   },
 
   async listOlderEntries(before, limit = 500) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    let q = client().from('time_entries').select('*').lte('start_time', before)
-    if (me.data!.role === 'worker' && me.data!.workerId) q = q.eq('worker_id', me.data!.workerId)
-    const { data, error } = await q.order('start_time', { ascending: false }).limit(limit)
-    if (error) return fail(error.message)
-    return ok(data as TimeEntry[])
+    const build = (columns: string) => {
+      let q = client().from('time_entries').select(columns).lte('start_time', before)
+      if (me.data!.role === 'worker' && me.data!.workerId) q = q.eq('worker_id', me.data!.workerId)
+      return q.order('start_time', { ascending: false }).limit(limit)
+    }
+    const { data, error } = await build(ENTRY_COLUMNS)
+    if (error) {
+      if (isMissingColumn(error as { code?: string; message?: string }, 'settled_at')) {
+        const retry = await build(ENTRY_COLUMNS_LEGACY)
+        if (retry.error) return fail(retry.error.message)
+        return ok(retry.data as unknown as TimeEntry[])
+      }
+      return fail(error.message)
+    }
+    return ok(data as unknown as TimeEntry[])
   },
 
   async createEntry(input) {
@@ -1174,7 +1204,8 @@ export const supabaseBackend: DataBackend = {
   async listNotifications(limit) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    let q = client().from('notifications').select('*').eq('user_id', me.data!.id).order('created_at', { ascending: false })
+    // user_id is the caller's own id (already filtered on) — no need to ship it back.
+    let q = client().from('notifications').select('id, entry_id, type, message, read, created_at').eq('user_id', me.data!.id).order('created_at', { ascending: false })
     if (limit) q = q.limit(limit)
     const { data, error } = await q
     if (error) return fail(error.message)
@@ -1206,7 +1237,7 @@ export const supabaseBackend: DataBackend = {
   async listPayments(limit) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    let q = client().from('payments').select('*')
+    let q = client().from('payments').select('id, worker_id, amount, hours, status, period_start, period_end, created_at, paid_at, note, payment_method')
     if (me.data!.role === 'worker' && me.data!.workerId) q = q.eq('worker_id', me.data!.workerId)
     q = q.order('created_at', { ascending: false })
     if (limit) q = q.limit(limit)
@@ -1353,7 +1384,8 @@ export const supabaseBackend: DataBackend = {
   async listTasks() {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    let q = client().from('tasks').select('*')
+    // `user_id` is the workspace owner — constant across rows, never read.
+    let q = client().from('tasks').select('id, worker_id, title, description, status, priority, due_date, position, created_by_role, completed_at, created_at, updated_at')
     if (me.data!.role === 'worker' && me.data!.workerId) q = q.eq('worker_id', me.data!.workerId)
     const { data, error } = await q.order('position', { ascending: true }).order('created_at', { ascending: false })
     if (error) return fail(error.message)

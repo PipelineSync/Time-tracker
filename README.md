@@ -80,17 +80,20 @@ Setup (Supabase-connected deploys):
 
 Messages are posted server-side by the `slack-notify` Netlify Function, which rebuilds each message from the database (worker name, project, hours, earnings, currency, business timezone) — so a client can never forge names or amounts, and a slow/broken Slack hookup can never block clocking in or out.
 
-### Performance (why many tabs at once don't slow it down)
-The app is built so a workspace of several users on phones **and** laptops, all open at the same time, stays fast on a free Supabase plan:
+### Performance & egress (why many tabs at once don't slow it down)
+The app is built to stay inside Supabase's and Netlify's free-tier bandwidth even with a whole team signed in at once.
 
-- **Incremental entry sync** — every 15 s a visible tab re-fetches only the entries *changed* since its last sync (usually zero rows), not the whole history. The newest-entries window (≈1,200 for the admin, ≈300 for a worker) re-loads on refocus (at most once per 90 s) and every 5 minutes, which is also when entries deleted on another device get reconciled. Per-tab bandwidth therefore stays flat as the workspace's history grows.
-- **Bounded lists** — the notification bell fetches the 20 most recent notifications (its badge is an indexed `COUNT` query, so the exact unread number is free), and payments show the 100 most recent.
-- **Load older, on demand** — the Time Entries page renders 200 rows at a time with a *Show more* button, and Reports shows a *Load older entries* button when you pick a custom range that starts before the oldest loaded entry (one tap pulls in the pages the range needs).
-- **Hidden tabs don't poll** — polling pauses while a tab is in the background or the device sleeps.
+**Data sync (Supabase egress)**
+- Every visible tab keeps a **bounded window** of the database in memory (1200 newest entries for the admin, 300 for a worker) — per-tab load stays flat as history grows.
+- The 15 s background poll fetches only what changed: entries sync as a **delta** (`since` the last sync), and the unread badge is a **HEAD count** that ships no rows at all.
+- Heavy-but-rarely-changing lists — **workers, payments, settings, tasks and the notification dropdown** — are skipped on "light" ticks and refresh roughly **once a minute** instead of every 15 s. Anything you change yourself refreshes immediately, so this is invisible in use.
+- Queries name their **columns explicitly** rather than `select('*')`, so the workspace-owner `user_id` (identical on every row, never displayed) never goes over the wire.
+- Background refreshes never stack: focus/visibility events fire in bursts, and a refresh already in flight suppresses the rest.
 
-**No database migration is required for any of this** — the delta sync uses the existing `created_at` / `updated_at` columns, and the unread badge uses the `notifications_user_unread_idx` index that `supabase/perf-rls-and-indexes.sql` already creates. If your `time_entries` table ever grows into the tens of thousands of rows, `supabase/perf-entries-sync-indexes.sql` (optional, safe to re-run) adds two small indexes so the delta query keeps using them.
-
----
+**Static assets (CDN egress)**
+- `public/_headers` marks the fingerprinted `/assets/*` build output **`immutable` for a year**, so returning visitors re-download nothing; `index.html` and `sw.js` always revalidate so deploys still land instantly.
+- Brand images are served at the size they are actually displayed (the logo was a 1052×216 PNG rendered at 28 px) — the brand folder went from **310 KB to 37 KB**.
+- **Recharts (~110 KB gzipped) is admin-only**, so it is pinned to its own `charts-*` chunk that (a) nobody but an admin ever downloads, (b) keeps a stable URL across deploys, and (c) is **excluded from the PWA precache** — otherwise every worker's phone would download the chart library on every deploy. It is cached at runtime on first use instead. The PWA install dropped from **1510 KB to 844 KB**.
 
 ## 1. Install dependencies
 

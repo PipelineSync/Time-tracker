@@ -78,6 +78,12 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,ico,woff2}'],
+        // Recharts (~110 KB gzipped) is only ever loaded by the admin Reports
+        // page, but precaching pushes it to EVERY install — including every
+        // worker's phone, on every new deploy. Excluding it from the precache
+        // keeps the install small; admins still get it on first visit to
+        // Reports and it is then cached at runtime by the rule below.
+        globIgnores: ['**/charts-*.js'],
         cleanupOutdatedCaches: true,
         navigateFallback: '/index.html',
         // Never serve a cached HTML shell to the native shells or to
@@ -101,6 +107,23 @@ export default defineConfig({
             options: {
               cacheName: 'google-fonts-webfonts',
               expiration: { maxEntries: 32, maxAgeSeconds: 60 * 60 * 24 * 365 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+          {
+            // Lazily-loaded, fingerprinted JS chunks that are deliberately
+            // kept out of the precache (currently the charts bundle). Cached
+            // on first use, so an admin downloads Reports' chart library once
+            // rather than on every deploy.
+            urlPattern: ({ request, url }) =>
+              request.destination === 'script' &&
+              url.origin === self.location.origin &&
+              /\/assets\/charts-.*\.js$/.test(url.pathname),
+            handler: 'CacheFirst',
+            method: 'GET',
+            options: {
+              cacheName: 'lazy-chunks',
+              expiration: { maxEntries: 12, maxAgeSeconds: 60 * 60 * 24 * 90 },
               cacheableResponse: { statuses: [0, 200] },
             },
           },
@@ -143,6 +166,12 @@ export default defineConfig({
         manualChunks: {
           react: ['react', 'react-dom', 'react-router-dom'],
           supabase: ['@supabase/supabase-js'],
+          // Recharts is by far the heaviest dependency (~110 KB gzipped) and
+          // is used only by the admin Reports page. Pinning it to its own
+          // chunk means (a) nobody else ever downloads it, and (b) it keeps a
+          // stable URL across deploys, so admins re-use it from cache instead
+          // of re-downloading it whenever unrelated app code changes.
+          charts: ['recharts'],
         },
       },
     },
