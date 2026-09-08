@@ -11,9 +11,11 @@ import type {
   PaymentStatus,
   PaymentMethod,
   WorkerAvatar,
+  Task,
+  TaskStatus,
 } from './types'
 import { DEFAULT_SLACK_SETTINGS } from './types'
-import type { BackendResult, DataBackend, CreateWorkerInput } from './backend'
+import type { BackendResult, DataBackend, CreateWorkerInput, CreateTaskInput } from './backend'
 import { ACCOUNT_DEACTIVATED_MESSAGE } from './backend'
 import {
   createClient,
@@ -432,6 +434,19 @@ async function unsettledWithoutStampColumn(workerId: string): Promise<BackendRes
     .limit(1)
   const boundary = ((lastPayment as Array<{ period_end: string }> | null) ?? [])[0]?.period_end ?? null
   return ok(boundary ? rows.filter((e) => e.end_time > boundary) : rows)
+}
+
+/** Position that puts a new card at the bottom of its worker's column. */
+async function nextTaskPosition(workerId: string, status: TaskStatus): Promise<number> {
+  const { data } = await client()
+    .from('tasks')
+    .select('position')
+    .eq('worker_id', workerId)
+    .eq('status', status)
+    .order('position', { ascending: false })
+    .limit(1)
+  const top = ((data as Array<{ position: number }> | null) ?? [])[0]?.position
+  return typeof top === 'number' ? top + 1 : 0
 }
 
 async function pushNotification(recipientUserId: string, n: { entry_id: string | null; type: AppNotification['type']; message: string }) {
@@ -1330,6 +1345,138 @@ export const supabaseBackend: DataBackend = {
     return ok(null)
   },
 
+  // ---- Tasks (kanban board) ----------------------------------------------
+  // RLS (supabase/tasks.sql) is the real boundary: a worker can only select /
+  // insert / update / delete rows whose worker_id is their own, the admin owns
+  // the whole workspace. The scoping below just keeps the queries small.
+
+  async listTasks() {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    let q = client().from('tasks').select('*')
+    if (me.data!.role === 'worker' && me.data!.workerId) q = q.eq('worker_id', me.data!.workerId)
+    const { data, error } = await q.order('position', { ascending: true }).order('created_at', { ascending: false })
+    if (error) return fail(error.message)
+    return ok((data as Task[]) ?? [])
+  },
+
+  async createTask(input: CreateTaskInput) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    const title = input.title.trim()
+    if (!title) return fail('Give the task a title.')
+    // Workers can only ever create tasks for themselves (RLS enforces it too).
+    const workerId = me.data!.role === 'admin' ? input.worker_id : me.data!.workerId
+    if (!workerId) return fail('Choose who the task is for.')
+    const status: TaskStatus = input.status ?? 'todo'
+    const sb = client()
+    const { data, error } = await sb
+      .from('tasks')
+      .insert({
+        worker_id: workerId,
+        title,
+        description: input.description?.trim() || null,
+        status,
+        priority: input.priority ?? 'medium',
+        due_date: input.due_date || null,
+        // Bottom of the column.
+        position: await nextTaskPosition(workerId, status),
+        created_by_role: me.data!.role,
+        completed_at: status === 'completed' ? new Date().toISOString() : null,
+      })
+      .select()
+      .single()
+    if (error) return fail(error.message)
+    // Tell the worker when the admin assigns them something.
+    if (me.data!.role === 'admin') {
+      const recipient = await getWorkerUserId(workerId)
+      if (recipient) {
+        await pushNotification(recipient, { entry_id: null, type: 'note', message: `New task assigned: "${title}"` })
+      }
+    }
+    return ok(data as Task)
+  },
+
+  async updateTask(id, patch) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    const sb = client()
+    const { data: current, error: readErr } = await sb.from('tasks').select('*').eq('id', id).maybeSingle()
+    if (readErr) return fail(readErr.message)
+    if (!current) return fail('Task not found.')
+    const task = current as Task
+
+    const update: Record<string, unknown> = {}
+    if (patch.title !== undefined && patch.title.trim()) update.title = patch.title.trim()
+    if (patch.description !== undefined) update.description = patch.description?.trim() || null
+    if (patch.priority !== undefined) update.priority = patch.priority
+    if (patch.due_date !== undefined) update.due_date = patch.due_date || null
+    // Only the admin may hand a task to a different worker.
+    if (patch.worker_id !== undefined && me.data!.role === 'admin') update.worker_id = patch.worker_id
+    if (patch.status !== undefined) {
+      update.status = patch.status
+      // Stamp the first time it reaches Completed; clear it when it moves back.
+      update.completed_at = patch.status === 'completed' ? (task.completed_at ?? new Date().toISOString()) : null
+    }
+    const nextWorker = (update.worker_id as string | undefined) ?? task.worker_id
+    const nextStatus = (update.status as TaskStatus | undefined) ?? task.status
+    if (nextWorker !== task.worker_id || nextStatus !== task.status) {
+      update.position = await nextTaskPosition(nextWorker, nextStatus)
+    }
+
+    const { data, error } = await sb.from('tasks').update(update).eq('id', id).select().single()
+    if (error) return fail(error.message)
+    return ok(data as Task)
+  },
+
+  async moveTask(id, status, position) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    const sb = client()
+    const { data: current, error: readErr } = await sb.from('tasks').select('*').eq('id', id).maybeSingle()
+    if (readErr) return fail(readErr.message)
+    if (!current) return fail('Task not found.')
+    const task = current as Task
+
+    // Re-number the destination column so the card lands exactly where it was
+    // dropped and the rest keep their relative order.
+    const { data: columnRows } = await sb
+      .from('tasks')
+      .select('id, position')
+      .eq('worker_id', task.worker_id)
+      .eq('status', status)
+      .order('position', { ascending: true })
+    const others = ((columnRows as Array<{ id: string }> | null) ?? []).filter((r) => r.id !== id)
+    const at = Math.max(0, Math.min(position, others.length))
+    const ordered = [...others.slice(0, at).map((r) => r.id), id, ...others.slice(at).map((r) => r.id)]
+
+    const { data, error } = await sb
+      .from('tasks')
+      .update({
+        status,
+        position: ordered.indexOf(id),
+        completed_at: status === 'completed' ? (task.completed_at ?? new Date().toISOString()) : null,
+      })
+      .eq('id', id)
+      .select()
+      .single()
+    if (error) return fail(error.message)
+
+    // Best-effort re-index of the neighbours; a failure only affects ordering.
+    await Promise.all(
+      ordered.map((rowId, i) => (rowId === id ? null : sb.from('tasks').update({ position: i }).eq('id', rowId)))
+    )
+    return ok(data as Task)
+  },
+
+  async deleteTask(id) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    const { error } = await client().from('tasks').delete().eq('id', id)
+    if (error) return fail(error.message)
+    return ok(null)
+  },
+
   async resetAll() {
     const me = await requireUser()
     if (me.error) return fail(me.error)
@@ -1359,6 +1506,7 @@ export const supabaseBackend: DataBackend = {
       }
     }
 
+    await client().from('tasks').delete().neq('id', '')
     await client().from('time_entries').delete().neq('id', '')
     await client().from('active_timers').delete().neq('id', '')
     await client().from('workers').delete().neq('id', '')

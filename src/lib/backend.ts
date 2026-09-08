@@ -12,6 +12,8 @@ import type {
   PaymentMethod,
   Role,
   WorkerAvatar,
+  Task,
+  TaskStatus,
 } from './types'
 
 export interface BackendResult<T> {
@@ -32,6 +34,17 @@ export interface CreateWorkerInput {
   // Login details for the worker's account (admin-created).
   accountEmail?: string
   accountPassword?: string
+}
+
+/** Fields callers may set when creating a task. */
+export interface CreateTaskInput {
+  /** Admin only — defaults to the signed-in worker's own id. */
+  worker_id?: string
+  title: string
+  description?: string | null
+  status?: TaskStatus
+  priority?: Task['priority']
+  due_date?: string | null
 }
 
 export interface DataBackend {
@@ -138,6 +151,20 @@ export interface DataBackend {
   updatePaymentStatus(id: string, status: PaymentStatus, paymentMethod?: PaymentMethod | null): Promise<BackendResult<Payment>>
   updatePaymentNote(id: string, note: string | null): Promise<BackendResult<Payment>>
   deletePayment(id: string): Promise<BackendResult<null>>
+
+  /**
+   * Tasks on the kanban board. Scoped by role: the admin gets every worker's
+   * tasks, a worker only gets their own.
+   */
+  listTasks(): Promise<BackendResult<Task[]>>
+  createTask(input: CreateTaskInput): Promise<BackendResult<Task>>
+  updateTask(id: string, patch: Partial<Omit<Task, 'id' | 'created_at' | 'updated_at'>>): Promise<BackendResult<Task>>
+  /**
+   * Drag & drop: move a task into `status` at index `position` of that column.
+   * Kept separate from updateTask so the backend owns the re-indexing.
+   */
+  moveTask(id: string, status: TaskStatus, position: number): Promise<BackendResult<Task>>
+  deleteTask(id: string): Promise<BackendResult<null>>
 
   resetAll(): Promise<BackendResult<null>>
   seedDemo(): Promise<BackendResult<null>>

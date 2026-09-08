@@ -28,6 +28,8 @@ The app has two roles with clearly separated permissions:
 | Notes on entries | ✅ (reply) | ✅ (add notes) |
 | Settle & reset time → payments | ✅ | ❌ |
 | Payments view | ✅ (all, full control) | ✅ (own, read-only) |
+| Add tasks (kanban board) | ✅ (for any worker) | ✅ (own only) |
+| View / move tasks | ✅ (all workers' boards) | ✅ (own only) |
 | Change own password | ✅ | ✅ |
 | Reset other accounts' passwords | ✅ | ❌ (own only) |
 
@@ -45,6 +47,10 @@ Workers **clock in, take breaks, and clock out** — their rate is set by the ad
 - **Settings → Profile** *(worker)* — workers upload their own **profile picture** from their account settings. The picture is saved to their worker profile and shows up **for the admin** next to their name on the Workers page, the Dashboard and the "On the clock now" panel — not just a bare name.
 - **Settings → Payment methods** *(worker)* — each worker chooses how they can be paid: **Cash**, **QR Code**, or both. Enabling **QR Code** requires uploading their QR code image (a screenshot/photo of their GCash, Maya, banking-app, etc. QR — the image is automatically downscaled before saving). The methods and QR image are saved on the worker's profile.
 - **Payments** — the admin turns a worker's unsettled time & earnings into a **settlement**: a **Reset & settle** action on a worker creates an **unpaid** payment for the time that has not been settled yet. **Time entries are never deleted by a settlement** — the entries it paid for are marked **Settled** (their hours, notes and comments all stay in Time Entries), so the next settlement only covers time worked since. An entry only disappears when the admin **deletes it by hand**. The admin then drives the status **unpaid → pending → paid** (with a "Back to unpaid" option) and can delete payments. When the admin clicks **Mark paid**, a dialog shows the **payment methods that worker accepts** (Cash / QR Code, with the QR image ready to scan) and the admin **picks the method they are paying with**; it is stored on the payment (`payments.payment_method`, see `supabase/payment-paid-method.sql`) and shown in the **Paid via** column of the history. The **worker** sees their own payments **read-only**, with no edit controls, and their own enabled methods and QR code at the top of the page.
+- **Tasks** *(both roles)* — a **kanban board** with three stages: **To Do → In Progress → Completed**. **Drag and drop** a card between columns to change its stage (a drop indicator shows exactly where it will land, and cards keep their manual order inside a column). On phones — or with a keyboard — the **‹ ›** buttons on each card move it one stage at a time instead of dragging. Each task has a title, optional details, a **priority** (Low / Medium / High) and an optional **due date** (overdue cards are flagged in red).
+  - **Workers** can add tasks, but only ever for **themselves**, and they only ever see, move, edit, and delete **their own** tasks.
+  - The **admin** can add a task for **any** worker and sees **every** worker's cards on one board (each card names its owner), with a **worker filter** to focus on a single person's board. When the admin assigns a task, the worker gets a notification.
+  - Access is enforced in the backend *and* at the database level with Row Level Security — see `supabase/tasks.sql`.
 - **Auth** — sign in with admin or worker credentials. Only the admin can create worker login accounts.
 - **Change password** — available from the account menu (top-right) for both roles: enter your current password and a new one. Admins can also **reset a worker's password** from the Workers page. In demo mode the new password is set directly; with Supabase, a password reset link is emailed to the worker (the anon key cannot set another user's password).
 
@@ -118,7 +124,7 @@ Log in as admin to manage workers, set rates, and create worker accounts. Log in
 
 In the Supabase dashboard, open **SQL Editor** → **New query**, paste the entire contents of `supabase/schema.sql`, and click **Run**.
 
-This creates the `workers`, `time_entries`, `active_timers`, `settings`, and `payments` tables with foreign keys, indexes, **Row Level Security policies**, and triggers that auto-set `user_id` and `updated_at`.
+This creates the `workers`, `time_entries`, `active_timers`, `settings`, `payments`, and `tasks` tables with foreign keys, indexes, **Row Level Security policies**, and triggers that auto-set `user_id` and `updated_at`.
 
 > **Upgrading an existing database?** Run `supabase/fix-multiple-active-workers.sql` once — it makes the timer uniqueness rule *one per worker* (older databases allowed only one clocked-in worker per workspace, so the admin dashboard could only ever show a single worker) and allows the new `break_start` / `break_end` notification types.
 >
@@ -131,6 +137,8 @@ This creates the `workers`, `time_entries`, `active_timers`, `settings`, and `pa
 >
 
 
+> For the **Tasks** kanban board, run `supabase/tasks.sql` once. It creates the `tasks` table (stage, priority, due date, board position) with RLS policies that let a **worker see and manage only their own cards** while the **admin has access to every worker's tasks**. Fresh installs get this automatically from `schema.sql`.
+>
 > For **Slack notifications** (clock in / out, breaks, payments posted to a Slack channel), run `supabase/slack-notifications.sql` once. It creates the admin-only `slack_settings` table (webhook URL + per-event toggles). Then connect the webhook in **Settings → Slack** — see the *Slack notifications* section under Features. Fresh installs get this automatically from `schema.sql`.
 
 ---
@@ -260,12 +268,13 @@ setup and the secrets table live in **[docs/APPS.md](docs/APPS.md)**.
 time-tracker/
 ├─ supabase/schema.sql          # Database tables, RLS, triggers
 ├─ supabase/settle-keeps-entries.sql    # One-time migration: settlements keep time entries
+├─ supabase/tasks.sql           # One-time migration: Tasks kanban board (+ per-role RLS)
 ├─ src/
 │  ├─ lib/                      # types, utils, stats, backend (local + supabase), store, theme
 │  │                          # + platform.ts (shell detection), native.ts (Capacitor bootstrap), useInstallPrompt.ts
 │  ├─ components/               # shared UI + app components (shadcn-style), incl. AvatarBubble
 │  │                          # + InstallAppCard.tsx (Settings → “Get the app”)
-│  ├─ pages/                    # Dashboard, Tracker, Entries, Workers, Reports, Settings, Payments, Auth
+│  ├─ pages/                    # Dashboard, Tracker, Entries, Tasks, Workers, Reports, Settings, Payments, Auth
 │  ├─ App.tsx                   # Routing + auth gate (HashRouter inside native shells)
 │  └─ main.tsx                  # mounts app, registers the PWA service worker (browser shells only)
 ├─ ios/                         # Capacitor iOS project (Xcode) — App Store / TestFlight

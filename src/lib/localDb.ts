@@ -12,9 +12,12 @@ import type {
   PaymentMethod,
   Role,
   WorkerAvatar,
+  Task,
+  TaskStatus,
+  TaskPriority,
 } from './types'
 import { DEFAULT_SLACK_SETTINGS } from './types'
-import type { BackendResult, DataBackend, CreateWorkerInput } from './backend'
+import type { BackendResult, DataBackend, CreateWorkerInput, CreateTaskInput } from './backend'
 import { ACCOUNT_DEACTIVATED_MESSAGE } from './backend'
 import { buildDemoSeed } from './demoSeed'
 import { uid, computeEarnings, computeTotalMinutes, formatMinutes, formatDate } from './utils'
@@ -42,6 +45,8 @@ interface UserData {
   comments: TimeEntryComment[]
   notifications: AppNotification[]
   payments: Payment[]
+  /** Kanban tasks (see the Tasks page). */
+  tasks: Task[]
 }
 
 const USERS_KEY = 'wt_users'
@@ -72,7 +77,7 @@ function writeUsers(users: StoredUser[]) {
 }
 
 function emptyData(): UserData {
-  return { workers: [], entries: [], activeTimers: [], settings: null, comments: [], notifications: [], payments: [] }
+  return { workers: [], entries: [], activeTimers: [], settings: null, comments: [], notifications: [], payments: [], tasks: [] }
 }
 
 /** The method the admin paid a settlement with, or null when unknown/invalid. */
@@ -101,6 +106,54 @@ function normalizeWorker(w: Worker): Worker {
   }
 }
 
+/** Valid board column, defaulting anything unknown/legacy to To Do. */
+function normalizeTaskStatus(status: unknown): TaskStatus {
+  return status === 'in_progress' || status === 'completed' ? status : 'todo'
+}
+
+function normalizeTaskPriority(priority: unknown): TaskPriority {
+  return priority === 'low' || priority === 'high' ? priority : 'medium'
+}
+
+/** Normalize a task row loaded from storage to the current shape. */
+function normalizeTask(t: Task): Task {
+  const status = normalizeTaskStatus(t.status)
+  return {
+    ...t,
+    status,
+    priority: normalizeTaskPriority(t.priority),
+    description: t.description ?? null,
+    due_date: t.due_date ?? null,
+    position: Number.isFinite(t.position) ? t.position : 0,
+    created_by_role: t.created_by_role === 'admin' ? 'admin' : 'worker',
+    completed_at: status === 'completed' ? (t.completed_at ?? t.updated_at ?? null) : null,
+  }
+}
+
+/** Board order: by column position, then newest first as a tiebreaker. */
+function sortTasks(rows: Task[]): Task[] {
+  return [...rows].sort((a, b) => a.position - b.position || b.created_at.localeCompare(a.created_at))
+}
+
+/** Position that puts a task at the bottom of its worker's column. */
+function nextTaskPosition(tasks: Task[], workerId: string, status: TaskStatus): number {
+  const column = tasks.filter((t) => t.worker_id === workerId && t.status === status)
+  return column.reduce((max, t) => Math.max(max, t.position), -1) + 1
+}
+
+/**
+ * Re-number one worker's column so `movedId` sits at `index` and every other
+ * card keeps its relative order with a gap-free position.
+ */
+function reindexTaskColumn(tasks: Task[], workerId: string, status: TaskStatus, movedId: string, index: number) {
+  const column = sortTasks(tasks.filter((t) => t.worker_id === workerId && t.status === status && t.id !== movedId))
+  const moved = tasks.find((t) => t.id === movedId)
+  if (!moved) return
+  const at = Math.max(0, Math.min(index, column.length))
+  column.splice(at, 0, moved)
+  column.forEach((t, i) => { t.position = i })
+}
+
 function readData(userId: string): UserData {
   const d = read<UserData>(dataKey(userId), emptyData())
   d.workers = (d.workers || []).map(normalizeWorker)
@@ -115,6 +168,7 @@ function readData(userId: string): UserData {
   d.comments = d.comments || []
   d.notifications = d.notifications || []
   d.payments = d.payments || []
+  d.tasks = (d.tasks || []).map(normalizeTask)
   return d
 }
 
@@ -468,6 +522,7 @@ export const localBackend: DataBackend = {
     c.data.workers = c.data.workers.filter((w) => w.id !== id)
     c.data.entries = c.data.entries.filter((e) => e.worker_id !== id)
     c.data.activeTimers = c.data.activeTimers.filter((t) => t.worker_id !== id)
+    c.data.tasks = c.data.tasks.filter((t) => t.worker_id !== id)
     const entryIds = new Set(c.data.entries.map((e) => e.id))
     c.data.comments = c.data.comments.filter((cm) => entryIds.has(cm.entry_id))
     // Delete the worker's login account.
@@ -963,6 +1018,123 @@ export const localBackend: DataBackend = {
     return { data: null, error: null }
   },
 
+  // ---- Tasks (kanban board) ----------------------------------------------
+  // A worker only ever sees and touches their own tasks; the admin sees and
+  // manages every worker's. Both roles can add tasks — a worker's new task is
+  // always assigned to themselves, whatever the caller passes.
+
+  async listTasks() {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    const rows = c.user.role === 'worker'
+      ? c.data.tasks.filter((t) => t.worker_id === c.user.workerId)
+      : c.data.tasks
+    return { data: sortTasks(rows), error: null }
+  },
+
+  async createTask(input: CreateTaskInput) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    const title = input.title.trim()
+    if (!title) return { data: null, error: 'Give the task a title.' }
+    // Workers can only ever create tasks for themselves.
+    const workerId = c.user.role === 'admin' ? input.worker_id : c.user.workerId
+    if (!workerId) return { data: null, error: 'Choose who the task is for.' }
+    if (!c.data.workers.some((w) => w.id === workerId)) return { data: null, error: 'Worker not found.' }
+    const status = normalizeTaskStatus(input.status)
+    const now = new Date().toISOString()
+    const task: Task = {
+      id: uid(),
+      worker_id: workerId,
+      title,
+      description: input.description?.trim() || null,
+      status,
+      priority: normalizeTaskPriority(input.priority),
+      due_date: input.due_date || null,
+      // New tasks land at the bottom of their column.
+      position: nextTaskPosition(c.data.tasks, workerId, status),
+      created_by_role: c.user.role,
+      completed_at: status === 'completed' ? now : null,
+      created_at: now,
+      updated_at: now,
+    }
+    c.data.tasks.push(task)
+    // Tell the worker when the admin assigns them something.
+    if (c.user.role === 'admin') {
+      const recipient = workerUserId(workerId)
+      if (recipient) {
+        pushNotification(c.data, recipient, { entry_id: null, type: 'note', message: `New task assigned: "${title}"` })
+      }
+    }
+    save(c.data)
+    return { data: task, error: null }
+  },
+
+  async updateTask(id, patch) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    const idx = c.data.tasks.findIndex((t) => t.id === id)
+    if (idx === -1) return { data: null, error: 'Task not found.' }
+    const current = c.data.tasks[idx]
+    if (c.user.role === 'worker' && current.worker_id !== c.user.workerId) {
+      return { data: null, error: 'You can only change your own tasks.' }
+    }
+    // Only the admin may hand a task to a different worker.
+    const workerId = c.user.role === 'admin' && patch.worker_id ? patch.worker_id : current.worker_id
+    const status = patch.status ? normalizeTaskStatus(patch.status) : current.status
+    const now = new Date().toISOString()
+    const next: Task = normalizeTask({
+      ...current,
+      ...patch,
+      worker_id: workerId,
+      status,
+      title: patch.title !== undefined ? String(patch.title).trim() || current.title : current.title,
+      // Stamp the first time it reaches Completed; clear it when it moves back.
+      completed_at: status === 'completed' ? (current.completed_at ?? now) : null,
+      id: current.id,
+      created_at: current.created_at,
+      updated_at: now,
+    })
+    // Moving column (or worker) puts it at the bottom of the new one.
+    if (status !== current.status || workerId !== current.worker_id) {
+      next.position = nextTaskPosition(c.data.tasks.filter((t) => t.id !== id), workerId, status)
+    }
+    c.data.tasks[idx] = next
+    save(c.data)
+    return { data: next, error: null }
+  },
+
+  async moveTask(id, status, position) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    const task = c.data.tasks.find((t) => t.id === id)
+    if (!task) return { data: null, error: 'Task not found.' }
+    if (c.user.role === 'worker' && task.worker_id !== c.user.workerId) {
+      return { data: null, error: 'You can only move your own tasks.' }
+    }
+    const target = normalizeTaskStatus(status)
+    const now = new Date().toISOString()
+    task.status = target
+    task.completed_at = target === 'completed' ? (task.completed_at ?? now) : null
+    task.updated_at = now
+    reindexTaskColumn(c.data.tasks, task.worker_id, target, id, position)
+    save(c.data)
+    return { data: task, error: null }
+  },
+
+  async deleteTask(id) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    const task = c.data.tasks.find((t) => t.id === id)
+    if (!task) return { data: null, error: null }
+    if (c.user.role === 'worker' && task.worker_id !== c.user.workerId) {
+      return { data: null, error: 'You can only delete your own tasks.' }
+    }
+    c.data.tasks = c.data.tasks.filter((t) => t.id !== id)
+    save(c.data)
+    return { data: null, error: null }
+  },
+
   async resetAll() {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
@@ -996,6 +1168,7 @@ export const localBackend: DataBackend = {
       comments: [],
       notifications: [],
       payments: [],
+      tasks: [],
     }
     save(next)
     return { data: null, error: null }

@@ -20,8 +20,10 @@ import type {
   PaymentStatus,
   PaymentMethod,
   WorkerAvatar,
+  Task,
+  TaskStatus,
 } from './types'
-import type { DataBackend, CreateWorkerInput, BackendResult } from './backend'
+import type { DataBackend, CreateWorkerInput, CreateTaskInput, BackendResult } from './backend'
 import { localBackend } from './localDb'
 import { supabaseBackend, isSupabaseConfigured, ACCOUNT_DEACTIVATED_MESSAGE } from './supabaseDb'
 import { toast } from 'sonner'
@@ -94,6 +96,8 @@ interface StoreValue {
   activeTimers: ActiveTimer[]
   notifications: AppNotification[]
   payments: Payment[]
+  /** Kanban tasks the signed-in user may see (admin: all, worker: their own). */
+  tasks: Task[]
   unreadCount: number
   dataLoading: boolean
   /** Fetch the next page of entries older than everything currently loaded
@@ -143,6 +147,12 @@ interface StoreValue {
   addEntryComment: (entryId: string, body: string) => Promise<TimeEntryComment | null>
   markNotificationsRead: () => Promise<void>
 
+  createTask: (input: CreateTaskInput) => Promise<Task | null>
+  updateTask: (id: string, patch: Partial<Omit<Task, 'id' | 'created_at' | 'updated_at'>>) => Promise<Task | null>
+  /** Drag & drop: drop a task into `status` at index `position`. */
+  moveTask: (id: string, status: TaskStatus, position: number) => Promise<Task | null>
+  deleteTask: (id: string) => Promise<boolean>
+
   settleWorker: (workerId: string, note?: string) => Promise<Payment | null>
   updatePaymentStatus: (id: string, status: PaymentStatus, paymentMethod?: PaymentMethod | null) => Promise<Payment | null>
   updatePaymentNote: (id: string, note: string | null) => Promise<Payment | null>
@@ -162,6 +172,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [activeTimers, setActiveTimers] = useState<ActiveTimer[]>([])
   const [notifications, setNotifications] = useState<AppNotification[]>([])
   const [payments, setPayments] = useState<Payment[]>([])
+  const [tasks, setTasks] = useState<Task[]>([])
   const [dataLoading, setDataLoading] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
   const dataVersion = useRef(0)
@@ -218,7 +229,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // Captured BEFORE the query: rows updated after this instant are picked
       // up by the next delta; duplicates are harmless (merged by id).
       const syncTime = new Date().toISOString()
-      const [w, e, s, at, n, p, u] = await Promise.all([
+      const [w, e, s, at, n, p, u, t] = await Promise.all([
         light ? skipped<Worker[]>() : backend.listWorkers(),
         useDelta
           ? backend.listEntries({ since, limit: ENTRY_DELTA_LIMIT })
@@ -230,6 +241,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         backend.listNotifications(NOTIF_WINDOW),
         light ? skipped<Payment[]>() : backend.listPayments(PAYMENT_WINDOW),
         backend.countUnreadNotifications(),
+        // The board is small (a handful of cards per worker) and needs to
+        // reflect a drag another device made, so it rides along every refresh.
+        backend.listTasks(),
       ])
       if (token !== dataVersion.current) return
       if (w.data) setWorkers(withAvatars(w.data, avatarsRef.current))
@@ -266,6 +280,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (n.data) setNotifications(n.data)
       if (p.data) setPayments(p.data)
       if (u.data != null) setUnreadCount(u.data)
+      if (t.data) setTasks(t.data)
     } finally {
       refreshInFlight.current = false
       if (token === dataVersion.current) setDataLoading(false)
@@ -321,7 +336,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       })
     } else {
       avatarsRef.current = new Map()
-      setWorkers([]); setEntries([]); setSettings(null); setActiveTimer(null); setActiveTimers([]); setNotifications([]); setPayments([])
+      setWorkers([]); setEntries([]); setSettings(null); setActiveTimer(null); setActiveTimers([]); setNotifications([]); setPayments([]); setTasks([])
     }
   }, [user, refreshData, refreshAvatars])
 
@@ -666,6 +681,59 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [backend])
 
+  // ---- Tasks --------------------------------------------------------------
+  // Each mutation refreshes the board from the backend so the positions the
+  // backend assigned (and anything another device changed) win.
+
+  const refreshTasks = useCallback(async () => {
+    const res = await backend.listTasks()
+    if (res.data) setTasks(res.data)
+  }, [backend])
+
+  const createTask = useCallback(async (input: CreateTaskInput) => {
+    const res = await backend.createTask(input)
+    if (res.error || !res.data) {
+      toast.error(res.error || 'Could not add the task.')
+      return null
+    }
+    await refreshTasks()
+    return res.data
+  }, [backend, refreshTasks])
+
+  const updateTask = useCallback(async (id: string, patch: Partial<Omit<Task, 'id' | 'created_at' | 'updated_at'>>) => {
+    const res = await backend.updateTask(id, patch)
+    if (res.error || !res.data) {
+      toast.error(res.error || 'Could not save the task.')
+      return null
+    }
+    await refreshTasks()
+    return res.data
+  }, [backend, refreshTasks])
+
+  const moveTask = useCallback(async (id: string, status: TaskStatus, position: number) => {
+    // Optimistic: the card follows the pointer immediately, then the backend's
+    // authoritative ordering replaces it.
+    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, status } : t)))
+    const res = await backend.moveTask(id, status, position)
+    if (res.error || !res.data) {
+      toast.error(res.error || 'Could not move the task.')
+      await refreshTasks()
+      return null
+    }
+    await refreshTasks()
+    return res.data
+  }, [backend, refreshTasks])
+
+  const deleteTask = useCallback(async (id: string) => {
+    const res = await backend.deleteTask(id)
+    if (res.error) {
+      toast.error(res.error)
+      return false
+    }
+    await refreshTasks()
+    return true
+  }, [backend, refreshTasks])
+
   const settleWorker = useCallback(async (workerId: string, note?: string) => {
     const res = await backend.settleWorker(workerId, note)
     if (res.error || !res.data) return null
@@ -716,6 +784,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     activeTimers,
     notifications,
     payments,
+    tasks,
     unreadCount,
     dataLoading,
     loadOlderEntries,
@@ -749,6 +818,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     listEntryComments,
     addEntryComment,
     markNotificationsRead,
+    createTask,
+    updateTask,
+    moveTask,
+    deleteTask,
     settleWorker,
     updatePaymentStatus,
     updatePaymentNote,
