@@ -253,7 +253,7 @@ export function TasksPage() {
           void commitDrop(status, isTarget ? dropTarget.index : items.length)
         }}
         className={cn(
-          'flex min-h-[16rem] flex-col rounded-2xl border bg-muted/40 p-3 transition',
+          'flex min-h-[9rem] flex-col rounded-2xl border bg-muted/40 p-3 transition',
           dragging && 'border-dashed',
           isTarget && cn('bg-muted ring-2', style.ring)
         )}
@@ -292,7 +292,7 @@ export function TasksPage() {
             <button
               type="button"
               onClick={() => openNew(status)}
-              className="flex flex-1 flex-col items-center justify-center gap-1 rounded-xl border border-dashed p-6 text-xs text-muted-foreground transition hover:border-primary/40 hover:text-foreground"
+              className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-dashed p-5 text-xs text-muted-foreground transition hover:border-primary/40 hover:text-foreground"
             >
               <Plus className="h-4 w-4" />
               {status === 'todo' ? 'Add a task' : `Drag a task here`}
@@ -334,9 +334,9 @@ export function TasksPage() {
       </PageHeader>
 
       {showSkeleton ? (
-        <div className="grid gap-4 lg:grid-cols-3">
+        <div className="flex flex-col gap-4">
           {TASK_STATUSES.map((s) => (
-            <Skeleton key={s} className="h-64 rounded-2xl" />
+            <Skeleton key={s} className="h-40 rounded-2xl" />
           ))}
         </div>
       ) : visible.length === 0 ? (
@@ -351,7 +351,9 @@ export function TasksPage() {
           action={<Button onClick={() => openNew('todo')}><Plus className="mr-2 h-4 w-4" /> New task</Button>}
         />
       ) : (
-        <div className="grid gap-4 lg:grid-cols-3">
+        // Vertical board: the three stages stack top-to-bottom, each one a
+        // full-width lane you scroll through and drag between.
+        <div className="flex flex-col gap-4">
           {TASK_STATUSES.map((status) => (
             <Column key={status} status={status} />
           ))}
