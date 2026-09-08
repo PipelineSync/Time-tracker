@@ -90,7 +90,8 @@ export function EntryFormDialog({
           startTime: '09:00',
           endTime: '17:00',
           breakMin: '0',
-          project: '',
+          // Pre-filled from the worker's assigned Project Scope (editable).
+          project: w?.position?.trim() || '',
           notes: '',
           rate: String(w?.hourly_rate ?? settings?.default_hourly_rate ?? 20),
         })
@@ -106,7 +107,18 @@ export function EntryFormDialog({
 
   function handleWorkerChange(id: string) {
     const w = workers.find((x) => x.id === id)
-    setForm((f) => ({ ...f, workerId: id, rate: String(w?.hourly_rate ?? f.rate) }))
+    setForm((f) => {
+      const previous = workers.find((x) => x.id === f.workerId)
+      // Only re-seed the project while it still holds the previous worker's
+      // scope (or is empty) — never overwrite something typed by hand.
+      const untouched = !f.project.trim() || f.project.trim() === (previous?.position?.trim() || '')
+      return {
+        ...f,
+        workerId: id,
+        rate: String(w?.hourly_rate ?? f.rate),
+        project: !entry && untouched ? (w?.position?.trim() || '') : f.project,
+      }
+    })
   }
 
   const totalMinutes = (() => {

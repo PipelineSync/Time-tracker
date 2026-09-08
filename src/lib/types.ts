@@ -15,6 +15,12 @@ export interface Worker {
   email: string | null
   hourly_rate: number
   status: WorkerStatus
+  /**
+   * The worker's assigned **Project Scope** — the work they are on. Set by the
+   * admin, and used to pre-fill the project on their time entries when they
+   * clock in. (The column is still named `position` for backwards
+   * compatibility with existing databases.)
+   */
   position: string | null
   avatar_url: string | null
   /** Payment methods the worker accepts (cash and/or QR code). */

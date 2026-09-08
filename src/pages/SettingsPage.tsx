@@ -224,7 +224,7 @@ export function SettingsPage() {
                   <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Your account</p>
                   <div className="mt-2 flex flex-wrap gap-x-8 gap-y-1 text-sm">
                     <div><span className="text-muted-foreground">Name:</span> <span className="font-medium">{myWorker.name}</span></div>
-                    {myWorker.position && <div><span className="text-muted-foreground">Position:</span> <span className="font-medium">{myWorker.position}</span></div>}
+                    {myWorker.position && <div><span className="text-muted-foreground">Project Scope:</span> <span className="font-medium">{myWorker.position}</span></div>}
                     {myWorker.email && <div><span className="text-muted-foreground">Email:</span> <span className="font-medium">{myWorker.email}</span></div>}
                   </div>
                 </div>
