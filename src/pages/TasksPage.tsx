@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Building2,
   KanbanSquare,
@@ -9,6 +9,7 @@ import {
   GripVertical,
   ChevronRight,
   ChevronLeft,
+  ChevronDown,
   CheckCircle2,
   Circle,
   Loader2,
@@ -120,6 +121,44 @@ export function TasksPage() {
     return rows
   }, [tasks, canViewAll, user?.workerId, workerFilter, clientFilter, priorityFilter])
 
+  // Cards stay compact boxes: the title clamps to two lines and the
+  // description to three, and "See more" expands a card on demand instead of
+  // letting one long task stretch its whole lane. `expandedIds` holds the
+  // currently expanded cards; `overflowIds` holds the ones whose title or
+  // description is actually clipped (measured from the rendered elements once
+  // the board settles), so the toggle only appears when there is more to see.
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
+  const [overflowIds, setOverflowIds] = useState<Set<string>>(new Set())
+  const clampRefs = useRef(new Map<string, HTMLElement>())
+
+  useEffect(() => {
+    setOverflowIds((prev) => {
+      const next = new Set(prev)
+      let changed = false
+      clampRefs.current.forEach((el, key) => {
+        const id = key.split('|')[0]
+        // Expanded cards are unclamped, so their boxes would always read as
+        // "not clipped" — keep the last measured flag until they collapse.
+        if (expandedIds.has(id)) return
+        const clipped = el.scrollHeight > el.clientHeight + 1
+        if (clipped === next.has(id)) return
+        changed = true
+        if (clipped) next.add(id)
+        else next.delete(id)
+      })
+      return changed ? next : prev
+    })
+  }, [visible, expandedIds])
+
+  function toggleExpand(id: string) {
+    setExpandedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
   const filtersActive = workerFilter !== 'all' || stageFilter !== 'all' || clientFilter !== 'all' || priorityFilter !== 'all'
 
   const columns = useMemo(() => {
@@ -189,6 +228,8 @@ export function TasksPage() {
     const overdue = isOverdue(task)
     const priority = priorityBadge[task.priority]
     const stageIndex = TASK_STATUSES.indexOf(task.status)
+    const isExpanded = expandedIds.has(task.id)
+    const isClipped = overflowIds.has(task.id)
     return (
       <div
         draggable
@@ -223,11 +264,40 @@ export function TasksPage() {
         <div className="flex items-start gap-2">
           <GripVertical className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/50" aria-hidden />
           <div className="min-w-0 flex-1">
-            <p className={cn('break-words text-sm font-medium', task.status === 'completed' && 'text-muted-foreground line-through')}>
+            <p
+              ref={(el) => {
+                if (el) clampRefs.current.set(`${task.id}|title`, el)
+                else clampRefs.current.delete(`${task.id}|title`)
+              }}
+              className={cn(
+                'break-words text-sm font-medium',
+                !isExpanded && 'line-clamp-2',
+                task.status === 'completed' && 'text-muted-foreground line-through'
+              )}
+            >
               {task.title}
             </p>
             {task.description && (
-              <p className="mt-1 break-words text-xs text-muted-foreground">{task.description}</p>
+              <p
+                ref={(el) => {
+                  if (el) clampRefs.current.set(`${task.id}|desc`, el)
+                  else clampRefs.current.delete(`${task.id}|desc`)
+                }}
+                className={cn('mt-1 break-words text-xs text-muted-foreground', !isExpanded && 'line-clamp-3')}
+              >
+                {task.description}
+              </p>
+            )}
+            {isClipped && (
+              <button
+                type="button"
+                aria-expanded={isExpanded}
+                onClick={() => toggleExpand(task.id)}
+                className="mt-1 inline-flex items-center gap-0.5 text-xs font-medium text-primary underline-offset-2 hover:underline"
+              >
+                {isExpanded ? 'Show less' : 'See more'}
+                <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', isExpanded && 'rotate-180')} aria-hidden />
+              </button>
             )}
 
             <div className="mt-2 flex flex-wrap items-center gap-1.5">

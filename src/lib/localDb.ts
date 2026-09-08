@@ -422,6 +422,12 @@ function maybeAutoSeed(data: UserData) {
       client_id: e.client_id ? clientMap.get(e.client_id) ?? null : null,
       id: uid(),
     }))
+    data.tasks = seed.tasks.map((t) => ({
+      ...t,
+      worker_id: idMap.get(t.worker_id) || t.worker_id,
+      client_id: t.client_id ? clientMap.get(t.client_id) ?? null : null,
+      id: uid(),
+    }))
     data.settings = seed.settings
   }
 }

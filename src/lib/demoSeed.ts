@@ -1,4 +1,4 @@
-import type { Worker, TimeEntry, Settings, Client } from './types'
+import type { Worker, TimeEntry, Settings, Client, Task } from './types'
 import { PERMISSION_PRESETS } from './types'
 import { uid } from './utils'
 
@@ -110,6 +110,72 @@ export function buildDemoSeed() {
     entry('w-seed-1', at(-22, 10, 0), at(-22, 14, 30), 'c-seed-4', 'Training', 30, 'Onboarding session', 20),
   ]
 
+  // A few board tasks so the Tasks page is populated in demo mode. One has a
+  // long description on purpose: it exercises the card's "See more" clamp.
+  const tasks: Task[] = [
+    {
+      id: 't-seed-1',
+      worker_id: 'w-seed-1',
+      client_id: 'c-seed-1',
+      title: 'Redesign the landing page hero section',
+      description:
+        'Rebuild the hero with the new copy from the marketing brief. The headline should sit over the product screenshot, with the primary CTA left-aligned. Add the trust logos row below the fold, keep the section under 100 KB, and make sure it holds up at 320 px wide before we hand it to QA for a pass on the main browsers.',
+      status: 'in_progress',
+      priority: 'high',
+      due_date: at(2, 9).toISOString().slice(0, 10),
+      position: 0,
+      created_by_role: 'admin',
+      completed_at: null,
+      created_at: daysAgo(3).toISOString(),
+      updated_at: daysAgo(1).toISOString(),
+    },
+    {
+      id: 't-seed-2',
+      worker_id: 'w-seed-2',
+      client_id: 'c-seed-2',
+      title: 'Draft Q3 summary report',
+      description: 'Compile hours and earnings by project for the quarter.',
+      status: 'todo',
+      priority: 'medium',
+      due_date: at(6, 9).toISOString().slice(0, 10),
+      position: 0,
+      created_by_role: 'worker',
+      completed_at: null,
+      created_at: daysAgo(2).toISOString(),
+      updated_at: daysAgo(2).toISOString(),
+    },
+    {
+      id: 't-seed-3',
+      worker_id: 'w-seed-1',
+      client_id: 'c-seed-4',
+      title: 'Fix flaky invoice export test',
+      description: null,
+      status: 'waiting',
+      priority: 'low',
+      due_date: null,
+      position: 0,
+      created_by_role: 'worker',
+      completed_at: null,
+      created_at: daysAgo(1).toISOString(),
+      updated_at: daysAgo(1).toISOString(),
+    },
+    {
+      id: 't-seed-4',
+      worker_id: 'w-seed-2',
+      client_id: 'c-seed-3',
+      title: 'Publish the two April blog posts',
+      description: 'Copy is final, just schedule and share the links in the team channel.',
+      status: 'completed',
+      priority: 'medium',
+      due_date: at(-2, 9).toISOString().slice(0, 10),
+      position: 0,
+      created_by_role: 'admin',
+      completed_at: daysAgo(2).toISOString(),
+      created_at: daysAgo(8).toISOString(),
+      updated_at: daysAgo(2).toISOString(),
+    },
+  ]
+
   const settings: Settings = {
     id: 'settings-1',
     business_name: 'My Business',
@@ -119,7 +185,7 @@ export function buildDemoSeed() {
     avatar_url: null,
   }
 
-  return { workers, clients, entries, settings }
+  return { workers, clients, entries, tasks, settings }
 }
 
 // Re-export uid for convenience
