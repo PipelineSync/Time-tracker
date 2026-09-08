@@ -33,23 +33,58 @@ The app has two roles with clearly separated permissions:
 | Change own password | ✅ | ✅ |
 | Reset other accounts' passwords | ✅ | ❌ (own only) |
 
+The table above is the **default**. Every ✅ in the Admin column can be **handed to an individual worker** — see **Per-worker access** below.
+
 Workers **clock in, take breaks, and clock out** — their rate is set by the admin and shown read-only. **Any number of workers can be on the clock at the same time**; the admin sees all of them live, including who is currently on a break. The admin has **no start-timer**; instead the admin **adds time to workers** via manual entries (Time Entries → Manual entry, or Dashboard → Add time).
+
+### Per-worker access
+A worker does not have to be *only* a worker. When the admin adds someone (**Workers → Add worker**, or **Edit** on an existing card) the form has an **Access** section: tick which of the admin's capabilities that person gets. Nothing is ticked by default, so an ordinary worker is exactly as before — their own time, their own board.
+
+Four one-click **presets** cover the usual cases, and any combination can be ticked by hand:
+
+| Preset | What they get |
+|---|---|
+| **Worker** | Nothing extra. Their own time and their own tasks. *(default)* |
+| **Supervisor** | Dashboard, the team list, everyone's time (read-only) and full control of **everyone's board**. No money. |
+| **Manager** | Supervisor + manual time entries, payments, reports and the client list. |
+| **Full access** | Everything, including worker accounts and business settings. |
+
+The individual capabilities are **View** / **Manage** pairs per area:
+
+| Area | View | Manage |
+|---|---|---|
+| Dashboard | `dashboard.view` — the team overview | — |
+| Workers | `workers.view` — the team list & rates | `workers.manage` — add/edit/delete workers, reset their passwords |
+| Time entries | `entries.view_all` — everyone's time | `entries.manage` — add/edit/delete any entry |
+| Tasks | `tasks.view_all` — everyone's board | `tasks.manage_all` — assign, move, edit and delete anyone's cards |
+| Payments | `payments.view_all` — the team's payments | `payments.manage` — settle, mark paid, delete |
+| Reports | `reports.view` — charts + CSV export | — |
+| Clients | — | `clients.manage` — add, rename, retire clients |
+| Settings | — | `settings.manage` — business details, currency, default rate, Slack |
+
+Granting **any** team-wide view (dashboard, time, tasks, payments or reports) also lets that worker read the **worker list** — rows about other people are meaningless without the names — while the **Workers page** itself only appears with `workers.view`.
+
+What a grant changes: the **navigation** gains that destination (and "My Time"/"My Tasks" become the team-wide "Time Entries"/"Tasks"), the **route** starts resolving, and the matching buttons appear. Nothing else about the person changes — a granted worker still clocks in and out like everyone else, and only the admin can wipe the workspace or load sample data.
+
+It is enforced in three places, not just the UI: the **app** hides what you cannot do, both **backends** refuse the call, and on Supabase the **Row Level Security policies check the same keys** (`public.has_permission('…')`), so a granted worker's rows really are readable and an ungranted one's request is rejected by the database itself. Changing someone's access takes effect on their next data sync — no sign-out needed. Note that `workers.manage` is the powerful one: like the admin, whoever can edit workers can also change what other workers may do. See `supabase/worker-permissions.sql`.
 
 ### Pages
 - **Dashboard** *(admin)* — today's & this week's hours and earnings, a live **"On the clock now"** panel listing **every** worker currently clocked in (with a **Working** / **On break** badge, time worked and break time, updated every second), per-worker summary, recent entries, "Add time"
-- **Workers** *(admin)* — add/edit/delete workers, create each worker's login account, set hourly rate, **Project Scope**, & active/inactive status. The **Project Scope** is the work a person is assigned to: once the admin sets it, it **auto-populates the Project field** on that worker's time — it pre-fills the clock-in dialog on their **My Time / Clock In** screen (and the admin's manual-entry form), so their entries are attributed to the right project without anyone retyping it. It stays **editable**, so a one-off shift on something else is still easy to record, and changing the scope applies from the next clock-in onward (past entries keep what they were logged with). Each worker card shows their **live clock status** (Working / On break, with elapsed time) while they are on the clock, and the **hours & earnings still to pay** — only the time that has *not* been settled yet, so both drop back to zero the moment you **Settle & reset** (what has already been settled stays visible underneath as context, and the full lifetime totals live in Time Entries and Reports). **Deleting a worker also permanently disables their login account** (the Supabase Auth user is removed server-side, and any open session of theirs is signed out) — they can no longer sign in.
-- **Clock In / Out** *(worker)* — big clock-in button, then break/pause/resume and clock-out; survives a page refresh. The **Project / task** field comes pre-filled with the **Project Scope** the admin assigned to the worker (editable, with their recent projects offered as suggestions). At clock-out the worker can attach an **optional note** that is saved on the time entry (the admin's clock-out notification flags that a note was added).
+- **Workers** *(admin)* — add/edit/delete workers, create each worker's login account, set hourly rate, **Project Scope**, active/inactive status, and the **Access** they get (see *Per-worker access*). The **Project Scope** describes the work a person is assigned to and is shown on their profile; the **client** each shift is booked to is picked at clock-in from the master list (see **Clients**). Each worker card shows their **live clock status** (Working / On break, with elapsed time) while they are on the clock, and the **hours & earnings still to pay** — only the time that has *not* been settled yet, so both drop back to zero the moment you **Settle & reset** (what has already been settled stays visible underneath as context, and the full lifetime totals live in Time Entries and Reports). **Deleting a worker also permanently disables their login account** (the Supabase Auth user is removed server-side, and any open session of theirs is signed out) — they can no longer sign in.
+- **Clock In / Out** *(worker)* — big clock-in button, then break/pause/resume and clock-out; survives a page refresh. Clocking in asks **which client** the shift is for — pre-filled with the client from their last shift (or the only active one), so the common case is still one tap. The client rides along on the running timer and lands on the **time entry** at clock-out, which is what makes the per-client reporting work. At clock-out the worker can attach an **optional note** that is saved on the time entry (the admin's clock-out notification flags that a note was added).
 - **Manual entry** *(admin)* — date, start/end time, break, project, notes, auto-calculated hours & earnings (this is how the admin adds time to workers)
-- **Time Entries** — table on desktop / cards on mobile, filters (including **settled / unsettled**), sorting; admin can edit/delete/duplicate, workers see their own. Entries that a settlement paid for carry a **Settled** badge and stay here as history; the summary line also shows the **unsettled** earnings still waiting to be paid out
+- **Time Entries** — table on desktop / cards on mobile, filters (**client**, worker, date range, **settled / unsettled**), sorting; each row shows the **client** it was booked to (entries logged before clients existed keep their old free-text scope); admin can edit/delete/duplicate, workers see their own. Entries that a settlement paid for carry a **Settled** badge and stay here as history; the summary line also shows the **unsettled** earnings still waiting to be paid out
 - **Notes / chat on entries** — every entry has a conversation thread: workers add notes, the admin replies (and vice versa), both sides are notified
-- **Reports** *(admin)* — today/week/month/custom range, totals & averages, charts, **CSV export**
+- **Reports** *(admin)* — today/week/month/custom range, totals & averages, charts (including **Hours by client**, drawn in each client's colour, plus an *Hours & earnings per client* breakdown), **CSV export** (the detailed rows carry the client)
 - **Settings** *(admin)* — business name, currency, timezone, default rate, theme, export & delete all data
 - **Settings → Profile** *(worker)* — workers upload their own **profile picture** from their account settings. The picture is saved to their worker profile and shows up **for the admin** next to their name on the Workers page, the Dashboard and the "On the clock now" panel — not just a bare name.
 - **Settings → Payment methods** *(worker)* — each worker chooses how they can be paid: **Cash**, **QR Code**, or both. Enabling **QR Code** requires uploading their QR code image (a screenshot/photo of their GCash, Maya, banking-app, etc. QR — the image is automatically downscaled before saving). The methods and QR image are saved on the worker's profile.
 - **Payments** — the admin turns a worker's unsettled time & earnings into a **settlement**: a **Reset & settle** action on a worker creates an **unpaid** payment for the time that has not been settled yet. **Time entries are never deleted by a settlement** — the entries it paid for are marked **Settled** (their hours, notes and comments all stay in Time Entries), so the next settlement only covers time worked since. An entry only disappears when the admin **deletes it by hand**. The admin then drives the status **unpaid → pending → paid** (with a "Back to unpaid" option) and can delete payments. When the admin clicks **Mark paid**, a dialog shows the **payment methods that worker accepts** (Cash / QR Code, with the QR image ready to scan) and the admin **picks the method they are paying with**; it is stored on the payment (`payments.payment_method`, see `supabase/payment-paid-method.sql`) and shown in the **Paid via** column of the history. The **worker** sees their own payments **read-only**, with no edit controls, and their own enabled methods and QR code at the top of the page.
-- **Tasks** *(both roles)* — a **kanban board** with five stages: **To Do → In Progress → Waiting → Approval → Completed**. **Drag and drop** a card between columns to change its stage (a drop indicator shows exactly where it will land, and cards keep their manual order inside a column). On phones — or with a keyboard — the **‹ ›** buttons on each card move it one stage at a time instead of dragging. Each task has a title, optional details, a **priority** (Low / Medium / High) and an optional **due date** (overdue cards are flagged in red).
+- **Clients** *(admin-managed, used by both roles)* — a **master list of every client** the team works for, opened from **Tasks → Clients**. The admin adds a client (name + one of eight **colour tags**), renames or re-colours it, and can **mark it inactive at any time**. Only **active** clients appear in the dropdowns when assigning a task or clocking in; an inactive client stays on the work it already labels (board, entries, reports) so history never loses its name. A client can only be **deleted while nothing uses it** — otherwise the app points you at *mark inactive* instead. Workers can **read** the list (they need it for their filters) but never change it. See `supabase/clients.sql`.
+- **Tasks** *(both roles)* — a **kanban board** with five stages: **To Do → In Progress → Waiting → Approval → Completed**, laid out as a **row of lanes** (it scrolls sideways one lane at a time on a phone). **Drag and drop** a card between lanes to change its stage (a drop indicator shows exactly where it will land, cards keep their manual order inside a lane, and dragging to the edge scrolls the row). On phones — or with a keyboard — the **‹ ›** buttons on each card move it one stage at a time instead of dragging. Every task belongs to a **client** and has a title, optional details, a **priority** (Low / Medium / High) and an optional **due date** (overdue cards are flagged in red). Each card shows its client's colour badge.
+  - **Both roles** get a **client filter** and a **priority filter** over the board.
   - **Workers** can add tasks, but only ever for **themselves**, and they only ever see, move, edit, and delete **their own** tasks.
-  - The **admin** can add a task for **any** worker and sees **every** worker's cards on one board (each card names its owner), with a **worker filter** and a **stage filter** (and a *Clear filters* button) to narrow the board down to one person, one stage, or both. When the admin assigns a task, the worker gets a notification.
+  - The **admin** can add a task for **any** worker and sees **every** worker's cards on one board (each card names its owner), and additionally gets a **worker filter** and a **stage filter** (with a *Clear filters* button) to narrow the board down to one person, one stage, or both. When the admin assigns a task, the worker gets a notification.
   - Access is enforced in the backend *and* at the database level with Row Level Security — see `supabase/tasks.sql`.
 - **Auth** — sign in with admin or worker credentials. Only the admin can create worker login accounts.
 - **Change password** — available from the account menu (top-right) for both roles: enter your current password and a new one. Admins can also **reset a worker's password** from the Workers page. In demo mode the new password is set directly; with Supabase, a password reset link is emailed to the worker (the anon key cannot set another user's password).
@@ -148,6 +183,12 @@ This creates the `workers`, `time_entries`, `active_timers`, `settings`, `paymen
 >
 
 
+> For **Clients**, run **`supabase/clients.sql`** once. It creates the `clients` table (name, colour tag, active/inactive) with RLS policies that let the **admin manage the list** while **workers may only read it**, adds `client_id` to `tasks`, `time_entries` and `active_timers`, and **backfills** every existing task/entry to an **"Unassigned"** client so nothing is left untagged. Fresh installs get the table from `schema.sql`. Safe to re-run. Until it is applied the app still runs — it just reports an empty client list and leaves work untagged.
+>
+> **Shortcut:** if you have an existing database that predates both the Clients feature and per-worker access, **`supabase/RUN-THIS-clients-and-permissions.sql`** is a single copy-paste bundle of the two migrations below, in the right order, with verification queries at the end.
+>
+> For **per-worker access** (letting the admin grant individual admin capabilities to individual workers), run **`supabase/worker-permissions.sql`** once. It adds `workers.permissions` (a validated `text[]`), the `public.has_permission(text)` helper, and widens the RLS policies on workers, time entries, timers, payments, tasks, clients, settings and entry comments with one extra "…or I hold this capability" branch each. Fresh installs get it from `schema.sql`. Safe to re-run. Until it is applied the app still runs — everyone keeps the classic admin/worker split, and saving the Access tick boxes reports that the migration is needed.
+>
 > For the **Tasks** kanban board, run **`supabase/RUN-THIS-tasks.sql`** once (a copy-paste-ready version of `supabase/tasks.sql`, with a verification query at the end). It creates the `tasks` table (stage, priority, due date, board position) with RLS policies that let a **worker see and manage only their own cards** while the **admin has access to every worker's tasks**. Fresh installs get this automatically from `schema.sql`. It is safe to re-run: if you applied an earlier version with only three stages, re-running it widens the stage constraint to include **Waiting** and **Approval**.
 >
 > For **Slack notifications** (clock in / out, breaks, payments posted to a Slack channel), run `supabase/slack-notifications.sql` once. It creates the admin-only `slack_settings` table (webhook URL + per-event toggles). Then connect the webhook in **Settings → Slack** — see the *Slack notifications* section under Features. Fresh installs get this automatically from `schema.sql`.
@@ -200,7 +241,7 @@ where relname in ('workers','time_entries','active_timers','settings','payments'
 The RLS model:
 - The **admin** owns the workspace (all rows carry the admin's `user_id`).
 - **Workers** can read their own worker profile, their own time entries, and their own **payments** (read-only), and can manage only their own clock-in timer (`worker_id = current_worker_id()`).
-- **Only the admin** can create/edit workers, set hourly rates, add manual entries, change settings, and create/update/delete **payments** (`is_admin()`).
+- **Only the admin** can create/edit workers, set hourly rates, add manual entries, change settings, and create/update/delete **payments** (`is_admin()`) — **unless** the admin granted that capability to a specific worker, which the policies check with `has_permission('…')` against the `workers.permissions` array (see `supabase/worker-permissions.sql`).
 - The `user_id` column is auto-filled from `auth.uid()` by triggers; the `profiles` table maps auth users to `admin`/`worker` roles.
 
 ---
@@ -280,6 +321,9 @@ time-tracker/
 ├─ supabase/schema.sql          # Database tables, RLS, triggers
 ├─ supabase/settle-keeps-entries.sql    # One-time migration: settlements keep time entries
 ├─ supabase/tasks.sql           # One-time migration: Tasks kanban board (+ per-role RLS)
+├─ supabase/clients.sql         # One-time migration: Clients master list + client_id backfill
+├─ supabase/worker-permissions.sql      # One-time migration: per-worker admin capabilities (+ RLS)
+├─ supabase/RUN-THIS-clients-and-permissions.sql   # Copy-paste bundle of the two migrations above
 ├─ src/
 │  ├─ lib/                      # types, utils, stats, backend (local + supabase), store, theme
 │  │                          # + platform.ts (shell detection), native.ts (Capacitor bootstrap), useInstallPrompt.ts

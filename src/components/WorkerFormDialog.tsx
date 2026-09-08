@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Worker } from '@/lib/types'
+import type { Permission, Worker } from '@/lib/types'
+import { normalizePermissions } from '@/lib/types'
 import { useStore } from '@/lib/store'
 import {
   Dialog,
@@ -12,6 +13,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { WorkerPermissionsField } from '@/components/WorkerPermissionsField'
 import { toast } from 'sonner'
 
 export function WorkerFormDialog({
@@ -32,6 +34,7 @@ export function WorkerFormDialog({
   const [accountEmail, setAccountEmail] = useState('')
   const [password, setPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
+  const [permissions, setPermissions] = useState<Permission[]>([])
   const [saving, setSaving] = useState(false)
   const seededKeyRef = useRef<string | null>(null)
 
@@ -57,6 +60,7 @@ export function WorkerFormDialog({
     setAccountEmail(worker?.email || '')
     setPassword('')
     setNewPassword('')
+    setPermissions(normalizePermissions(worker?.permissions))
   }, [open, worker, settings])
 
   async function handleSubmit(e: React.FormEvent) {
@@ -86,6 +90,7 @@ export function WorkerFormDialog({
         hourly_rate: parsedRate,
         status,
         position: position.trim(),
+        permissions,
         newPassword: newPassword || undefined,
       })
       if (!res) toast.error('Failed to update worker.')
@@ -97,6 +102,7 @@ export function WorkerFormDialog({
         hourly_rate: parsedRate,
         status,
         position: position.trim(),
+        permissions,
         accountEmail: accountEmail.trim(),
         accountPassword: password,
       })
@@ -109,8 +115,10 @@ export function WorkerFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
+      {/* One scroll region only: the header and the buttons stay put while the
+          fields scroll between them, so the dialog never runs off-screen. */}
+      <DialogContent className="flex max-h-[88vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-lg">
+        <DialogHeader className="space-y-1 border-b px-5 py-4 pr-12 text-left">
           <DialogTitle>{worker ? 'Edit worker' : 'Add worker'}</DialogTitle>
           <DialogDescription>
             {worker
@@ -118,60 +126,65 @@ export function WorkerFormDialog({
               : 'Create a worker and their login account so they can clock in.'}
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="w-name">Name *</Label>
-            <Input id="w-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="John Smith" required />
-          </div>
-
-          {worker ? (
+        <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
             <div className="space-y-2">
-              <Label htmlFor="w-pw">New password (optional)</Label>
-              <Input id="w-pw" type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="Leave blank to keep current" minLength={6} />
+              <Label htmlFor="w-name">Name *</Label>
+              <Input id="w-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="John Smith" required />
             </div>
-          ) : (
-            <>
+
+            {worker ? (
               <div className="space-y-2">
-                <Label htmlFor="w-account">Login email *</Label>
-                <Input id="w-account" type="email" value={accountEmail} onChange={(e) => setAccountEmail(e.target.value)} placeholder="john@example.com" required />
-                <p className="text-xs text-muted-foreground">The worker uses this to sign in.</p>
+                <Label htmlFor="w-pw">New password (optional)</Label>
+                <Input id="w-pw" type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="Leave blank to keep current" minLength={6} />
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="w-pw">Login password *</Label>
-                <Input id="w-pw" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" minLength={6} required />
-                <p className="text-xs text-muted-foreground">Share this securely with the worker.</p>
-              </div>
-            </>
-          )}
+            ) : (
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="w-account">Login email *</Label>
+                  <Input id="w-account" type="email" value={accountEmail} onChange={(e) => setAccountEmail(e.target.value)} placeholder="john@example.com" required />
+                  <p className="text-xs text-muted-foreground">The worker uses this to sign in.</p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="w-pw">Login password *</Label>
+                  <Input id="w-pw" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" minLength={6} required />
+                  <p className="text-xs text-muted-foreground">Share this securely with the worker.</p>
+                </div>
+              </>
+            )}
 
-          <div className="space-y-2">
-            <Label htmlFor="w-position">Project Scope *</Label>
-            <Input
-              id="w-position"
-              value={position}
-              onChange={(e) => setPosition(e.target.value)}
-              placeholder="e.g. Website redesign"
-              required
-            />
-            <p className="text-xs text-muted-foreground">
-              The work this person is assigned to. It fills in the project on their time entries automatically when they clock in.
-            </p>
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="w-rate">Hourly rate * <span className="font-normal text-muted-foreground">(admin-only)</span></Label>
-            <Input id="w-rate" type="number" min="0" step="0.01" value={rate} onChange={(e) => setRate(e.target.value)} placeholder="20.00" required />
-          </div>
-
-          <div className="space-y-2">
-            <Label>Status</Label>
-            <div className="flex gap-2">
-              <Button type="button" variant={status === 'active' ? 'default' : 'outline'} className="flex-1" onClick={() => setStatus('active')}>Active</Button>
-              <Button type="button" variant={status === 'inactive' ? 'secondary' : 'outline'} className="flex-1" onClick={() => setStatus('inactive')}>Inactive</Button>
+            <div className="space-y-2">
+              <Label htmlFor="w-position">Project Scope *</Label>
+              <Input
+                id="w-position"
+                value={position}
+                onChange={(e) => setPosition(e.target.value)}
+                placeholder="e.g. Website redesign"
+                required
+              />
+              <p className="text-xs text-muted-foreground">
+                The work this person is assigned to, shown on their profile. Time entries are tagged with the
+                client they pick when clocking in.
+              </p>
             </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="w-rate">Hourly rate * <span className="font-normal text-muted-foreground">(admin-only)</span></Label>
+              <Input id="w-rate" type="number" min="0" step="0.01" value={rate} onChange={(e) => setRate(e.target.value)} placeholder="20.00" required />
+            </div>
+
+            <div className="space-y-2">
+              <Label>Status</Label>
+              <div className="flex gap-2">
+                <Button type="button" variant={status === 'active' ? 'default' : 'outline'} className="flex-1" onClick={() => setStatus('active')}>Active</Button>
+                <Button type="button" variant={status === 'inactive' ? 'secondary' : 'outline'} className="flex-1" onClick={() => setStatus('inactive')}>Inactive</Button>
+              </div>
+            </div>
+
+            <WorkerPermissionsField value={permissions} onChange={setPermissions} disabled={saving} />
           </div>
 
-          <DialogFooter className="gap-2">
+          <DialogFooter className="gap-2 border-t bg-background px-5 py-3">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
             <Button type="submit" disabled={saving}>{saving ? 'Saving…' : worker ? 'Save changes' : 'Add worker'}</Button>
           </DialogFooter>

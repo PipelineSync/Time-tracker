@@ -1,21 +1,49 @@
-import { adminClient, json, requireAdmin } from './lib/supabase'
+import { adminClient, json, requireCapability } from './lib/supabase'
+
+/**
+ * Admin capabilities that may be granted to a worker. Kept in step with
+ * Permission in src/lib/types.ts (duplicated rather than imported so the
+ * function bundle stays independent of the app source).
+ */
+const PERMISSIONS = [
+  'dashboard.view',
+  'workers.view',
+  'workers.manage',
+  'entries.view_all',
+  'entries.manage',
+  'tasks.view_all',
+  'tasks.manage_all',
+  'payments.view_all',
+  'payments.manage',
+  'reports.view',
+  'clients.manage',
+  'settings.manage',
+] as const
+
+/** Never trust the client with the grant list — keep only known keys. */
+function cleanPermissions(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return PERMISSIONS.filter((p) => value.includes(p))
+}
 
 export default async function handler(request: Request) {
   if (request.method !== 'POST') return json(405, { error: 'Method not allowed.' })
-  const auth = await requireAdmin(request)
+  // The admin, or a worker they granted "Add, edit and remove workers".
+  const auth = await requireCapability(request, 'workers.manage')
   if ('error' in auth) return auth.error
-  const { sb, userId } = auth
+  const { sb, ownerId: userId } = auth
 
   try {
     const body = await request.json() as {
       name?: string; email?: string; hourly_rate?: number; status?: 'active' | 'inactive';
-      accountEmail?: string; accountPassword?: string
+      permissions?: unknown; accountEmail?: string; accountPassword?: string
     }
     const name = (body.name || '').trim()
     const email = (body.accountEmail || body.email || '').trim().toLowerCase()
     const hourlyRate = Number(body.hourly_rate)
     const status = body.status === 'inactive' ? 'inactive' : 'active'
     const password = body.accountPassword || ''
+    const permissions = cleanPermissions(body.permissions)
 
     if (!name) return json(400, { error: 'Worker name is required.' })
     if (!email) return json(400, { error: 'Worker login email is required.' })
@@ -30,11 +58,17 @@ export default async function handler(request: Request) {
     if (authError || !authData.user) return json(400, { error: authError?.message || 'Could not create worker login.' })
 
     const authUserId = authData.user.id
-    const { data: worker, error: workerError } = await sb
+    const row = { user_id: userId, name, email, hourly_rate: hourlyRate, status }
+    let { data: worker, error: workerError } = await sb
       .from('workers')
-      .insert({ user_id: userId, name, email, hourly_rate: hourlyRate, status })
+      .insert({ ...row, permissions })
       .select()
       .single()
+    if (workerError && /permissions/i.test(workerError.message || '')) {
+      // Database without supabase/worker-permissions.sql: still create the
+      // worker, just without the extra access.
+      ;({ data: worker, error: workerError } = await sb.from('workers').insert(row).select().single())
+    }
     if (workerError || !worker) {
       await sb.auth.admin.deleteUser(authUserId)
       return json(400, { error: workerError?.message || 'Could not create worker.' })

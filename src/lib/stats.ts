@@ -1,4 +1,4 @@
-import type { TimeEntry, Worker } from './types'
+import type { Client, TimeEntry, Worker } from './types'
 import { minutesToHours } from './utils'
 
 export function startOfToday(): Date {
@@ -91,17 +91,26 @@ export function hoursByWorker(entries: TimeEntry[], workers: Worker[]) {
     .sort((a, b) => b.hours - a.hours)
 }
 
-export function hoursByProject(entries: TimeEntry[]) {
-  const map = new Map<string, { hours: number; earnings: number; sessions: number }>()
+/**
+ * Hours and earnings per client, biggest first. Entries logged before clients
+ * existed fall back to their old free-text scope so nothing silently merges
+ * into one bucket.
+ */
+export function hoursByClient(entries: TimeEntry[], clients: Client[]) {
+  const byId = new Map(clients.map((c) => [c.id, c] as const))
+  const map = new Map<string, { client: Client | null; label: string; hours: number; earnings: number; sessions: number }>()
   for (const e of entries) {
-    const key = e.project || 'Untitled'
-    const cur = map.get(key) || { hours: 0, earnings: 0, sessions: 0 }
+    const client = e.client_id ? byId.get(e.client_id) ?? null : null
+    const key = e.client_id ?? (e.project ? `project:${e.project}` : 'none')
+    const label = client?.name ?? e.project ?? 'No client'
+    const cur = map.get(key) || { client, label, hours: 0, earnings: 0, sessions: 0 }
     cur.hours += minutesToHours(e.total_minutes)
     cur.earnings += e.earnings
     cur.sessions += 1
     map.set(key, cur)
   }
   return Array.from(map.entries())
-    .map(([project, v]) => ({ project, ...v }))
+    .map(([key, v]) => ({ key, ...v }))
     .sort((a, b) => b.hours - a.hours)
 }
+

@@ -20,7 +20,7 @@ const TasksPage = lazy(() => import('@/pages/TasksPage').then((m) => ({ default:
 const PaymentsPage = lazy(() => import('@/pages/PaymentsPage').then((m) => ({ default: m.PaymentsPage })))
 
 export function App() {
-  const { user, authLoading, isAdmin } = useStore()
+  const { user, authLoading, isAdmin, can } = useStore()
 
   if (authLoading) {
     return <FullScreenLoader />
@@ -58,17 +58,15 @@ export function App() {
           <Route path="/payments" element={<PaymentsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
 
-          {/* Admin-only */}
-          {isAdmin && (
-            <>
-              <Route path="/" element={<DashboardPage />} />
-              <Route path="/workers" element={<WorkersPage />} />
-              <Route path="/reports" element={<ReportsPage />} />
-            </>
-          )}
+          {/* Admin screens — also open to workers the admin granted them to.
+              Anything not granted simply has no route, so a typed-in URL falls
+              through to the redirect below (and the backend refuses too). */}
+          {can('dashboard.view') && <Route path="/" element={<DashboardPage />} />}
+          {can('workers.view') && <Route path="/workers" element={<WorkersPage />} />}
+          {can('reports.view') && <Route path="/reports" element={<ReportsPage />} />}
 
           {/* Redirects */}
-          <Route path="*" element={<Navigate to={isAdmin ? '/' : '/tracker'} replace />} />
+          <Route path="*" element={<Navigate to={can('dashboard.view') ? '/' : '/tracker'} replace />} />
         </Route>
       </Routes>
       </Suspense>

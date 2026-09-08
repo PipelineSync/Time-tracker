@@ -15,9 +15,22 @@ import type {
   Task,
   TaskStatus,
   TaskPriority,
+  Client,
+  ClientColor,
+  ClientStatus,
+  Permission,
 } from './types'
-import { DEFAULT_SLACK_SETTINGS, TASK_STATUSES } from './types'
-import type { BackendResult, DataBackend, CreateWorkerInput, CreateTaskInput } from './backend'
+import {
+  CLIENT_COLORS,
+  DEFAULT_CLIENT_COLOR,
+  DEFAULT_SLACK_SETTINGS,
+  PERMISSIONS,
+  TEAM_VIEW_PERMISSIONS,
+  normalizePermissions,
+  TASK_STATUSES,
+  UNASSIGNED_CLIENT_NAME,
+} from './types'
+import type { BackendResult, DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput } from './backend'
 import { ACCOUNT_DEACTIVATED_MESSAGE } from './backend'
 import { buildDemoSeed } from './demoSeed'
 import { uid, computeEarnings, computeTotalMinutes, formatMinutes, formatDate } from './utils'
@@ -47,6 +60,8 @@ interface UserData {
   payments: Payment[]
   /** Kanban tasks (see the Tasks page). */
   tasks: Task[]
+  /** Client master list (admin-managed, see the Tasks page → Clients). */
+  clients: Client[]
 }
 
 const USERS_KEY = 'wt_users'
@@ -77,7 +92,7 @@ function writeUsers(users: StoredUser[]) {
 }
 
 function emptyData(): UserData {
-  return { workers: [], entries: [], activeTimers: [], settings: null, comments: [], notifications: [], payments: [], tasks: [] }
+  return { workers: [], entries: [], activeTimers: [], settings: null, comments: [], notifications: [], payments: [], tasks: [], clients: [] }
 }
 
 /** The method the admin paid a settlement with, or null when unknown/invalid. */
@@ -101,6 +116,7 @@ function normalizeWorker(w: Worker): Worker {
   return {
     ...w,
     payment_methods,
+    permissions: normalizePermissions(w.permissions),
     // A QR image only makes sense while the worker accepts QR payments.
     qr_code_url: payment_methods.includes('qr') ? (w.qr_code_url ?? null) : null,
   }
@@ -123,6 +139,7 @@ function normalizeTask(t: Task): Task {
     status,
     priority: normalizeTaskPriority(t.priority),
     description: t.description ?? null,
+    client_id: t.client_id ?? null,
     due_date: t.due_date ?? null,
     position: Number.isFinite(t.position) ? t.position : 0,
     created_by_role: t.created_by_role === 'admin' ? 'admin' : 'worker',
@@ -154,6 +171,73 @@ function reindexTaskColumn(tasks: Task[], workerId: string, status: TaskStatus, 
   column.forEach((t, i) => { t.position = i })
 }
 
+/** Valid colour tag, defaulting anything unknown to the first brand colour. */
+function normalizeClientColor(color: unknown): ClientColor {
+  return CLIENT_COLORS.includes(color as ClientColor) ? (color as ClientColor) : DEFAULT_CLIENT_COLOR
+}
+
+function normalizeClientStatus(status: unknown): ClientStatus {
+  return status === 'inactive' ? 'inactive' : 'active'
+}
+
+function normalizeClient(c: Client): Client {
+  return {
+    ...c,
+    name: (c.name ?? '').trim() || 'Client',
+    color: normalizeClientColor(c.color),
+    status: normalizeClientStatus(c.status),
+  }
+}
+
+/** Clients A→Z with the inactive ones last — the order every list shows. */
+function sortClients(rows: Client[]): Client[] {
+  return [...rows].sort(
+    (a, b) =>
+      Number(a.status === 'inactive') - Number(b.status === 'inactive') ||
+      a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+  )
+}
+
+/** The client's display name, or null when there is none / it is unknown. */
+function clientName(d: UserData, clientId: string | null | undefined): string | null {
+  if (!clientId) return null
+  return d.clients.find((c) => c.id === clientId)?.name ?? null
+}
+
+/** Keep a client reference only when it actually points at a known client. */
+function resolveClientId(d: UserData, clientId: string | null | undefined): string | null {
+  if (!clientId) return null
+  return d.clients.some((c) => c.id === clientId) ? clientId : null
+}
+
+/**
+ * One-time migration for workspaces that predate clients: everything without a
+ * client is attached to a single "Unassigned" client so no task or entry is
+ * left dangling (the admin can rename it, re-tag the work, or retire it).
+ * Returns true when something changed and the workspace needs saving.
+ */
+function backfillClients(d: UserData): boolean {
+  const orphanTasks = d.tasks.filter((t) => !t.client_id)
+  const orphanEntries = d.entries.filter((e) => !e.client_id)
+  if (orphanTasks.length === 0 && orphanEntries.length === 0) return false
+  const now = new Date().toISOString()
+  let fallback = d.clients.find((c) => c.name.trim().toLowerCase() === UNASSIGNED_CLIENT_NAME.toLowerCase())
+  if (!fallback) {
+    fallback = {
+      id: uid(),
+      name: UNASSIGNED_CLIENT_NAME,
+      color: 'slate',
+      status: 'active',
+      created_at: now,
+      updated_at: now,
+    }
+    d.clients.push(fallback)
+  }
+  for (const t of orphanTasks) t.client_id = fallback.id
+  for (const e of orphanEntries) e.client_id = fallback.id
+  return true
+}
+
 function readData(userId: string): UserData {
   const d = read<UserData>(dataKey(userId), emptyData())
   d.workers = (d.workers || []).map(normalizeWorker)
@@ -169,6 +253,11 @@ function readData(userId: string): UserData {
   d.notifications = d.notifications || []
   d.payments = d.payments || []
   d.tasks = (d.tasks || []).map(normalizeTask)
+  d.clients = (d.clients || []).map(normalizeClient)
+  d.entries = d.entries.map((e) => ({ ...e, client_id: e.client_id ?? null }))
+  // Workspaces saved before clients existed get their work attached to the
+  // "Unassigned" client the first time they are read.
+  if (backfillClients(d)) write(dataKey(userId), d)
   return d
 }
 
@@ -213,7 +302,7 @@ export function getSessionUser(): AuthUser | null {
   const u = users.find((x) => x.id === session.userId)
   if (!u) return null
   if (!workerAccountStillValid(u.id)) return null
-  return { id: u.id, email: u.email, role: u.role, workerId: u.workerId ?? null }
+  return { id: u.id, email: u.email, role: u.role, workerId: u.workerId ?? null, permissions: permissionsOf(u) }
 }
 
 /** Current user + admin workspace. All data lives in the admin's workspace. */
@@ -230,7 +319,34 @@ function save(data: UserData) {
 }
 
 function toAuth(u: StoredUser): AuthUser {
-  return { id: u.id, email: u.email, role: u.role, workerId: u.workerId ?? null }
+  return { id: u.id, email: u.email, role: u.role, workerId: u.workerId ?? null, permissions: permissionsOf(u) }
+}
+
+/**
+ * Capabilities this account has. The admin owns the workspace and therefore
+ * holds all of them; a worker holds exactly what the admin ticked on their row.
+ */
+function permissionsOf(u: { role: Role; workerId?: string | null }): Permission[] {
+  if (u.role === 'admin') return [...PERMISSIONS]
+  if (!u.workerId) return []
+  const w = readData(getAdmin().id).workers.find((x) => x.id === u.workerId)
+  return w ? normalizePermissions(w.permissions) : []
+}
+
+/** Does the signed-in account hold this capability? */
+function can(c: { user: AuthUser }, permission: Permission): boolean {
+  if (c.user.role === 'admin') return true
+  return (c.user.permissions ?? []).includes(permission)
+}
+
+/** Anyone who sees team-wide data also needs the names behind it. */
+function canSeeTeam(c: { user: AuthUser }): boolean {
+  return TEAM_VIEW_PERMISSIONS.some((p) => can(c, p))
+}
+
+/** Standard refusal, phrased for a worker who was not granted the capability. */
+function denied(what: string) {
+  return { data: null, error: `You do not have permission to ${what}.` }
 }
 
 /** Auth user id for a worker row, or null if no account linked. */
@@ -296,8 +412,16 @@ function maybeAutoSeed(data: UserData) {
       }
     }
     writeUsers(users)
+    const seededClients: Client[] = seed.clients.map((cl) => ({ ...cl, id: uid() }))
+    const clientMap = new Map(seed.clients.map((cl, i) => [cl.id, seededClients[i].id]))
     data.workers = seededWorkers
-    data.entries = seed.entries.map((e) => ({ ...e, worker_id: idMap.get(e.worker_id) || e.worker_id, id: uid() }))
+    data.clients = seededClients
+    data.entries = seed.entries.map((e) => ({
+      ...e,
+      worker_id: idMap.get(e.worker_id) || e.worker_id,
+      client_id: e.client_id ? clientMap.get(e.client_id) ?? null : null,
+      id: uid(),
+    }))
     data.settings = seed.settings
   }
 }
@@ -362,7 +486,7 @@ export const localBackend: DataBackend = {
   async resetWorkerPassword(workerId, newPassword) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
-    if (c.user.role !== 'admin') return { data: null, error: 'Only the admin can reset worker passwords.' }
+    if (!can(c, 'workers.manage')) return denied('reset worker passwords')
     const users = readUsers()
     const acc = users.find((u) => u.workerId === workerId)
     if (!acc) return { data: null, error: 'No login account linked to this worker.' }
@@ -425,7 +549,8 @@ export const localBackend: DataBackend = {
     // are the heaviest fields on the row). The UI merges the separately
     // fetched snapshot from listWorkerAvatars() back in.
     const stripImages = (w: Worker): Worker => ({ ...w, avatar_url: null, qr_code_url: null })
-    if (c.user.role === 'worker') {
+    // A worker with no team-wide capability only ever sees their own row.
+    if (!canSeeTeam(c)) {
       const w = c.data.workers.find((x) => x.id === c.user.workerId)
       return { data: w ? [stripImages(w)] : [], error: null }
     }
@@ -435,10 +560,9 @@ export const localBackend: DataBackend = {
   async listWorkerAvatars() {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
-    const rows: WorkerAvatar[] =
-      c.user.role === 'worker'
-        ? c.data.workers.filter((w) => w.id === c.user.workerId)
-        : c.data.workers
+    const rows: WorkerAvatar[] = canSeeTeam(c)
+      ? c.data.workers
+      : c.data.workers.filter((w) => w.id === c.user.workerId)
     return {
       data: rows.map((w) => ({ id: w.id, avatar_url: w.avatar_url ?? null, qr_code_url: w.qr_code_url ?? null })),
       error: null,
@@ -448,7 +572,7 @@ export const localBackend: DataBackend = {
   async createWorker(input: CreateWorkerInput) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
-    if (c.user.role !== 'admin') return { data: null, error: 'Only the admin can add workers.' }
+    if (!can(c, 'workers.manage')) return denied('add workers')
     const now = new Date().toISOString()
     const worker: Worker = {
       id: uid(),
@@ -460,6 +584,7 @@ export const localBackend: DataBackend = {
       avatar_url: null,
       payment_methods: [],
       qr_code_url: null,
+      permissions: normalizePermissions(input.permissions),
       created_at: now,
       updated_at: now,
     }
@@ -487,10 +612,11 @@ export const localBackend: DataBackend = {
   async updateWorker(id, patch) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
-    if (c.user.role !== 'admin') return { data: null, error: 'Only the admin can edit workers.' }
+    if (!can(c, 'workers.manage')) return denied('edit workers')
     const idx = c.data.workers.findIndex((w) => w.id === id)
     if (idx === -1) return { data: null, error: 'Worker not found.' }
     c.data.workers[idx] = { ...c.data.workers[idx], ...patch, updated_at: new Date().toISOString() }
+    if (patch.permissions) c.data.workers[idx].permissions = normalizePermissions(patch.permissions)
     // If admin set a new password, update the linked account.
     const newPassword = (patch as { newPassword?: string }).newPassword
     if (newPassword) {
@@ -508,7 +634,7 @@ export const localBackend: DataBackend = {
   async getWorkerLogin(id) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
-    if (c.user.role !== 'admin') return { data: null, error: 'Only the admin can view login details.' }
+    if (!can(c, 'workers.manage')) return denied('view login details')
     const worker = c.data.workers.find((w) => w.id === id)
     if (!worker) return { data: null, error: 'Worker not found.' }
     const acc = readUsers().find((u) => u.workerId === id)
@@ -518,7 +644,7 @@ export const localBackend: DataBackend = {
   async deleteWorker(id) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
-    if (c.user.role !== 'admin') return { data: null, error: 'Only the admin can delete workers.' }
+    if (!can(c, 'workers.manage')) return denied('delete workers')
     c.data.workers = c.data.workers.filter((w) => w.id !== id)
     c.data.entries = c.data.entries.filter((e) => e.worker_id !== id)
     c.data.activeTimers = c.data.activeTimers.filter((t) => t.worker_id !== id)
@@ -535,7 +661,7 @@ export const localBackend: DataBackend = {
   async listEntries(opts) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
-    let rows = c.user.role === 'worker'
+    let rows = !can(c, 'entries.view_all')
       ? c.data.entries.filter((e) => e.worker_id === c.user.workerId)
       : c.data.entries
     // Incremental sync: rows created or updated since the last sync.
@@ -552,7 +678,7 @@ export const localBackend: DataBackend = {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
     let rows = c.data.entries.filter((e) => e.start_time <= before)
-    if (c.user.role === 'worker') rows = rows.filter((e) => e.worker_id === c.user.workerId)
+    if (!can(c, 'entries.view_all')) rows = rows.filter((e) => e.worker_id === c.user.workerId)
     rows = [...rows].sort((a, b) => b.start_time.localeCompare(a.start_time))
     return { data: rows.slice(0, limit), error: null }
   },
@@ -560,11 +686,12 @@ export const localBackend: DataBackend = {
   async createEntry(input) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
-    if (c.user.role !== 'admin') return { data: null, error: 'Only the admin can add manual entries.' }
+    if (!can(c, 'entries.manage')) return denied('add manual entries')
     const now = new Date().toISOString()
     const entry: TimeEntry = {
       id: uid(),
       worker_id: input.worker_id,
+      client_id: resolveClientId(c.data, input.client_id),
       project: input.project || null,
       start_time: input.start_time,
       end_time: input.end_time,
@@ -593,7 +720,7 @@ export const localBackend: DataBackend = {
   async updateEntry(id, patch) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
-    if (c.user.role !== 'admin') return { data: null, error: 'Only the admin can edit entries.' }
+    if (!can(c, 'entries.manage')) return denied('edit time entries')
     const idx = c.data.entries.findIndex((e) => e.id === id)
     if (idx === -1) return { data: null, error: 'Entry not found.' }
     c.data.entries[idx] = { ...c.data.entries[idx], ...patch, updated_at: new Date().toISOString() }
@@ -604,7 +731,7 @@ export const localBackend: DataBackend = {
   async deleteEntry(id) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
-    if (c.user.role !== 'admin') return { data: null, error: 'Only the admin can delete entries.' }
+    if (!can(c, 'entries.manage')) return denied('delete time entries')
     c.data.entries = c.data.entries.filter((e) => e.id !== id)
     c.data.comments = c.data.comments.filter((cm) => cm.entry_id !== id)
     save(c.data)
@@ -654,6 +781,7 @@ export const localBackend: DataBackend = {
     const timer: ActiveTimer = {
       id: uid(),
       worker_id: workerId,
+      client_id: resolveClientId(c.data, input.client_id),
       project: input.project || null,
       start_time: input.start_time || new Date().toISOString(),
       notes: input.notes || null,
@@ -666,7 +794,10 @@ export const localBackend: DataBackend = {
     c.data.activeTimers.push(timer)
     // Notify the admin when a worker clocks in.
     if (c.user.role === 'worker') {
-      const detail = [timer.project, timer.notes ? timer.notes.replace(/\s+/g, ' ').slice(0, 140) : null].filter(Boolean).join(' · ')
+      const detail = [
+        clientName(c.data, timer.client_id) || timer.project,
+        timer.notes ? timer.notes.replace(/\s+/g, ' ').slice(0, 140) : null,
+      ].filter(Boolean).join(' · ')
       pushNotification(c.data, c.admin.id, {
         entry_id: null,
         type: 'time_in',
@@ -740,6 +871,7 @@ export const localBackend: DataBackend = {
     const entry: TimeEntry = {
       id: uid(),
       worker_id: timer.worker_id,
+      client_id: timer.client_id ?? null,
       project: timer.project || null,
       start_time: timer.start_time,
       end_time: end.toISOString(),
@@ -757,7 +889,8 @@ export const localBackend: DataBackend = {
     // Always notify on clock out — with or without a note.
     if (c.user.role === 'worker') {
       const parts = [formatMinutes(entry.total_minutes)]
-      if (entry.project) parts.push(entry.project)
+      const scope = clientName(c.data, entry.client_id) || entry.project
+      if (scope) parts.push(scope)
       parts.push(clockOutNote ? 'added a note' : 'no note')
       pushNotification(c.data, c.admin.id, {
         entry_id: entry.id,
@@ -800,7 +933,7 @@ export const localBackend: DataBackend = {
   async saveSettings(patch) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
-    if (c.user.role !== 'admin') return { data: null, error: 'Only the admin can change settings.' }
+    if (!can(c, 'settings.manage')) return denied('change business settings')
     if (!c.data.settings) c.data.settings = { id: 'settings-1', business_name: 'My Business', currency: 'USD', timezone: 'UTC', default_hourly_rate: 20, avatar_url: null }
     c.data.settings = { ...c.data.settings, ...patch }
     save(c.data)
@@ -814,14 +947,14 @@ export const localBackend: DataBackend = {
   async getSlackSettings() {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
-    if (c.user.role !== 'admin') return { data: null, error: 'Only the admin can view Slack settings.' }
+    if (!can(c, 'settings.manage')) return denied('view the Slack settings')
     return { data: read<SlackSettings>(slackKey(c.admin.id), { ...DEFAULT_SLACK_SETTINGS }), error: null }
   },
 
   async saveSlackSettings(patch) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
-    if (c.user.role !== 'admin') return { data: null, error: 'Only the admin can change Slack settings.' }
+    if (!can(c, 'settings.manage')) return denied('change the Slack settings')
     const next: SlackSettings = { ...DEFAULT_SLACK_SETTINGS, ...read<SlackSettings>(slackKey(c.admin.id), { ...DEFAULT_SLACK_SETTINGS }), ...patch }
     next.webhook_url = next.webhook_url?.trim() ? next.webhook_url.trim() : null
     write(slackKey(c.admin.id), next)
@@ -905,7 +1038,7 @@ export const localBackend: DataBackend = {
   async listPayments(limit) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
-    let rows = c.user.role === 'worker'
+    let rows = !can(c, 'payments.view_all')
       ? c.data.payments.filter((p) => p.worker_id === c.user.workerId)
       : c.data.payments
     rows = [...rows].sort((a, b) => b.created_at.localeCompare(a.created_at))
@@ -915,7 +1048,7 @@ export const localBackend: DataBackend = {
   async settleWorker(workerId, note) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
-    if (c.user.role !== 'admin') return { data: null, error: 'Only the admin can settle worker time.' }
+    if (!can(c, 'payments.manage')) return denied('settle worker time')
     const worker = c.data.workers.find((w) => w.id === workerId)
     if (!worker) return { data: null, error: 'Worker not found.' }
     // Settling never deletes time entries. It pays out the worker's unsettled
@@ -972,7 +1105,7 @@ export const localBackend: DataBackend = {
   async updatePaymentStatus(id, status, paymentMethod) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
-    if (c.user.role !== 'admin') return { data: null, error: 'Only the admin can update payment status.' }
+    if (!can(c, 'payments.manage')) return denied('update payment status')
     const p = c.data.payments.find((x) => x.id === id)
     if (!p) return { data: null, error: 'Payment not found.' }
     const method = normalizePaidMethod(paymentMethod)
@@ -1001,7 +1134,7 @@ export const localBackend: DataBackend = {
   async updatePaymentNote(id, note) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
-    if (c.user.role !== 'admin') return { data: null, error: 'Only the admin can update payment notes.' }
+    if (!can(c, 'payments.manage')) return denied('edit payment notes')
     const p = c.data.payments.find((x) => x.id === id)
     if (!p) return { data: null, error: 'Payment not found.' }
     p.note = note
@@ -1012,8 +1145,85 @@ export const localBackend: DataBackend = {
   async deletePayment(id) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
-    if (c.user.role !== 'admin') return { data: null, error: 'Only the admin can delete payments.' }
+    if (!can(c, 'payments.manage')) return denied('delete payments')
     c.data.payments = c.data.payments.filter((p) => p.id !== id)
+    save(c.data)
+    return { data: null, error: null }
+  },
+
+  // ---- Clients (master list) ----------------------------------------------
+  // Both roles read the list (a worker needs the name/colour of the clients on
+  // their own board and in their filters); only the admin may change it.
+  // Inactive clients stay in the list so historical work keeps its label — the
+  // UI is what limits new work to the active ones.
+
+  async listClients() {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    return { data: sortClients(c.data.clients), error: null }
+  },
+
+  async createClient(input: CreateClientInput) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (!can(c, 'clients.manage')) return denied('manage clients')
+    const name = input.name.trim()
+    if (!name) return { data: null, error: 'Give the client a name.' }
+    if (name.length > 80) return { data: null, error: 'Client names are limited to 80 characters.' }
+    if (c.data.clients.some((x) => x.name.toLowerCase() === name.toLowerCase())) {
+      return { data: null, error: `"${name}" is already on the list.` }
+    }
+    const now = new Date().toISOString()
+    const client: Client = {
+      id: uid(),
+      name,
+      color: normalizeClientColor(input.color),
+      status: normalizeClientStatus(input.status),
+      created_at: now,
+      updated_at: now,
+    }
+    c.data.clients.push(client)
+    save(c.data)
+    return { data: client, error: null }
+  },
+
+  async updateClient(id, patch) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (!can(c, 'clients.manage')) return denied('manage clients')
+    const idx = c.data.clients.findIndex((x) => x.id === id)
+    if (idx === -1) return { data: null, error: 'Client not found.' }
+    const current = c.data.clients[idx]
+    const name = patch.name !== undefined ? patch.name.trim() : current.name
+    if (!name) return { data: null, error: 'Give the client a name.' }
+    if (c.data.clients.some((x) => x.id !== id && x.name.toLowerCase() === name.toLowerCase())) {
+      return { data: null, error: `"${name}" is already on the list.` }
+    }
+    const next: Client = normalizeClient({
+      ...current,
+      ...patch,
+      name,
+      id: current.id,
+      created_at: current.created_at,
+      updated_at: new Date().toISOString(),
+    })
+    c.data.clients[idx] = next
+    save(c.data)
+    return { data: next, error: null }
+  },
+
+  async deleteClient(id) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (!can(c, 'clients.manage')) return denied('manage clients')
+    // Deleting would strip the label off work that has already happened, so a
+    // client in use can only be marked inactive.
+    const usedByTasks = c.data.tasks.some((t) => t.client_id === id)
+    const usedByEntries = c.data.entries.some((e) => e.client_id === id)
+    if (usedByTasks || usedByEntries) {
+      return { data: null, error: 'This client is used by existing tasks or time entries. Mark it inactive instead.' }
+    }
+    c.data.clients = c.data.clients.filter((x) => x.id !== id)
     save(c.data)
     return { data: null, error: null }
   },
@@ -1026,7 +1236,7 @@ export const localBackend: DataBackend = {
   async listTasks() {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
-    const rows = c.user.role === 'worker'
+    const rows = !can(c, 'tasks.view_all')
       ? c.data.tasks.filter((t) => t.worker_id === c.user.workerId)
       : c.data.tasks
     return { data: sortTasks(rows), error: null }
@@ -1038,7 +1248,8 @@ export const localBackend: DataBackend = {
     const title = input.title.trim()
     if (!title) return { data: null, error: 'Give the task a title.' }
     // Workers can only ever create tasks for themselves.
-    const workerId = c.user.role === 'admin' ? input.worker_id : c.user.workerId
+    // Only a task manager may put a card on someone else's board.
+    const workerId = can(c, 'tasks.manage_all') ? input.worker_id : c.user.workerId
     if (!workerId) return { data: null, error: 'Choose who the task is for.' }
     if (!c.data.workers.some((w) => w.id === workerId)) return { data: null, error: 'Worker not found.' }
     const status = normalizeTaskStatus(input.status)
@@ -1046,6 +1257,7 @@ export const localBackend: DataBackend = {
     const task: Task = {
       id: uid(),
       worker_id: workerId,
+      client_id: resolveClientId(c.data, input.client_id),
       title,
       description: input.description?.trim() || null,
       status,
@@ -1076,17 +1288,18 @@ export const localBackend: DataBackend = {
     const idx = c.data.tasks.findIndex((t) => t.id === id)
     if (idx === -1) return { data: null, error: 'Task not found.' }
     const current = c.data.tasks[idx]
-    if (c.user.role === 'worker' && current.worker_id !== c.user.workerId) {
+    if (!can(c, 'tasks.manage_all') && current.worker_id !== c.user.workerId) {
       return { data: null, error: 'You can only change your own tasks.' }
     }
-    // Only the admin may hand a task to a different worker.
-    const workerId = c.user.role === 'admin' && patch.worker_id ? patch.worker_id : current.worker_id
+    // Only a task manager may hand a task to a different worker.
+    const workerId = can(c, 'tasks.manage_all') && patch.worker_id ? patch.worker_id : current.worker_id
     const status = patch.status ? normalizeTaskStatus(patch.status) : current.status
     const now = new Date().toISOString()
     const next: Task = normalizeTask({
       ...current,
       ...patch,
       worker_id: workerId,
+      client_id: patch.client_id !== undefined ? resolveClientId(c.data, patch.client_id) : current.client_id,
       status,
       title: patch.title !== undefined ? String(patch.title).trim() || current.title : current.title,
       // Stamp the first time it reaches Completed; clear it when it moves back.
@@ -1109,7 +1322,7 @@ export const localBackend: DataBackend = {
     if (!c) return { data: null, error: 'Not signed in.' }
     const task = c.data.tasks.find((t) => t.id === id)
     if (!task) return { data: null, error: 'Task not found.' }
-    if (c.user.role === 'worker' && task.worker_id !== c.user.workerId) {
+    if (!can(c, 'tasks.manage_all') && task.worker_id !== c.user.workerId) {
       return { data: null, error: 'You can only move your own tasks.' }
     }
     const target = normalizeTaskStatus(status)
@@ -1127,7 +1340,7 @@ export const localBackend: DataBackend = {
     if (!c) return { data: null, error: 'Not signed in.' }
     const task = c.data.tasks.find((t) => t.id === id)
     if (!task) return { data: null, error: null }
-    if (c.user.role === 'worker' && task.worker_id !== c.user.workerId) {
+    if (!can(c, 'tasks.manage_all') && task.worker_id !== c.user.workerId) {
       return { data: null, error: 'You can only delete your own tasks.' }
     }
     c.data.tasks = c.data.tasks.filter((t) => t.id !== id)
@@ -1153,6 +1366,8 @@ export const localBackend: DataBackend = {
     const seed = buildDemoSeed()
     const seededWorkers: Worker[] = seed.workers.map((w) => ({ ...w, id: uid() }))
     const idMap = new Map(seed.workers.map((w, i) => [w.id, seededWorkers[i].id]))
+    const seedClients: Client[] = seed.clients.map((cl) => ({ ...cl, id: uid() }))
+    const seedClientMap = new Map(seed.clients.map((cl, i) => [cl.id, seedClients[i].id]))
     const users = readUsers()
     for (const w of seededWorkers) {
       if (w.email && !users.some((u) => u.email === w.email)) {
@@ -1162,13 +1377,19 @@ export const localBackend: DataBackend = {
     writeUsers(users)
     const next: UserData = {
       workers: seededWorkers,
-      entries: seed.entries.map((e) => ({ ...e, worker_id: idMap.get(e.worker_id) || e.worker_id, id: uid() })),
+      entries: seed.entries.map((e) => ({
+        ...e,
+        worker_id: idMap.get(e.worker_id) || e.worker_id,
+        client_id: e.client_id ? seedClientMap.get(e.client_id) ?? null : null,
+        id: uid(),
+      })),
       activeTimers: [],
       settings: seed.settings,
       comments: [],
       notifications: [],
       payments: [],
       tasks: [],
+      clients: seedClients,
     }
     save(next)
     return { data: null, error: null }

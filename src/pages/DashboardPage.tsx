@@ -14,7 +14,7 @@ import { money, formatMinutes, formatDate } from '@/lib/utils'
 import { dateRangeFor, filterEntriesInRange, summarizeEntries, hoursByWorker } from '@/lib/stats'
 
 export function DashboardPage() {
-  const { entries, workers, settings, dataLoading } = useStore()
+  const { entries, workers, clients, settings, dataLoading, can } = useStore()
   const navigate = useNavigate()
   const currency = settings?.currency || 'USD'
 
@@ -114,7 +114,7 @@ export function DashboardPage() {
                         </div>
                         <div>
                           <p className="font-medium">{w?.name || 'Unknown'}</p>
-                          <p className="text-xs text-muted-foreground">{formatDate(e.start_time)} · {e.project || 'No project'}</p>
+                          <p className="text-xs text-muted-foreground">{formatDate(e.start_time)} · {clients.find((c) => c.id === e.client_id)?.name || e.project || 'No client'}</p>
                         </div>
                       </div>
                       <div className="text-right">
@@ -130,7 +130,7 @@ export function DashboardPage() {
         </Card>
       </div>
 
-      {!dataLoading && workers.length > 0 && (
+      {!dataLoading && workers.length > 0 && can('entries.manage') && (
         <Button className="w-full sm:w-auto" onClick={() => navigate('/entries?new=1')}>
           <Plus className="mr-1 h-4 w-4" /> Add time
         </Button>

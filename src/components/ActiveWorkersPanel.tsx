@@ -23,7 +23,7 @@ interface Row {
  * running timer, whether they are working or on a break, and for how long.
  */
 export function ActiveWorkersPanel() {
-  const { activeTimers, workers, dataLoading } = useStore()
+  const { activeTimers, workers, clients, dataLoading } = useStore()
   const [now, setNow] = useState(Date.now())
 
   useEffect(() => {
@@ -115,7 +115,10 @@ export function ActiveWorkersPanel() {
                     </div>
                     <p className="truncate text-xs text-muted-foreground">
                       Since {formatDateTime(r.timer.start_time)}
-                      {r.timer.project ? ` · ${r.timer.project}` : ''}
+                      {(() => {
+                        const scope = clients.find((c) => c.id === r.timer.client_id)?.name || r.timer.project
+                        return scope ? ` · ${scope}` : ''
+                      })()}
                     </p>
                   </div>
                 </div>

@@ -14,6 +14,8 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { ClientSelect } from '@/components/ClientSelect'
+import { ManageClientsDialog } from '@/components/ManageClientsDialog'
 import { toast } from 'sonner'
 import { computeEarnings, computeTotalMinutes, formatMinutes } from '@/lib/utils'
 import { money } from '@/lib/utils'
@@ -24,7 +26,8 @@ interface FormState {
   startTime: string
   endTime: string
   breakMin: string
-  project: string
+  /** Which client the time is booked to (replaces the old free-text project). */
+  clientId: string
   notes: string
   rate: string
 }
@@ -50,9 +53,11 @@ export function EntryFormDialog({
   entry: TimeEntry | null
   defaultWorkerId?: string
 }) {
-  const { workers, createEntry, updateEntry, settings } = useStore()
+  const { workers, activeClients, createEntry, updateEntry, settings } = useStore()
   const activeWorkers = workers.filter((w) => w.status === 'active')
   const pickable = activeWorkers.length > 0 ? activeWorkers : workers
+  const noClients = activeClients.length === 0
+  const [clientsOpen, setClientsOpen] = useState(false)
 
   const [form, setForm] = useState<FormState>({
     workerId: '',
@@ -60,7 +65,7 @@ export function EntryFormDialog({
     startTime: '09:00',
     endTime: '17:00',
     breakMin: '0',
-    project: '',
+    clientId: '',
     notes: '',
     rate: '20',
   })
@@ -77,7 +82,7 @@ export function EntryFormDialog({
           startTime: timeInput(start),
           endTime: timeInput(end),
           breakMin: String(entry.break_minutes),
-          project: entry.project || '',
+          clientId: entry.client_id || '',
           notes: entry.notes || '',
           rate: String(entry.hourly_rate),
         })
@@ -90,8 +95,8 @@ export function EntryFormDialog({
           startTime: '09:00',
           endTime: '17:00',
           breakMin: '0',
-          // Pre-filled from the worker's assigned Project Scope (editable).
-          project: w?.position?.trim() || '',
+          // One client on the list is not a choice — pre-pick it.
+          clientId: activeClients.length === 1 ? activeClients[0].id : '',
           notes: '',
           rate: String(w?.hourly_rate ?? settings?.default_hourly_rate ?? 20),
         })
@@ -107,18 +112,8 @@ export function EntryFormDialog({
 
   function handleWorkerChange(id: string) {
     const w = workers.find((x) => x.id === id)
-    setForm((f) => {
-      const previous = workers.find((x) => x.id === f.workerId)
-      // Only re-seed the project while it still holds the previous worker's
-      // scope (or is empty) — never overwrite something typed by hand.
-      const untouched = !f.project.trim() || f.project.trim() === (previous?.position?.trim() || '')
-      return {
-        ...f,
-        workerId: id,
-        rate: String(w?.hourly_rate ?? f.rate),
-        project: !entry && untouched ? (w?.position?.trim() || '') : f.project,
-      }
-    })
+    // The client stays as picked — it describes the work, not the worker.
+    setForm((f) => ({ ...f, workerId: id, rate: String(w?.hourly_rate ?? f.rate) }))
   }
 
   const totalMinutes = (() => {
@@ -158,10 +153,17 @@ export function EntryFormDialog({
       toast.error('Break cannot be longer than the total work duration.')
       return
     }
+    if (!form.clientId && !noClients) {
+      toast.error('Choose the client this time was worked for.')
+      return
+    }
     setSaving(true)
     const payload = {
       worker_id: form.workerId,
-      project: form.project.trim() || null,
+      client_id: form.clientId || null,
+      // Legacy free-text scope: preserved on entries that already have one,
+      // never set on new ones (the client replaced it).
+      project: entry?.project ?? null,
       start_time: start.toISOString(),
       end_time: end.toISOString(),
       break_minutes: brk,
@@ -231,8 +233,31 @@ export function EntryFormDialog({
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="e-project">Project / task</Label>
-            <Input id="e-project" value={form.project} onChange={(e) => set('project', e.target.value)} placeholder="Website Redesign" />
+            <div className="flex items-center justify-between gap-2">
+              <Label htmlFor="e-client">Client</Label>
+              <button
+                type="button"
+                onClick={() => setClientsOpen(true)}
+                className="text-xs font-medium text-primary underline-offset-2 hover:underline"
+              >
+                Manage clients
+              </button>
+            </div>
+            <ClientSelect
+              id="e-client"
+              value={form.clientId}
+              onValueChange={(v) => set('clientId', v)}
+              disabled={noClients}
+              placeholder={noClients ? 'No active clients yet' : 'Choose a client'}
+            />
+            {noClients && (
+              <p className="text-xs text-muted-foreground">Add a client first — time is booked against one.</p>
+            )}
+            {entry?.project && (
+              <p className="text-xs text-muted-foreground">
+                Logged before clients existed as “{entry.project}”.
+              </p>
+            )}
           </div>
 
           <div className="space-y-2">
@@ -252,6 +277,8 @@ export function EntryFormDialog({
           </DialogFooter>
         </form>
       </DialogContent>
+
+      <ManageClientsDialog open={clientsOpen} onOpenChange={setClientsOpen} />
     </Dialog>
   )
 }

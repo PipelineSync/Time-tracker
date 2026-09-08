@@ -27,6 +27,11 @@ export interface Worker {
   payment_methods: PaymentMethod[]
   /** Uploaded QR code image (data URL), required while 'qr' is enabled. */
   qr_code_url: string | null
+  /**
+   * Admin capabilities granted to this worker (empty for a plain worker).
+   * Enforced in the app, in both backends and — with Supabase — in RLS.
+   */
+  permissions: Permission[]
   created_at: string
   updated_at: string
 }
@@ -34,6 +39,13 @@ export interface Worker {
 export interface TimeEntry {
   id: string
   worker_id: string
+  /** The client this time was worked for (see the Clients master list). */
+  client_id: string | null
+  /**
+   * Legacy free-text scope, replaced by `client_id`. Entries logged before
+   * clients existed keep their text so nothing is lost; new entries leave it
+   * null and the UI shows the client instead.
+   */
   project: string | null
   start_time: string // ISO
   end_time: string // ISO
@@ -57,6 +69,9 @@ export interface TimeEntry {
 export interface ActiveTimer {
   id: string
   worker_id: string
+  /** The client picked at clock-in; copied onto the entry at clock-out. */
+  client_id: string | null
+  /** @deprecated legacy free-text scope, kept for timers started before clients. */
   project: string | null
   start_time: string // ISO
   notes: string | null
@@ -76,11 +91,218 @@ export interface Settings {
   avatar_url: string | null
 }
 
+// ---- Worker permissions ----------------------------------------------------
+
+/**
+ * An admin capability that can be handed to an individual worker.
+ *
+ * By default a worker has NONE of these: they clock in, see their own time and
+ * their own board, and that is it. The admin grants extra access per worker
+ * when creating (or editing) them — a `.view` key opens the team-wide read,
+ * a `.manage` key adds the admin's write actions in that area.
+ *
+ * The keys are the single source of truth: the app gates nav, routes and
+ * buttons on them, both backends check them, and (with Supabase) the RLS
+ * policies in supabase/worker-permissions.sql check the very same list, so a
+ * granted worker really can read the rows — and an ungranted one cannot, even
+ * if they call the API directly.
+ */
+export type Permission =
+  | 'dashboard.view'
+  | 'workers.view'
+  | 'workers.manage'
+  | 'entries.view_all'
+  | 'entries.manage'
+  | 'tasks.view_all'
+  | 'tasks.manage_all'
+  | 'payments.view_all'
+  | 'payments.manage'
+  | 'reports.view'
+  | 'clients.manage'
+  | 'settings.manage'
+
+export const PERMISSIONS: Permission[] = [
+  'dashboard.view',
+  'workers.view',
+  'workers.manage',
+  'entries.view_all',
+  'entries.manage',
+  'tasks.view_all',
+  'tasks.manage_all',
+  'payments.view_all',
+  'payments.manage',
+  'reports.view',
+  'clients.manage',
+  'settings.manage',
+]
+
+/**
+ * Capabilities that put other people's data on the screen. Anyone holding one
+ * of them can also read the worker list — team-wide rows are useless without
+ * the names to go with them — even if the Workers page itself is not open to
+ * them. (The `workers` RLS policy checks the same set.)
+ */
+export const TEAM_VIEW_PERMISSIONS: Permission[] = [
+  'workers.view',
+  'dashboard.view',
+  'entries.view_all',
+  'tasks.view_all',
+  'payments.view_all',
+  'reports.view',
+]
+
+/** Grouped for the "Access" section of the worker form. */
+export interface PermissionGroup {
+  key: string
+  label: string
+  description: string
+  items: { key: Permission; label: string; hint: string; /** Needs this one ticked first. */ requires?: Permission }[]
+}
+
+export const PERMISSION_GROUPS: PermissionGroup[] = [
+  {
+    key: 'dashboard',
+    label: 'Dashboard',
+    description: "The admin's overview of the whole team.",
+    items: [
+      { key: 'dashboard.view', label: 'View the team dashboard', hint: 'Totals, who is on the clock, recent activity across every worker.' },
+    ],
+  },
+  {
+    key: 'workers',
+    label: 'Workers',
+    description: 'The team list and worker accounts.',
+    items: [
+      { key: 'workers.view', label: 'View all workers', hint: 'See the team list, rates and live clock status.' },
+      { key: 'workers.manage', label: 'Add, edit and remove workers', hint: 'Create logins, change rates, reset passwords, delete workers — and change what other workers can access.', requires: 'workers.view' },
+    ],
+  },
+  {
+    key: 'entries',
+    label: 'Time entries',
+    description: "Everyone's recorded time.",
+    items: [
+      { key: 'entries.view_all', label: "View the whole team's time", hint: 'Otherwise they only ever see their own entries.' },
+      { key: 'entries.manage', label: 'Add, edit and delete time entries', hint: 'Manual entries for any worker, and editing or deleting existing ones.', requires: 'entries.view_all' },
+    ],
+  },
+  {
+    key: 'tasks',
+    label: 'Tasks',
+    description: 'The kanban board.',
+    items: [
+      { key: 'tasks.view_all', label: "View everyone's board", hint: 'Otherwise they only see the tasks assigned to them.' },
+      { key: 'tasks.manage_all', label: "Assign and edit anyone's tasks", hint: 'Create tasks for other workers, move, edit and delete their cards.', requires: 'tasks.view_all' },
+    ],
+  },
+  {
+    key: 'payments',
+    label: 'Payments',
+    description: 'Settlements and payouts.',
+    items: [
+      { key: 'payments.view_all', label: "View the team's payments", hint: 'Otherwise they only see their own payslips.' },
+      { key: 'payments.manage', label: 'Settle and mark payments paid', hint: 'Run settlements, change payment status, delete payments.', requires: 'payments.view_all' },
+    ],
+  },
+  {
+    key: 'reports',
+    label: 'Reports',
+    description: 'Charts and CSV export.',
+    items: [
+      { key: 'reports.view', label: 'View reports and export CSV', hint: 'Hours and earnings across the team, per worker and per client.' },
+    ],
+  },
+  {
+    key: 'clients',
+    label: 'Clients',
+    description: 'The client master list.',
+    items: [
+      { key: 'clients.manage', label: 'Manage clients', hint: 'Add clients, rename them, and mark them active or inactive.' },
+    ],
+  },
+  {
+    key: 'settings',
+    label: 'Business settings',
+    description: 'Workspace-wide configuration.',
+    items: [
+      { key: 'settings.manage', label: 'Change business settings', hint: 'Business name, currency, timezone, default rate and the Slack integration.' },
+    ],
+  },
+]
+
+/** Ready-made sets, so the common cases are one click in the worker form. */
+export type PermissionPreset = 'worker' | 'supervisor' | 'manager' | 'full'
+
+export const PERMISSION_PRESETS: Record<PermissionPreset, { label: string; description: string; permissions: Permission[] }> = {
+  worker: {
+    label: 'Worker',
+    description: 'Their own time and their own tasks. The default.',
+    permissions: [],
+  },
+  supervisor: {
+    label: 'Supervisor',
+    description: "Sees the team and runs everyone's board, but no money.",
+    permissions: ['dashboard.view', 'workers.view', 'entries.view_all', 'tasks.view_all', 'tasks.manage_all'],
+  },
+  manager: {
+    label: 'Manager',
+    description: 'Supervisor plus time entries, clients, payments and reports.',
+    permissions: [
+      'dashboard.view',
+      'workers.view',
+      'entries.view_all',
+      'entries.manage',
+      'tasks.view_all',
+      'tasks.manage_all',
+      'payments.view_all',
+      'payments.manage',
+      'reports.view',
+      'clients.manage',
+    ],
+  },
+  full: {
+    label: 'Full access',
+    description: 'Everything the admin can do, including worker accounts and settings.',
+    permissions: [...PERMISSIONS],
+  },
+}
+
+/** Keep only real permission keys (rows can be edited outside the app). */
+export function normalizePermissions(value: unknown): Permission[] {
+  if (!Array.isArray(value)) return []
+  const seen = new Set<Permission>()
+  for (const v of value) if (PERMISSIONS.includes(v as Permission)) seen.add(v as Permission)
+  // A `.manage` key without its `.view` parent would be meaningless — the UI
+  // hides the section entirely — so imply the parent instead of dropping it.
+  for (const group of PERMISSION_GROUPS) {
+    for (const item of group.items) {
+      if (item.requires && seen.has(item.key)) seen.add(item.requires)
+    }
+  }
+  return PERMISSIONS.filter((p) => seen.has(p))
+}
+
+/** Which preset (if any) a permission set matches exactly. */
+export function presetFor(permissions: Permission[]): PermissionPreset | null {
+  const sorted = [...permissions].sort().join('|')
+  for (const [name, preset] of Object.entries(PERMISSION_PRESETS)) {
+    if ([...preset.permissions].sort().join('|') === sorted) return name as PermissionPreset
+  }
+  return null
+}
+
 export interface AuthUser {
   id: string
   email: string
   role: Role
   workerId?: string | null
+  /**
+   * The signed-in worker's granted capabilities, resolved at sign-in so the
+   * nav and routes are correct on the very first render. The admin implicitly
+   * has all of them. Refreshed from the worker row on every data sync, so a
+   * change by the admin lands without the worker signing out.
+   */
+  permissions?: Permission[]
 }
 
 export type Theme = 'light' | 'dark' | 'system'
@@ -196,6 +418,55 @@ export const DEFAULT_SLACK_SETTINGS: SlackSettings = {
   notify_payment_paid: true,
 }
 
+
+// ---- Clients ---------------------------------------------------------------
+
+export type ClientStatus = 'active' | 'inactive'
+
+/**
+ * Colour tag on a client, used for its badge on kanban cards / entries and for
+ * its slice of the "Hours by client" chart. Deliberately a small fixed set so
+ * the board stays legible and the palette survives a theme switch.
+ */
+export type ClientColor = 'blue' | 'aqua' | 'violet' | 'emerald' | 'amber' | 'orange' | 'rose' | 'slate'
+
+export const CLIENT_COLORS: ClientColor[] = ['blue', 'aqua', 'violet', 'emerald', 'amber', 'orange', 'rose', 'slate']
+
+export const DEFAULT_CLIENT_COLOR: ClientColor = 'blue'
+
+/** Badge / dot classes plus the hex recharts needs for the client charts. */
+export const ClientColorStyles: Record<ClientColor, { badge: string; dot: string; chart: string }> = {
+  blue: { badge: 'border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-300', dot: 'bg-blue-500', chart: '#0868D9' },
+  aqua: { badge: 'border-cyan-500/30 bg-cyan-500/10 text-cyan-700 dark:text-cyan-300', dot: 'bg-cyan-500', chart: '#36B7C9' },
+  violet: { badge: 'border-violet-500/30 bg-violet-500/10 text-violet-700 dark:text-violet-300', dot: 'bg-violet-500', chart: '#8B5CF6' },
+  emerald: { badge: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300', dot: 'bg-emerald-500', chart: '#10B981' },
+  amber: { badge: 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300', dot: 'bg-amber-500', chart: '#F59E0B' },
+  orange: { badge: 'border-orange-500/30 bg-orange-500/10 text-orange-700 dark:text-orange-300', dot: 'bg-orange-500', chart: '#F77A0A' },
+  rose: { badge: 'border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-300', dot: 'bg-rose-500', chart: '#F43F5E' },
+  slate: { badge: 'border-slate-500/30 bg-slate-500/10 text-slate-700 dark:text-slate-300', dot: 'bg-slate-500', chart: '#64748B' },
+}
+
+/**
+ * The client rows created by the migration/backfill for work logged before
+ * clients existed. Kept by name so both backends agree on it.
+ */
+export const UNASSIGNED_CLIENT_NAME = 'Unassigned'
+
+/**
+ * A customer the team does work for. The admin keeps the master list: any
+ * number of clients, each active or inactive. Only ACTIVE clients are offered
+ * when assigning a task or clocking in; inactive ones stay on their existing
+ * tasks and entries (and in reports) so history never loses its label.
+ */
+export interface Client {
+  id: string
+  name: string
+  color: ClientColor
+  status: ClientStatus
+  created_at: string
+  updated_at: string
+}
+
 /**
  * Columns of the task board. Tasks move between them by drag & drop (or the
  * "Move to" menu on touch devices); the order is the order they appear in.
@@ -232,6 +503,12 @@ export interface Task {
   id: string
   /** The worker the task belongs to. */
   worker_id: string
+  /**
+   * The client the task is for. Required on everything created from the app;
+   * nullable only so rows written before clients existed still load (the
+   * migration backfills those to the "Unassigned" client).
+   */
+  client_id: string | null
   title: string
   description: string | null
   status: TaskStatus

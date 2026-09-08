@@ -12,6 +12,8 @@ import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { EntryFormDialog } from '@/components/EntryFormDialog'
 import { EntryChatDialog } from '@/components/EntryChatDialog'
 import { EmptyState } from '@/components/EmptyState'
+import { ClientBadge } from '@/components/ClientBadge'
+import { ClientSelect } from '@/components/ClientSelect'
 import { toast } from 'sonner'
 import { Plus, ListChecks, Pencil, Trash2, Copy, Search, X, MessageSquare } from 'lucide-react'
 import type { TimeEntry } from '@/lib/types'
@@ -22,7 +24,10 @@ type SortKey = 'date' | 'worker' | 'hours' | 'earnings'
 type SortDir = 'asc' | 'desc'
 
 export function EntriesPage() {
-  const { workers, entries, deleteEntry, duplicateEntry, settings, dataLoading, isAdmin } = useStore()
+  const { workers, entries, clients, deleteEntry, duplicateEntry, settings, dataLoading, can } = useStore()
+  // Adding, editing and deleting time is an admin capability the admin can
+  // also hand to a worker; without it this page is read-only.
+  const canManage = can('entries.manage')
   const [params, setParams] = useSearchParams()
   const [editing, setEditing] = useState<TimeEntry | null>(null)
   const [formOpen, setFormOpen] = useState(false)
@@ -32,7 +37,7 @@ export function EntriesPage() {
   const [chatOpen, setChatOpen] = useState(false)
 
   const [workerFilter, setWorkerFilter] = useState('all')
-  const [projectFilter, setProjectFilter] = useState('all')
+  const [clientFilter, setClientFilter] = useState('all')
   const [settleFilter, setSettleFilter] = useState<'all' | 'unsettled' | 'settled'>('all')
   const [dateFilter, setDateFilter] = useState('all')
   const [fromDate, setFromDate] = useState('')
@@ -78,18 +83,15 @@ export function EntriesPage() {
     if (changed) setParams(next, { replace: true })
   }, [params, setParams, entries])
 
-  const projects = useMemo(() => {
-    const set = new Set<string>()
-    for (const e of entries) if (e.project) set.add(e.project)
-    return Array.from(set).sort()
-  }, [entries])
-
   const workerName = (id: string) => workers.find((w) => w.id === id)?.name || 'Unknown'
+  const clientOf = (id: string | null) => (id ? clients.find((c) => c.id === id) ?? null : null)
+  /** What an entry is booked to: its client, or its legacy free-text scope. */
+  const scopeLabel = (e: TimeEntry) => clientOf(e.client_id)?.name || e.project || ''
 
   const filtered = useMemo(() => {
     let list = entries
     if (workerFilter !== 'all') list = list.filter((e) => e.worker_id === workerFilter)
-    if (projectFilter !== 'all') list = list.filter((e) => e.project === projectFilter)
+    if (clientFilter !== 'all') list = list.filter((e) => e.client_id === clientFilter)
     // Settling keeps the entries, so the admin can still narrow down to the time
     // that has (or has not) been paid out yet.
     if (settleFilter === 'settled') list = list.filter((e) => Boolean(e.settled_at))
@@ -112,7 +114,7 @@ export function EntriesPage() {
       const q = search.toLowerCase()
       list = list.filter((e) =>
         workerName(e.worker_id).toLowerCase().includes(q) ||
-        (e.project || '').toLowerCase().includes(q) ||
+        scopeLabel(e).toLowerCase().includes(q) ||
         (e.notes || '').toLowerCase().includes(q)
       )
     }
@@ -126,12 +128,12 @@ export function EntriesPage() {
       return sortDir === 'asc' ? cmp : -cmp
     })
     return sorted
-  }, [entries, workerFilter, projectFilter, settleFilter, dateFilter, fromDate, toDate, search, sortKey, sortDir]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [entries, workerFilter, clientFilter, settleFilter, dateFilter, fromDate, toDate, search, sortKey, sortDir]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // A new filter means a new list — start it at the first page again.
   useEffect(() => {
     setVisibleCount(200)
-  }, [workerFilter, projectFilter, settleFilter, dateFilter, search, fromDate, toDate, sortKey, sortDir])
+  }, [workerFilter, clientFilter, settleFilter, dateFilter, search, fromDate, toDate, sortKey, sortDir])
 
   const visible = filtered.slice(0, visibleCount)
 
@@ -149,7 +151,7 @@ export function EntriesPage() {
 
   const hasFilters =
     workerFilter !== 'all' ||
-    projectFilter !== 'all' ||
+    clientFilter !== 'all' ||
     settleFilter !== 'all' ||
     dateFilter !== 'all' ||
     search !== '' ||
@@ -158,7 +160,7 @@ export function EntriesPage() {
 
   function clearFilters() {
     setWorkerFilter('all')
-    setProjectFilter('all')
+    setClientFilter('all')
     setSettleFilter('all')
     setDateFilter('all')
     setFromDate('')
@@ -186,7 +188,14 @@ export function EntriesPage() {
           )}
         </span>
       </td>
-      <td className="px-4 py-3 align-middle">{e.project || '—'}</td>
+      <td className="px-4 py-3 align-middle">
+        {e.client_id ? (
+          <ClientBadge client={clientOf(e.client_id)} showInactive={false} />
+        ) : (
+          // Logged before clients existed: show whatever scope text it carries.
+          <span className="text-muted-foreground">{e.project || '—'}</span>
+        )}
+      </td>
       <td className="px-4 py-3 align-middle whitespace-nowrap">{formatTime(e.start_time)}</td>
       <td className="px-4 py-3 align-middle whitespace-nowrap">{formatTime(e.end_time)}</td>
       <td className="px-4 py-3 align-middle">{e.break_minutes > 0 ? `${e.break_minutes}m` : '—'}</td>
@@ -197,7 +206,7 @@ export function EntriesPage() {
       <td className="px-4 py-3 align-middle">
         <div className="flex items-center justify-end gap-1">
           <Button variant="ghost" size="iconSm" onClick={() => { setChatEntry(e); setChatOpen(true); }} aria-label="Notes"><MessageSquare className="h-4 w-4" /></Button>
-          {isAdmin && (
+          {canManage && (
             <>
               <Button variant="ghost" size="iconSm" onClick={() => { setEditing(e); setFormOpen(true); }} aria-label="Edit"><Pencil className="h-4 w-4" /></Button>
               <Button variant="ghost" size="iconSm" onClick={() => handleDuplicate(e)} aria-label="Duplicate"><Copy className="h-4 w-4" /></Button>
@@ -212,7 +221,7 @@ export function EntriesPage() {
   return (
     <div className="space-y-6">
       <PageHeader title="Time Entries" description="Review and manage all recorded time.">
-        {isAdmin && (
+        {canManage && (
           <Button onClick={() => { setEditing(null); setFormOpen(true); }}>
             <Plus className="mr-1" /> Manual entry
           </Button>
@@ -226,7 +235,7 @@ export function EntriesPage() {
             <div className="lg:col-span-2">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <Input className="pl-9" placeholder="Search worker, project, notes…" value={search} onChange={(e) => setSearch(e.target.value)} />
+                <Input className="pl-9" placeholder="Search worker, client, notes…" value={search} onChange={(e) => setSearch(e.target.value)} />
               </div>
             </div>
             <Select value={workerFilter} onValueChange={setWorkerFilter}>
@@ -236,13 +245,7 @@ export function EntriesPage() {
                 {workers.map((w) => <SelectItem key={w.id} value={w.id}>{w.name}</SelectItem>)}
               </SelectContent>
             </Select>
-            <Select value={projectFilter} onValueChange={setProjectFilter}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All projects</SelectItem>
-                {projects.map((p) => <SelectItem key={p} value={p}>{p}</SelectItem>)}
-              </SelectContent>
-            </Select>
+            <ClientSelect value={clientFilter} onValueChange={setClientFilter} includeAll />
             <Select value={dateFilter} onValueChange={setDateFilter}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
@@ -308,7 +311,7 @@ export function EntriesPage() {
           icon={ListChecks}
           title="No time entries"
           description={hasFilters ? 'No entries match your filters.' : 'Track time with the timer or add a manual entry.'}
-          action={!hasFilters && isAdmin ? <Button onClick={() => { setEditing(null); setFormOpen(true); }}><Plus className="mr-1" /> Add entry</Button> : undefined}
+          action={!hasFilters && canManage ? <Button onClick={() => { setEditing(null); setFormOpen(true); }}><Plus className="mr-1" /> Add entry</Button> : undefined}
         />
       ) : (
         <>
@@ -320,7 +323,7 @@ export function EntriesPage() {
                   <tr>
                     <th className="px-4 py-3 font-medium">Date</th>
                     <th className="px-4 py-3 font-medium">Worker</th>
-                    <th className="px-4 py-3 font-medium">Project</th>
+                    <th className="px-4 py-3 font-medium">Client</th>
                     <th className="px-4 py-3 font-medium">Start</th>
                     <th className="px-4 py-3 font-medium">End</th>
                     <th className="px-4 py-3 font-medium">Break</th>
@@ -359,7 +362,13 @@ export function EntriesPage() {
                     </div>
                     <span className="font-semibold">{money(e.earnings, currency)}</span>
                   </div>
-                  {e.project && <p className="mt-2 text-sm">{e.project}</p>}
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    {e.client_id ? (
+                      <ClientBadge client={clientOf(e.client_id)} showInactive={false} />
+                    ) : (
+                      e.project && <span className="text-sm">{e.project}</span>
+                    )}
+                  </div>
                   <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
                     <span>⏱ {formatMinutes(e.total_minutes)}</span>
                     {e.break_minutes > 0 && <span>Break {e.break_minutes}m</span>}
@@ -368,7 +377,7 @@ export function EntriesPage() {
                   {e.notes && <p className="mt-2 text-sm text-muted-foreground">{e.notes}</p>}
                   <div className="mt-3 flex gap-2">
                     <Button variant="outline" size="sm" className="flex-1 gap-1" onClick={() => { setChatEntry(e); setChatOpen(true); }}><MessageSquare className="h-3.5 w-3.5" /> Notes</Button>
-                    {isAdmin && (
+                    {canManage && (
                       <>
                         <Button variant="outline" size="sm" className="flex-1 gap-1" onClick={() => { setEditing(e); setFormOpen(true); }}><Pencil className="h-3.5 w-3.5" /> Edit</Button>
                         <Button variant="outline" size="sm" className="flex-1 gap-1" onClick={() => handleDuplicate(e)}><Copy className="h-3.5 w-3.5" /> Duplicate</Button>
