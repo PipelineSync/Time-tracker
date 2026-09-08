@@ -194,13 +194,15 @@ export const DEFAULT_SLACK_SETTINGS: SlackSettings = {
  * Columns of the task board. Tasks move between them by drag & drop (or the
  * "Move to" menu on touch devices); the order is the order they appear in.
  */
-export type TaskStatus = 'todo' | 'in_progress' | 'completed'
+export type TaskStatus = 'todo' | 'in_progress' | 'waiting' | 'approval' | 'completed'
 
-export const TASK_STATUSES: TaskStatus[] = ['todo', 'in_progress', 'completed']
+export const TASK_STATUSES: TaskStatus[] = ['todo', 'in_progress', 'waiting', 'approval', 'completed']
 
 export const TaskStatusNames: Record<TaskStatus, string> = {
   todo: 'To Do',
   in_progress: 'In Progress',
+  waiting: 'Waiting',
+  approval: 'Approval',
   completed: 'Completed',
 }
 

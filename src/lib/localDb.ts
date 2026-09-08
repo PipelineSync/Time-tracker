@@ -16,7 +16,7 @@ import type {
   TaskStatus,
   TaskPriority,
 } from './types'
-import { DEFAULT_SLACK_SETTINGS } from './types'
+import { DEFAULT_SLACK_SETTINGS, TASK_STATUSES } from './types'
 import type { BackendResult, DataBackend, CreateWorkerInput, CreateTaskInput } from './backend'
 import { ACCOUNT_DEACTIVATED_MESSAGE } from './backend'
 import { buildDemoSeed } from './demoSeed'
@@ -108,7 +108,7 @@ function normalizeWorker(w: Worker): Worker {
 
 /** Valid board column, defaulting anything unknown/legacy to To Do. */
 function normalizeTaskStatus(status: unknown): TaskStatus {
-  return status === 'in_progress' || status === 'completed' ? status : 'todo'
+  return TASK_STATUSES.includes(status as TaskStatus) ? (status as TaskStatus) : 'todo'
 }
 
 function normalizeTaskPriority(priority: unknown): TaskPriority {

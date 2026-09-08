@@ -11,6 +11,8 @@ import {
   CheckCircle2,
   Circle,
   Loader2,
+  PauseCircle,
+  BadgeCheck,
 } from 'lucide-react'
 import { useStore } from '@/lib/store'
 import type { Task, TaskPriority, TaskStatus } from '@/lib/types'
@@ -30,6 +32,8 @@ import { cn, formatDate } from '@/lib/utils'
 const columnStyles: Record<TaskStatus, { icon: typeof Circle; dot: string; ring: string }> = {
   todo: { icon: Circle, dot: 'bg-slate-400', ring: 'ring-slate-400/40' },
   in_progress: { icon: Loader2, dot: 'bg-amber-500', ring: 'ring-amber-500/40' },
+  waiting: { icon: PauseCircle, dot: 'bg-orange-500', ring: 'ring-orange-500/40' },
+  approval: { icon: BadgeCheck, dot: 'bg-violet-500', ring: 'ring-violet-500/40' },
   completed: { icon: CheckCircle2, dot: 'bg-emerald-500', ring: 'ring-emerald-500/40' },
 }
 
@@ -54,8 +58,10 @@ export function TasksPage() {
   const [editing, setEditing] = useState<Task | null>(null)
   const [formStatus, setFormStatus] = useState<TaskStatus>('todo')
   const [deleting, setDeleting] = useState<Task | null>(null)
-  // Admin-only filter: one worker's board, or everyone's.
+  // Admin-only filters: one worker's board (or everyone's) and one stage (or
+  // all of them). Both narrow the same board rather than changing its shape.
   const [workerFilter, setWorkerFilter] = useState<string>('all')
+  const [stageFilter, setStageFilter] = useState<'all' | TaskStatus>('all')
   // Drag state. `dragging` is the card under the pointer; `dropTarget` is the
   // column (and index) it would land in — used to draw the placeholder.
   const [dragging, setDragging] = useState<Task | null>(null)
@@ -72,7 +78,8 @@ export function TasksPage() {
   }, [tasks, isAdmin, user?.workerId, workerFilter])
 
   const columns = useMemo(() => {
-    const grouped: Record<TaskStatus, Task[]> = { todo: [], in_progress: [], completed: [] }
+    // Derived from TASK_STATUSES so adding a stage never needs a change here.
+    const grouped = Object.fromEntries(TASK_STATUSES.map((s) => [s, [] as Task[]])) as Record<TaskStatus, Task[]>
     for (const t of visible) grouped[t.status]?.push(t)
     for (const status of TASK_STATUSES) {
       grouped[status].sort((a, b) => a.position - b.position || b.created_at.localeCompare(a.created_at))
@@ -84,6 +91,10 @@ export function TasksPage() {
     () => workers.filter((w) => tasks.some((t) => t.worker_id === w.id)),
     [workers, tasks]
   )
+
+  // Which lanes to render. Filtering by stage hides the other lanes entirely
+  // rather than emptying them, so the board stays a board.
+  const shownStages = stageFilter === 'all' ? TASK_STATUSES : [stageFilter]
 
   function openNew(status: TaskStatus) {
     setEditing(null)
@@ -315,18 +326,41 @@ export function TasksPage() {
             : 'Your board. Drag a card between stages as you work through it.'
         }
       >
-        {isAdmin && workersWithTasks.length > 0 && (
-          <Select value={workerFilter} onValueChange={setWorkerFilter}>
-            <SelectTrigger className="w-[190px]">
-              <SelectValue placeholder="All workers" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All workers</SelectItem>
-              {workersWithTasks.map((w) => (
-                <SelectItem key={w.id} value={w.id}>{w.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+        {isAdmin && (
+          <>
+            <Select value={workerFilter} onValueChange={setWorkerFilter}>
+              <SelectTrigger className="w-[170px]">
+                <SelectValue placeholder="All workers" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All workers</SelectItem>
+                {workersWithTasks.map((w) => (
+                  <SelectItem key={w.id} value={w.id}>{w.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            <Select value={stageFilter} onValueChange={(v) => setStageFilter(v as 'all' | TaskStatus)}>
+              <SelectTrigger className="w-[170px]">
+                <SelectValue placeholder="All stages" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All stages</SelectItem>
+                {TASK_STATUSES.map((st) => (
+                  <SelectItem key={st} value={st}>{TaskStatusNames[st]}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            {(workerFilter !== 'all' || stageFilter !== 'all') && (
+              <Button
+                variant="ghost"
+                onClick={() => { setWorkerFilter('all'); setStageFilter('all') }}
+              >
+                Clear filters
+              </Button>
+            )}
+          </>
         )}
         <Button onClick={() => openNew('todo')}>
           <Plus className="mr-2 h-4 w-4" /> New task
@@ -354,7 +388,7 @@ export function TasksPage() {
         // Vertical board: the three stages stack top-to-bottom, each one a
         // full-width lane you scroll through and drag between.
         <div className="flex flex-col gap-4">
-          {TASK_STATUSES.map((status) => (
+          {shownStages.map((status) => (
             <Column key={status} status={status} />
           ))}
         </div>

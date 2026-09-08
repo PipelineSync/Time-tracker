@@ -20,7 +20,7 @@ create table if not exists public.tasks (
   worker_id       uuid not null references public.workers (id) on delete cascade,
   title           text not null check (length(btrim(title)) between 1 and 200),
   description     text,
-  status          text not null default 'todo' check (status in ('todo','in_progress','completed')),
+  status          text not null default 'todo' check (status in ('todo','in_progress','waiting','approval','completed')),
   priority        text not null default 'medium' check (priority in ('low','medium','high')),
   due_date        date,
   -- Manual ordering inside a column (smaller sorts first).
@@ -38,6 +38,12 @@ create index if not exists tasks_worker_idx on public.tasks (worker_id);
 -- The board's exact query: one worker's column, in board order.
 create index if not exists tasks_worker_status_position_idx
   on public.tasks (worker_id, status, position);
+
+-- Databases that ran the earlier 3-stage version of this migration: widen the
+-- allowed stages to include Waiting and Approval.
+alter table public.tasks drop constraint if exists tasks_status_check;
+alter table public.tasks add constraint tasks_status_check
+  check (status in ('todo','in_progress','waiting','approval','completed'));
 
 alter table public.tasks enable row level security;
 
