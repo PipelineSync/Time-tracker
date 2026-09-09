@@ -18,6 +18,8 @@ const PERMISSIONS = [
   'reports.view',
   'clients.manage',
   'settings.manage',
+  'finance.view',
+  'finance.manage',
 ] as const
 
 /** Never trust the client with the grant list — keep only known keys. */
@@ -64,6 +66,28 @@ export default async function handler(request: Request) {
       .insert({ ...row, permissions })
       .select()
       .single()
+    let warning: string | undefined
+    if (
+      workerError &&
+      workerError.message &&
+      /workers_permissions_valid/.test(workerError.message)
+    ) {
+      // The database's permission allow-list predates supabase/finance.sql,
+      // which widens it with the finance.* keys. Retry with the older keys
+      // only, so the worker still gets everything else they were granted.
+      const legacy = permissions.filter((p) => !p.startsWith('finance.'))
+      if (legacy.length !== permissions.length) {
+        ;({ data: worker, error: workerError } = await sb
+          .from('workers')
+          .insert({ ...row, permissions: legacy })
+          .select()
+          .single())
+        if (!workerError) {
+          warning =
+            'Finance access was not saved: run supabase/finance.sql in the Supabase SQL editor to widen the allowed permission keys.'
+        }
+      }
+    }
     if (workerError && /permissions/i.test(workerError.message || '')) {
       // Database without supabase/worker-permissions.sql: still create the
       // worker, just without the extra access.
@@ -83,7 +107,7 @@ export default async function handler(request: Request) {
       return json(400, { error: profileError.message })
     }
 
-    return json(200, { worker })
+    return json(200, warning ? { worker, warning } : { worker })
   } catch (error) {
     return json(500, { error: error instanceof Error ? error.message : 'Server error.' })
   }

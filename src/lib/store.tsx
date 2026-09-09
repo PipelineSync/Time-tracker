@@ -534,19 +534,27 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const createWorker = useCallback(async (input: CreateWorkerInput) => {
     const res = await backend.createWorker(input)
+    if (res.error) toast.error(res.error)
     if (res.error || !res.data) return null
     rememberAvatar(res.data)
     await refreshData()
     return res.data
-  }, [backend, refreshData, rememberAvatar])
+  }, [backend, refreshData, rememberAvatar, toast])
 
   const updateWorker = useCallback(async (id: string, patch: Partial<Worker> & { newPassword?: string }) => {
     const res = await backend.updateWorker(id, patch)
-    if (res.error || !res.data) return null
+    if (res.error) toast.error(res.error)
+    if (res.error || !res.data) {
+      // Even on a rejected save the database may have applied part of the
+      // patch (e.g. an unmigrated permission allow-list saves everything but
+      // the new access keys), so re-read rather than leave stale rows.
+      await refreshData()
+      return null
+    }
     rememberAvatar(res.data)
     await refreshData()
     return res.data
-  }, [backend, refreshData, rememberAvatar])
+  }, [backend, refreshData, rememberAvatar, toast])
 
   const deleteWorker = useCallback(async (id: string) => {
     const res = await backend.deleteWorker(id)

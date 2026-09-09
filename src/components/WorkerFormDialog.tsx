@@ -93,24 +93,30 @@ export function WorkerFormDialog({
         permissions,
         newPassword: newPassword || undefined,
       })
-      if (!res) toast.error('Failed to update worker.')
-      else toast.success(newPassword ? 'Worker updated and password changed.' : 'Worker updated.')
-    } else {
-      const res = await createWorker({
-        name: name.trim(),
-        email: accountEmail.trim() || undefined,
-        hourly_rate: parsedRate,
-        status,
-        position: position.trim(),
-        permissions,
-        accountEmail: accountEmail.trim(),
-        accountPassword: password,
-      })
-      if (!res) toast.error('Failed to create worker.')
-      else toast.success('Worker and login account created.')
+      setSaving(false)
+      // A failed save keeps the dialog open (the store surfaces the real
+      // backend reason as a toast) so the admin doesn't lose their edits.
+      if (res) {
+        toast.success(newPassword ? 'Worker updated and password changed.' : 'Worker updated.')
+        onOpenChange(false)
+      }
+      return
     }
+    const res = await createWorker({
+      name: name.trim(),
+      email: accountEmail.trim() || undefined,
+      hourly_rate: parsedRate,
+      status,
+      position: position.trim(),
+      permissions,
+      accountEmail: accountEmail.trim(),
+      accountPassword: password,
+    })
     setSaving(false)
-    onOpenChange(false)
+    if (res) {
+      toast.success('Worker and login account created.')
+      onOpenChange(false)
+    }
   }
 
   return (
@@ -154,13 +160,15 @@ export function WorkerFormDialog({
             )}
 
             <div className="space-y-2">
-              <Label htmlFor="w-position">Position/Role *</Label>
+              <Label htmlFor="w-position">Position/Role</Label>
+              {/* Optional on purpose: a required field left empty on an
+                  existing worker (e.g. one added before Position existed)
+                  would silently block the whole save with no feedback. */}
               <Input
                 id="w-position"
                 value={position}
                 onChange={(e) => setPosition(e.target.value)}
                 placeholder="e.g. Frontend developer"
-                required
               />
               <p className="text-xs text-muted-foreground">
                 Their position or role, shown on their profile. Time entries are tagged with the

@@ -36,6 +36,15 @@ const anonKey = (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.en
 const PERMISSIONS_MIGRATION_MESSAGE =
   'Worker access levels need the database migration supabase/worker-permissions.sql to be applied. Everything else was saved.'
 
+/** Shown when the database's permission allow-list predates supabase/finance.sql. */
+const FINANCE_PERMISSIONS_MIGRATION_MESSAGE =
+  'Finance access was not saved: run supabase/finance.sql in the Supabase SQL editor — it widens the allowed permission keys with the finance.* access. Everything else was saved.'
+
+/** Postgres raises 23514 when the workers_permissions_valid check rejects a key. */
+function isPermissionsCheckViolation(error: { code?: string; message?: string } | null): boolean {
+  return Boolean(error && /workers_permissions_valid/.test(error.message || ''))
+}
+
 export function isSupabaseConfigured(): boolean {
   return Boolean(url && anonKey)
 }
@@ -882,8 +891,11 @@ export const supabaseBackend: DataBackend = {
           accountPassword: input.accountPassword,
         }),
       })
-      const payload = await response.json().catch(() => ({})) as { worker?: Worker; error?: string }
+      const payload = await response.json().catch(() => ({})) as {
+        worker?: Worker; error?: string; warning?: string
+      }
       if (!response.ok) return fail(payload.error || 'Failed to create worker account.')
+      if (payload.warning) console.warn('[TimeTracker]', payload.warning)
       return ok(payload.worker ?? null)
     } catch (e) {
       return fail(mapErr(e))
@@ -897,6 +909,14 @@ export const supabaseBackend: DataBackend = {
     const { newPassword, ...rest } = patch as { newPassword?: string } & Partial<Worker>
     if (rest.permissions) rest.permissions = normalizePermissions(rest.permissions)
     let upd = await client().from('workers').update(rest).eq('id', id).select().single()
+    if (upd.error && isPermissionsCheckViolation(upd.error) && rest.permissions?.some((p) => p.startsWith('finance.'))) {
+      // The database's permission allow-list predates supabase/finance.sql,
+      // which widens it with the finance.* keys. Save everything the old list
+      // accepts and tell the admin exactly what to run.
+      const legacy = normalizePermissions(rest.permissions.filter((p) => !p.startsWith('finance.')))
+      upd = await client().from('workers').update({ ...rest, permissions: legacy }).eq('id', id).select().single()
+      if (!upd.error) return fail(FINANCE_PERMISSIONS_MIGRATION_MESSAGE)
+    }
     if (upd.error && isMissingColumn(upd.error, 'permissions') && rest.permissions) {
       // Database without supabase/worker-permissions.sql: save everything else
       // and tell the admin why the access tick boxes did not stick.
