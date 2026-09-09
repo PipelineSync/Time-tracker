@@ -7,8 +7,9 @@ import { TimerDisplay } from '@/components/TimerDisplay'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { ClockOutDialog } from '@/components/ClockOutDialog'
 import { ClockInDialog } from '@/components/ClockInDialog'
+import { SwitchClientDialog } from '@/components/SwitchClientDialog'
 import { toast } from 'sonner'
-import { Square, Pause, PlayCircle, LogIn, TimerReset } from 'lucide-react'
+import { Square, Pause, PlayCircle, LogIn, TimerReset, Repeat } from 'lucide-react'
 import { formatMinutes, money, timerElapsedMs } from '@/lib/utils'
 
 /**
@@ -16,13 +17,15 @@ import { formatMinutes, money, timerElapsedMs } from '@/lib/utils'
  * The admin has no start-timer — they add time via manual entries.
  */
 export function TrackerPage() {
-  const { workers, entries, clients, activeClients, activeTimer, startTimer, pauseTimer, resumeTimer, stopTimer, cancelTimer, settings, user, dataLoading } = useStore()
+  const { workers, entries, clients, activeClients, activeTimer, startTimer, pauseTimer, resumeTimer, stopTimer, switchClient, cancelTimer, settings, user, dataLoading } = useStore()
 
   const [starting, setStarting] = useState(false)
   const [busy, setBusy] = useState(false)
   const [confirmCancel, setConfirmCancel] = useState(false)
   const [clockOutOpen, setClockOutOpen] = useState(false)
   const [clockInOpen, setClockInOpen] = useState(false)
+  const [switchOpen, setSwitchOpen] = useState(false)
+  const [switching, setSwitching] = useState(false)
   const [now, setNow] = useState(Date.now())
 
   const workerProfile = user?.workerId ? workers.find((w) => w.id === user.workerId) : null
@@ -120,6 +123,19 @@ export function TrackerPage() {
     )
   }
 
+  async function handleSwitchClient(input: { clientId: string; notes: string }) {
+    setSwitching(true)
+    const res = await switchClient(input.clientId, input.notes)
+    setSwitching(false)
+    if (res.error || !res.data) {
+      toast.error(res.error || 'Could not switch client. Please try again.')
+      return
+    }
+    setSwitchOpen(false)
+    const toClient = clients.find((c) => c.id === res.data!.client_id)?.name || null
+    toast.success(`Switched to ${toClient || 'a new client'} — your clock is still running.`)
+  }
+
   if (dataLoading && workers.length === 0 && !user?.workerId) {
     return (
       <div className="space-y-6">
@@ -169,6 +185,11 @@ export function TrackerPage() {
               ) : (
                 <Button size="lg" variant="secondary" className="gap-2" onClick={handleResume} disabled={busy}>
                   <PlayCircle className="h-5 w-5" /> Resume
+                </Button>
+              )}
+              {running && (
+                <Button size="lg" variant="outline" className="gap-2" onClick={() => setSwitchOpen(true)} disabled={busy || switching}>
+                  <Repeat className="h-5 w-5" /> Switch client
                 </Button>
               )}
               <Button size="lg" variant="default" className="gap-2 bg-[#06245B] hover:bg-[#0a306e] dark:bg-white dark:text-[#06245B] dark:hover:bg-white/90" onClick={() => setClockOutOpen(true)} disabled={busy}>
@@ -230,6 +251,16 @@ export function TrackerPage() {
         defaultClientId={lastClientId}
         onConfirm={async ({ clientId, notes }) => {
           await handleClockIn({ clientId, notes })
+        }}
+      />
+
+      <SwitchClientDialog
+        open={switchOpen}
+        onOpenChange={setSwitchOpen}
+        workerName={workerProfile?.name || null}
+        currentClientId={myTimer?.client_id ?? null}
+        onConfirm={async ({ clientId, notes }) => {
+          await handleSwitchClient({ clientId, notes })
         }}
       />
 

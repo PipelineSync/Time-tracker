@@ -20,6 +20,8 @@ export function ClientSelect({
   allLabel = 'All clients',
   placeholder = 'Choose a client',
   disabled = false,
+  /** A client to hide from the options (e.g. the one already in use). */
+  excludeId,
   className,
 }: {
   value: string
@@ -29,17 +31,19 @@ export function ClientSelect({
   allLabel?: string
   placeholder?: string
   disabled?: boolean
+  excludeId?: string
   className?: string
 }) {
   const { clients, activeClients } = useStore()
 
   const options = useMemo(() => {
-    const list = [...activeClients]
+    let list = [...activeClients]
+    if (excludeId) list = list.filter((c) => c.id !== excludeId)
     // Keep the current selection visible even after it has been retired.
     const current = clients.find((c) => c.id === value)
     if (current && current.status === 'inactive') list.push(current)
     return list
-  }, [activeClients, clients, value])
+  }, [activeClients, clients, value, excludeId])
 
   return (
     <Select value={value} onValueChange={onValueChange} disabled={disabled}>

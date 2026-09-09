@@ -986,6 +986,66 @@ export const localBackend: DataBackend = {
     return { data: entry, error: null }
   },
 
+  async switchClient(input) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (c.user.role !== 'worker') return { data: null, error: 'Only workers can switch the client they are working for.' }
+    const workerId = c.user.workerId
+    if (!workerId) return { data: null, error: 'No worker profile linked to this account.' }
+    const timer = c.data.activeTimers.find((t) => t.worker_id === workerId)
+    if (!timer) return { data: null, error: 'No active timer.' }
+    const newClientId = resolveClientId(c.data, input.client_id)
+    if (!newClientId) return { data: null, error: 'Choose a client.' }
+    if (timer.client_id === newClientId) {
+      return { data: null, error: "You're already working for that client." }
+    }
+    const now = new Date()
+    // Close the old segment exactly like a clock-out would (an in-progress
+    // break is folded in, so a switch while paused ends the break).
+    let totalPause = timer.total_pause_ms || 0
+    if (timer.paused && timer.pause_start) {
+      totalPause += now.getTime() - new Date(timer.pause_start).getTime()
+    }
+    const workingMs = Math.max(0, now.getTime() - new Date(timer.start_time).getTime() - totalPause)
+    const totalMinutes = Math.max(0, Math.round(workingMs / 60000))
+    const breakMinutes = Math.max(0, Math.round(totalPause / 60000))
+    // The finished stretch is booked to the client the worker was on before
+    // the switch; it carries the shift's original note.
+    const entry: TimeEntry = {
+      id: uid(),
+      worker_id: timer.worker_id,
+      client_id: timer.client_id ?? null,
+      project: timer.project || null,
+      start_time: timer.start_time,
+      end_time: now.toISOString(),
+      break_minutes: breakMinutes,
+      notes: timer.notes || null,
+      hourly_rate: timer.hourly_rate ?? 0,
+      total_minutes: totalMinutes,
+      earnings: computeEarnings(totalMinutes, timer.hourly_rate ?? 0),
+      created_at: now.toISOString(),
+      updated_at: now.toISOString(),
+    }
+    c.data.entries.push(entry)
+    c.data.activeTimers = c.data.activeTimers.filter((t) => t.id !== timer.id)
+    const next: ActiveTimer = {
+      id: uid(),
+      worker_id: timer.worker_id,
+      client_id: newClientId,
+      project: null,
+      start_time: now.toISOString(),
+      notes: typeof input.notes === 'string' && input.notes.trim() ? input.notes.trim() : null,
+      hourly_rate: timer.hourly_rate ?? 0,
+      paused: false,
+      pause_start: null,
+      total_pause_ms: 0,
+      created_at: now.toISOString(),
+    }
+    c.data.activeTimers.push(next)
+    save(c.data)
+    return { data: next, error: null }
+  },
+
   async deleteTimer(timerId) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }

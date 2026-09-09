@@ -1302,6 +1302,67 @@ export const supabaseBackend: DataBackend = {
     return ok(created)
   },
 
+  async switchClient(input) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (me.data!.role !== 'worker') return fail('Only workers can switch the client they are working for.')
+    if (!me.data!.workerId) return fail('Your account is not linked to a worker profile yet. Please ask your administrator to fix this.')
+    const { data: timer } = await client().from('active_timers').select('*').eq('id', input.timerId).maybeSingle()
+    if (!timer) return fail('No active timer found.')
+    if (timer.worker_id !== me.data!.workerId) return fail('Not your timer.')
+    const { data: targetClient } = await client().from('clients').select('id').eq('id', input.client_id).maybeSingle()
+    if (!targetClient) return fail('Choose a client.')
+    if (timer.client_id === input.client_id) return fail("You're already working for that client.")
+    const now = new Date()
+    // Close the old segment exactly like a clock-out would (an in-progress
+    // break is folded in, so a switch while paused ends the break). The
+    // finished stretch is booked to the client the worker was on before the
+    // switch and carries the shift's original note.
+    const totalPause = (timer.total_pause_ms || 0) + (timer.paused && timer.pause_start ? now.getTime() - new Date(timer.pause_start).getTime() : 0)
+    const workingMs = Math.max(0, now.getTime() - new Date(timer.start_time).getTime() - totalPause)
+    const totalMinutes = Math.max(0, Math.round(workingMs / 60000))
+    const breakMinutes = Math.max(0, Math.round(totalPause / 60000))
+    const splitEntry = {
+      worker_id: timer.worker_id,
+      client_id: timer.client_id ?? null,
+      project: timer.project || null,
+      start_time: timer.start_time,
+      end_time: now.toISOString(),
+      break_minutes: breakMinutes,
+      notes: timer.notes || null,
+      hourly_rate: timer.hourly_rate ?? 0,
+      total_minutes: totalMinutes,
+      earnings: computeEarnings(totalMinutes, timer.hourly_rate ?? 0),
+    }
+    const inserted = await withClientColumn<TimeEntry>((withClient) => {
+      const { client_id, ...rest } = splitEntry
+      const row = withClient ? { ...rest, client_id } : rest
+      return client().from('time_entries').insert(row).select().single() as PromiseLike<{ data: TimeEntry | null; error: { code?: string; message?: string } | null }>
+    })
+    if (inserted.error || !inserted.data) return fail(inserted.error?.message ?? 'Could not save the time before switching.')
+    // Only one running timer per worker, so the old one is replaced (delete
+    // before insert — the worker_id unique index would reject a second row).
+    await client().from('active_timers').delete().eq('id', input.timerId)
+    const notes = typeof input.notes === 'string' && input.notes.trim() ? input.notes.trim() : null
+    const created = await withClientColumn<ActiveTimer>((withClient) => client().from('active_timers').insert({
+      worker_id: timer.worker_id,
+      ...(withClient ? { client_id: input.client_id } : {}),
+      project: null,
+      start_time: now.toISOString(),
+      notes,
+      hourly_rate: timer.hourly_rate ?? 0,
+      paused: false,
+      pause_start: null,
+      total_pause_ms: 0,
+    }).select().single() as PromiseLike<{ data: ActiveTimer | null; error: { code?: string; message?: string } | null }>)
+    if (created.error || !created.data) {
+      // The split entry is saved but the fresh timer did not come up — tell
+      // the worker to clock in again so nothing is lost.
+      return fail(created.error?.message ?? 'The time was saved, but the switch did not complete. Please clock in again.')
+    }
+    return ok(created.data as ActiveTimer)
+  },
+
   async deleteTimer(timerId) {
     const me = await requireUser()
     if (me.error) return fail(me.error)

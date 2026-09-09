@@ -156,6 +156,12 @@ interface StoreValue {
   pauseTimer: (timerId?: string) => Promise<BackendResult<ActiveTimer>>
   resumeTimer: (timerId?: string) => Promise<BackendResult<ActiveTimer>>
   stopTimer: (note?: string) => Promise<BackendResult<TimeEntry>>
+  /**
+   * Worker-only: keep the clock running but move it to a different client. The
+   * time already worked is split into a finished entry for the old client and a
+   * fresh timer starts for the new one. Returns the new running timer.
+   */
+  switchClient: (clientId: string, notes?: string) => Promise<BackendResult<ActiveTimer>>
   cancelTimer: () => Promise<void>
 
   saveSettings: (patch: Partial<Settings>) => Promise<Settings | null>
@@ -682,6 +688,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return { data: res.data, error: null }
   }, [backend, activeTimer, refreshData, workers])
 
+  const switchClient = useCallback(async (clientId: string, notes?: string) => {
+    const current = activeTimer
+    if (!current) return { data: null, error: 'No timer is running.' }
+    const res = await backend.switchClient({
+      timerId: current.id,
+      client_id: clientId,
+      notes: notes?.trim() ? notes.trim() : undefined,
+    })
+    if (res.error || !res.data) return { data: null, error: res.error }
+    const nextTimer = res.data
+    // Optimistically show the fresh timer, then let a refresh reconcile the
+    // finished split entry + new running timer with the backend.
+    setActiveTimer(nextTimer)
+    setActiveTimers((prev) => [nextTimer, ...prev.filter((t) => t.id !== current.id)])
+    await refreshData()
+    return { data: nextTimer, error: null }
+  }, [backend, activeTimer, refreshData])
+
   const cancelTimer = useCallback(async () => {
     const current = activeTimer
     if (current) {
@@ -998,6 +1022,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     pauseTimer,
     resumeTimer,
     stopTimer,
+    switchClient,
     cancelTimer,
     saveSettings,
     getSlackSettings,
