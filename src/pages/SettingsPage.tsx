@@ -283,7 +283,7 @@ export function SettingsPage() {
               <CardHeader>
                 <CardTitle>Payment methods</CardTitle>
                 <CardDescription>
-                  Choose how you can be paid. Your manager sees the methods you accept on the Payments page — including your QR code when you enable QR Code payments.
+                  Choose how you can be paid. Your manager sees the methods you accept under Finance → Payroll — including your QR code when you enable QR Code payments.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-5">
@@ -362,7 +362,7 @@ export function SettingsPage() {
                           />
                           <p className="text-xs text-muted-foreground">
                             {qrCode
-                              ? 'Save to apply. Your manager can view and scan this QR code on the Payments page.'
+                              ? 'Save to apply. Your manager can view and scan this QR code under Finance → Payroll.'
                               : 'A screenshot or photo of your payment QR code (JPG or PNG).'}
                           </p>
                         </div>

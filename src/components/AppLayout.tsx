@@ -47,7 +47,9 @@ const NAV = {
   entriesMine: { to: '/entries', label: 'My Time', shortLabel: 'Time', icon: ListChecks },
   tasksAll: { to: '/tasks', label: 'Tasks', shortLabel: 'Tasks', icon: KanbanSquare },
   tasksMine: { to: '/tasks', label: 'My Tasks', shortLabel: 'Tasks', icon: KanbanSquare },
-  payments: { to: '/payments', label: 'Payments', shortLabel: 'Pay', icon: Wallet },
+  // The Payments section lives inside Finance → Payroll now; workers without
+  // Finance access get the direct, honestly-named "Payroll" entry.
+  payroll: { to: '/finance?tab=payroll', label: 'Payroll', shortLabel: 'Pay', icon: Wallet },
   finance: { to: '/finance', label: 'Finance', shortLabel: 'Finance', icon: Landmark },
   workers: { to: '/workers', label: 'Workers', shortLabel: 'Workers', icon: Users },
   reports: { to: '/reports', label: 'Reports', shortLabel: 'Reports', icon: BarChart3 },
@@ -61,7 +63,7 @@ const NAV = {
  */
 function buildNav(isAdmin: boolean, can: (p: Permission) => boolean): NavItem[] {
   if (isAdmin) {
-    return [NAV.dashboard, NAV.entriesAll, NAV.tasksAll, NAV.payments, NAV.finance, NAV.workers, NAV.reports, NAV.settings]
+    return [NAV.dashboard, NAV.entriesAll, NAV.tasksAll, NAV.finance, NAV.workers, NAV.reports, NAV.settings]
   }
   const items: NavItem[] = []
   if (can('dashboard.view')) items.push(NAV.dashboard)
@@ -69,9 +71,10 @@ function buildNav(isAdmin: boolean, can: (p: Permission) => boolean): NavItem[] 
   items.push(NAV.tracker)
   items.push(can('entries.view_all') ? NAV.entriesAll : NAV.entriesMine)
   items.push(can('tasks.view_all') ? NAV.tasksAll : NAV.tasksMine)
-  items.push(NAV.payments)
-  // Finance appears for a worker only when the admin grants it (off by default).
-  if (can('finance.view')) items.push(NAV.finance)
+  // Payments now live in Finance → Payroll. Workers always get in (their own
+  // payment history sits in the Payroll tab); the extra tabs and the ledger
+  // appear only once the admin grants Finance access (off by default).
+  items.push(can('finance.view') ? NAV.finance : NAV.payroll)
   if (can('workers.view')) items.push(NAV.workers)
   if (can('reports.view')) items.push(NAV.reports)
   items.push(NAV.settings)

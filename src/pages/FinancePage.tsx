@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   AlertTriangle,
   CalendarClock,
@@ -12,8 +12,10 @@ import {
   Trash2,
   Undo2,
 } from 'lucide-react'
+import { useSearchParams } from 'react-router-dom'
 import { useStore } from '@/lib/store'
 import { PageHeader } from '@/components/PageHeader'
+import { PaymentsPanel } from '@/components/PaymentsPanel'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -82,19 +84,41 @@ function FinanceStatusLabel({ item }: { item: FinanceItem }) {
 }
 
 /**
- * The Finance section — subscriptions, worker payroll and bill due dates.
+ * The Finance section — subscriptions, worker payroll and bill due dates,
+ * plus the former standalone Payments section, now under the Payroll tab.
  *
- * Admin-only unless the admin grants a worker `finance.view` (Workers →
- * Access → Finance); `finance.manage` additionally opens the edit controls.
+ * Admin-only content unless the admin grants a worker `finance.view` (Workers
+ * → Access → Finance); `finance.manage` additionally opens the edit controls.
  * A viewer without manage gets the same screens with every write action
  * hidden — the backends and the database policies refuse the writes anyway.
+ * Anyone the admin has NOT granted Finance access still lands here on the
+ * Payroll tab, showing only their own payment history (the nav labels that
+ * entry "Payroll" instead of "Finance").
  */
 export function FinancePage() {
   const { financeItems, workers, entries, settings, can, dataLoading, updateFinanceItem, deleteFinanceItem } = useStore()
   const canManage = can('finance.manage')
+  const canFinance = can('finance.view')
   const currency = settings?.currency || 'USD'
 
-  const [tab, setTab] = useState<'due' | 'subscriptions' | 'payroll'>('due')
+  const [params, setParams] = useSearchParams()
+  const urlTab = params.get('tab')
+  const [tab, setTab] = useState<'due' | 'subscriptions' | 'payroll'>(
+    urlTab === 'payroll' || urlTab === 'subscriptions' || urlTab === 'due' ? urlTab : 'due'
+  )
+  function changeTab(v: 'due' | 'subscriptions' | 'payroll') {
+    setTab(v)
+    // Keep the URL honest so the Payroll deep link (nav, PWA, /payments
+    // redirect) and the visible tab agree after a reload or a share.
+    const next = new URLSearchParams(params)
+    next.set('tab', v)
+    setParams(next, { replace: true })
+  }
+  // Follow navigations that happen outside the tab strip (nav link, redirect).
+  useEffect(() => {
+    const t = params.get('tab')
+    if (t === 'due' || t === 'subscriptions' || t === 'payroll') setTab(t)
+  }, [params])
   const [month, setMonth] = useState(currentMonthKey())
   const [subDialog, setSubDialog] = useState<{ open: boolean; item: FinanceItem | null }>({ open: false, item: null })
   const [payDialog, setPayDialog] = useState<{ open: boolean; item: FinanceItem | null }>({ open: false, item: null })
@@ -146,6 +170,18 @@ export function FinancePage() {
   const loading = dataLoading && financeItems.length === 0
   const ledgerEmpty = financeItems.length === 0
 
+  // No Finance access at all: this is the worker's "Payroll" screen — their
+  // own payments only. The ledger tabs, the summary and other workers' rows
+  // simply do not render (and the backends never send them anyway).
+  if (!canFinance) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="Payroll" description="Your payment history and how you get paid." />
+        <PaymentsPanel />
+      </div>
+    )
+  }
+
   const addButtons = canManage && (
     <>
       {tab === 'subscriptions' && (
@@ -180,8 +216,8 @@ export function FinancePage() {
         title="Finance"
         description={
           canManage
-            ? 'Subscriptions, worker payroll and due dates for the business.'
-            : "Subscriptions, worker payroll and due dates. You can view the ledger; only the admin can change it."
+            ? 'Subscriptions, worker payroll, due dates and settlements for the business.'
+            : "Subscriptions, worker payroll, due dates and settlements. You can view the ledger; only the admin can change it."
         }
       >
         {addButtons}
@@ -220,7 +256,7 @@ export function FinancePage() {
         />
       </div>
 
-      <Tabs value={tab} onValueChange={(v) => setTab(v as 'due' | 'subscriptions' | 'payroll')}>
+      <Tabs value={tab} onValueChange={(v) => changeTab(v as 'due' | 'subscriptions' | 'payroll')}>
         <TabsList>
           <TabsTrigger value="due">Due dates</TabsTrigger>
           <TabsTrigger value="subscriptions">Subscriptions</TabsTrigger>
@@ -523,6 +559,18 @@ export function FinancePage() {
               )}
             </CardContent>
           </Card>
+          {/* The former standalone Payments section, moved under Payroll:
+              settlements from tracked time, mark-paid (cash/QR), notes. */}
+          <div className="border-t pt-6">
+            <h2 className="mb-4 flex items-center gap-2 text-base font-semibold">
+              <HandCoins className="h-4 w-4 text-muted-foreground" />
+              Payments &amp; settlements
+              <span className="text-sm font-normal text-muted-foreground">
+                — settled from tracked time, paid out separately from the payroll runs above
+              </span>
+            </h2>
+            <PaymentsPanel />
+          </div>
         </TabsContent>
       </Tabs>
 

@@ -188,10 +188,10 @@ interface StoreValue {
   deletePayment: (id: string) => Promise<boolean>
 
   // ---- Finance (admin-only until the admin grants `finance.view`) ----
-  // The ledger tracks what must go out and when. Hour-based settlements stay
-  // on the Payments page; marking a finance line paid here does not create a
-  // Payment row — the two ledgers describe different things (fixed pay and
-  // bills vs. settled tracked time).
+  // The ledger tracks what must go out and when. Hour-based settlements live
+  // in the same section (Finance → Payroll) but keep their own Payment rows;
+  // marking a finance line paid here does not create one — the two ledgers
+  // describe different things (fixed pay and bills vs. settled tracked time).
   /** Add a subscription / payroll run / bill to the ledger. finance.manage. */
   createFinanceItem: (input: CreateFinanceItemInput) => Promise<FinanceItem | null>
   /** Patch a finance line (status, due date, amounts…). finance.manage. */
