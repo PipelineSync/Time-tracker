@@ -23,9 +23,16 @@ create table if not exists public.slack_settings (
   notify_break_start   boolean not null default true,
   notify_break_end     boolean not null default true,
   notify_payment_paid  boolean not null default true,
+  task_webhook_url     text,
+  notify_task_created  boolean not null default true,
+  notify_task_moved    boolean not null default true,
   created_at           timestamptz not null default now(),
   updated_at           timestamptz not null default now()
 );
+
+alter table public.slack_settings add column if not exists task_webhook_url text;
+alter table public.slack_settings add column if not exists notify_task_created boolean not null default true;
+alter table public.slack_settings add column if not exists notify_task_moved boolean not null default true;
 
 alter table public.slack_settings enable row level security;
 

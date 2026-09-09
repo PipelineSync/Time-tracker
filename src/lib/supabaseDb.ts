@@ -1354,6 +1354,9 @@ export const supabaseBackend: DataBackend = {
       notify_break_start: data.notify_break_start !== false,
       notify_break_end: data.notify_break_end !== false,
       notify_payment_paid: data.notify_payment_paid !== false,
+      task_webhook_url: (data.task_webhook_url as string | null) ?? null,
+      notify_task_created: data.notify_task_created !== false,
+      notify_task_moved: data.notify_task_moved !== false,
     })
   },
 
@@ -1371,6 +1374,9 @@ export const supabaseBackend: DataBackend = {
       notify_break_start: next.notify_break_start,
       notify_break_end: next.notify_break_end,
       notify_payment_paid: next.notify_payment_paid,
+      task_webhook_url: next.task_webhook_url?.trim() ? next.task_webhook_url.trim() : null,
+      notify_task_created: next.notify_task_created,
+      notify_task_moved: next.notify_task_moved,
     }
     // user_id is auto-filled with the workspace owner by the trg_slack_settings_user trigger.
     const { data, error } = await client().from('slack_settings').upsert(row, { onConflict: 'user_id' }).select().single()
@@ -1382,6 +1388,9 @@ export const supabaseBackend: DataBackend = {
       notify_break_start: data.notify_break_start !== false,
       notify_break_end: data.notify_break_end !== false,
       notify_payment_paid: data.notify_payment_paid !== false,
+      task_webhook_url: (data.task_webhook_url as string | null) ?? null,
+      notify_task_created: data.notify_task_created !== false,
+      notify_task_moved: data.notify_task_moved !== false,
     })
   },
 

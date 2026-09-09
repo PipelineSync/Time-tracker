@@ -19,6 +19,7 @@ import { DEFAULT_SLACK_SETTINGS } from '@/lib/types'
 export function SlackSettingsCard() {
   const { getSlackSettings, saveSlackSettings } = useStore()
   const [webhookUrl, setWebhookUrl] = useState('')
+  const [taskWebhookUrl, setTaskWebhookUrl] = useState('')
   const [toggles, setToggles] = useState<SlackSettings>({ ...DEFAULT_SLACK_SETTINGS })
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -31,12 +32,13 @@ export function SlackSettingsCard() {
       const cfg = s ?? { ...DEFAULT_SLACK_SETTINGS }
       setToggles(cfg)
       setWebhookUrl(cfg.webhook_url || '')
+      setTaskWebhookUrl(cfg.task_webhook_url || '')
       setLoading(false)
     })
     return () => { alive = false }
   }, [getSlackSettings])
 
-  function setToggle(key: keyof Pick<SlackSettings, 'notify_clock_in' | 'notify_clock_out' | 'notify_break_start' | 'notify_break_end' | 'notify_payment_paid'>, value: boolean) {
+  function setToggle(key: keyof Pick<SlackSettings, 'notify_clock_in' | 'notify_clock_out' | 'notify_break_start' | 'notify_break_end' | 'notify_payment_paid' | 'notify_task_created' | 'notify_task_moved'>, value: boolean) {
     setToggles((prev) => ({ ...prev, [key]: value }))
   }
 
@@ -49,11 +51,15 @@ export function SlackSettingsCard() {
       notify_break_start: toggles.notify_break_start,
       notify_break_end: toggles.notify_break_end,
       notify_payment_paid: toggles.notify_payment_paid,
+      task_webhook_url: taskWebhookUrl.trim() || null,
+      notify_task_created: toggles.notify_task_created,
+      notify_task_moved: toggles.notify_task_moved,
     })
     setSaving(false)
     if (!next) return false
     setToggles(next)
     setWebhookUrl(next.webhook_url || '')
+    setTaskWebhookUrl(next.task_webhook_url || '')
     return true
   }
 
@@ -61,13 +67,13 @@ export function SlackSettingsCard() {
     if (await persist()) toast.success('Slack settings saved.')
   }
 
-  async function onTest() {
+  async function onTest(channel: 'activity' | 'tasks') {
     if (!(await persist())) return
     setTesting(true)
-    const err = await sendSlackTestMessage()
+    const err = await sendSlackTestMessage(channel)
     setTesting(false)
     if (err) toast.error(err)
-    else toast.success('Test message sent — check your Slack channel.')
+    else toast.success(`${channel === 'tasks' ? 'Task' : 'Activity'} test message sent — check your Slack channel.`)
   }
 
   const toggleRows: Array<{ key: Parameters<typeof setToggle>[0]; label: string }> = [
@@ -76,6 +82,8 @@ export function SlackSettingsCard() {
     { key: 'notify_break_start', label: 'Break started' },
     { key: 'notify_break_end', label: 'Back from break' },
     { key: 'notify_payment_paid', label: 'Payment paid' },
+    { key: 'notify_task_created', label: 'Task created (task channel)' },
+    { key: 'notify_task_moved', label: 'Task moved to another stage (task channel)' },
   ]
 
   return (
@@ -97,7 +105,7 @@ export function SlackSettingsCard() {
         ) : (
           <>
             <div className="space-y-2">
-              <Label htmlFor="s-slack-webhook">Slack webhook URL</Label>
+              <Label htmlFor="s-slack-webhook">Tracker Update Webhook</Label>
               <Input
                 id="s-slack-webhook"
                 type="url"
@@ -123,6 +131,12 @@ export function SlackSettingsCard() {
             </div>
 
             <div className="space-y-2">
+              <Label htmlFor="s-task-slack-webhook">Task Update Webhook</Label>
+              <Input id="s-task-slack-webhook" type="url" value={taskWebhookUrl} onChange={(e) => setTaskWebhookUrl(e.target.value)} placeholder="https://hooks.slack.com/services/T000/B000/TASKS" autoComplete="off" />
+              <p className="text-xs text-muted-foreground">Choose the separate Slack channel for task creation and stage-change automation.{isSupabaseConfigured() && ' Leave empty to use the server-side TASK_SLACK_WEBHOOK_URL environment variable.'}</p>
+            </div>
+
+            <div className="space-y-2">
               <Label>Send a message when…</Label>
               <div className="divide-y rounded-md border">
                 {toggleRows.map((row) => (
@@ -138,8 +152,11 @@ export function SlackSettingsCard() {
               <Button onClick={onSave} disabled={saving}>
                 {saving && <Loader2 className="animate-spin" />} Save
               </Button>
-              <Button variant="outline" onClick={onTest} disabled={saving || testing}>
-                {testing ? <Loader2 className="animate-spin" /> : <Send />} Send test message
+              <Button variant="outline" onClick={() => onTest('activity')} disabled={saving || testing}>
+                {testing ? <Loader2 className="animate-spin" /> : <Send />} Test activity channel
+              </Button>
+              <Button variant="outline" onClick={() => onTest('tasks')} disabled={saving || testing}>
+                {testing ? <Loader2 className="animate-spin" /> : <Send />} Test task channel
               </Button>
             </div>
 

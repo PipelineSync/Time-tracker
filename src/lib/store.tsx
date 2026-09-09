@@ -820,20 +820,34 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return null
     }
     await refreshTasks()
-    return res.data
-  }, [backend, refreshTasks])
+    const task = res.data
+    const assignee = workers.find((w) => w.id === task.worker_id)?.name || 'Unassigned'
+    const client = clients.find((c) => c.id === task.client_id)?.name || 'No client'
+    const actor = isAdmin ? 'Admin' : (myWorker?.name || user?.email || 'A worker')
+    notifySlack('task_created', { task_id: task.id, demoText: `🆕 ${actor} created “${task.title}” · Assigned to ${assignee} · ${client} · ${task.priority} priority · Due ${task.due_date || 'none'}.` })
+    return task
+  }, [backend, refreshTasks, workers, clients, isAdmin, myWorker, user])
 
   const updateTask = useCallback(async (id: string, patch: Partial<Omit<Task, 'id' | 'created_at' | 'updated_at'>>) => {
+    const previous = tasks.find((t) => t.id === id)
     const res = await backend.updateTask(id, patch)
     if (res.error || !res.data) {
       toast.error(res.error || 'Could not save the task.')
       return null
     }
     await refreshTasks()
+    if (previous && patch.status && previous.status !== patch.status) {
+      const task = res.data
+      const assignee = workers.find((w) => w.id === task.worker_id)?.name || 'Unassigned'
+      const client = clients.find((c) => c.id === task.client_id)?.name || 'No client'
+      const actor = isAdmin ? 'Admin' : (myWorker?.name || user?.email || 'A worker')
+      notifySlack('task_moved', { task_id: task.id, previous_status: previous.status, demoText: `🔄 ${actor} moved “${task.title}” from ${previous.status} to ${task.status} · Assigned to ${assignee} · ${client} · ${task.priority} priority · Due ${task.due_date || 'none'}.` })
+    }
     return res.data
-  }, [backend, refreshTasks])
+  }, [backend, refreshTasks, tasks, workers, clients, isAdmin, myWorker, user])
 
   const moveTask = useCallback(async (id: string, status: TaskStatus, position: number) => {
+    const previous = tasks.find((t) => t.id === id)
     // Optimistic: the card follows the pointer immediately, then the backend's
     // authoritative ordering replaces it.
     setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, status } : t)))
@@ -844,8 +858,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return null
     }
     await refreshTasks()
+    if (previous && previous.status !== status) {
+      const task = res.data
+      const assignee = workers.find((w) => w.id === task.worker_id)?.name || 'Unassigned'
+      const client = clients.find((c) => c.id === task.client_id)?.name || 'No client'
+      const actor = isAdmin ? 'Admin' : (myWorker?.name || user?.email || 'A worker')
+      notifySlack('task_moved', { task_id: task.id, previous_status: previous.status, demoText: `🔄 ${actor} moved “${task.title}” from ${previous.status} to ${status} · Assigned to ${assignee} · ${client} · ${task.priority} priority · Due ${task.due_date || 'none'}.` })
+    }
     return res.data
-  }, [backend, refreshTasks])
+  }, [backend, refreshTasks, tasks, workers, clients, isAdmin, myWorker, user])
 
   const deleteTask = useCallback(async (id: string) => {
     const res = await backend.deleteTask(id)
