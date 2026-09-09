@@ -9,6 +9,7 @@ import {
   BarChart3,
   Settings,
   Wallet,
+  Landmark,
   LogOut,
   KeyRound,
   Moon,
@@ -47,6 +48,7 @@ const NAV = {
   tasksAll: { to: '/tasks', label: 'Tasks', shortLabel: 'Tasks', icon: KanbanSquare },
   tasksMine: { to: '/tasks', label: 'My Tasks', shortLabel: 'Tasks', icon: KanbanSquare },
   payments: { to: '/payments', label: 'Payments', shortLabel: 'Pay', icon: Wallet },
+  finance: { to: '/finance', label: 'Finance', shortLabel: 'Finance', icon: Landmark },
   workers: { to: '/workers', label: 'Workers', shortLabel: 'Workers', icon: Users },
   reports: { to: '/reports', label: 'Reports', shortLabel: 'Reports', icon: BarChart3 },
   settings: { to: '/settings', label: 'Settings', shortLabel: 'Settings', icon: Settings },
@@ -59,7 +61,7 @@ const NAV = {
  */
 function buildNav(isAdmin: boolean, can: (p: Permission) => boolean): NavItem[] {
   if (isAdmin) {
-    return [NAV.dashboard, NAV.entriesAll, NAV.tasksAll, NAV.payments, NAV.workers, NAV.reports, NAV.settings]
+    return [NAV.dashboard, NAV.entriesAll, NAV.tasksAll, NAV.payments, NAV.finance, NAV.workers, NAV.reports, NAV.settings]
   }
   const items: NavItem[] = []
   if (can('dashboard.view')) items.push(NAV.dashboard)
@@ -68,6 +70,8 @@ function buildNav(isAdmin: boolean, can: (p: Permission) => boolean): NavItem[] 
   items.push(can('entries.view_all') ? NAV.entriesAll : NAV.entriesMine)
   items.push(can('tasks.view_all') ? NAV.tasksAll : NAV.tasksMine)
   items.push(NAV.payments)
+  // Finance appears for a worker only when the admin grants it (off by default).
+  if (can('finance.view')) items.push(NAV.finance)
   if (can('workers.view')) items.push(NAV.workers)
   if (can('reports.view')) items.push(NAV.reports)
   items.push(NAV.settings)
@@ -213,7 +217,7 @@ export function AppLayout() {
               end={item.to === '/'}
               className={({ isActive }) =>
                 cn(
-                  // Tight labels keep seven destinations readable on a phone width.
+                  // Tight labels keep up to eight destinations readable on a phone width.
                   'flex flex-col items-center gap-0.5 overflow-hidden px-0.5 py-2 text-[10px] font-medium',
                   isActive ? 'text-primary' : 'text-muted-foreground'
                 )

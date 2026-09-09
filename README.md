@@ -46,7 +46,7 @@ Four one-click **presets** cover the usual cases, and any combination can be tic
 |---|---|
 | **Worker** | Nothing extra. Their own time and their own tasks. *(default)* |
 | **Supervisor** | Dashboard, the team list, everyone's time (read-only) and full control of **everyone's board**. No money. |
-| **Manager** | Supervisor + manual time entries, payments, reports and the client list. |
+| **Manager** | Supervisor + manual time entries, payments, finance (read-only), reports and the client list. |
 | **Full access** | Everything, including worker accounts and business settings. |
 
 The individual capabilities are **View** / **Manage** pairs per area:
@@ -58,11 +58,12 @@ The individual capabilities are **View** / **Manage** pairs per area:
 | Time entries | `entries.view_all` — everyone's time | `entries.manage` — add/edit/delete any entry |
 | Tasks | `tasks.view_all` — everyone's board | `tasks.manage_all` — assign, move, edit and delete anyone's cards |
 | Payments | `payments.view_all` — the team's payments | `payments.manage` — settle, mark paid, delete |
+| Finance | `finance.view` — the subscriptions / payroll / due-dates ledger | `finance.manage` — add, edit, mark paid, delete finance lines |
 | Reports | `reports.view` — charts + CSV export | — |
 | Clients | — | `clients.manage` — add, rename, retire clients |
 | Settings | — | `settings.manage` — business details, currency, default rate, Slack |
 
-Granting **any** team-wide view (dashboard, time, tasks, payments or reports) also lets that worker read the **worker list** — rows about other people are meaningless without the names — while the **Workers page** itself only appears with `workers.view`.
+Granting **any** team-wide view (dashboard, time, tasks, payments, finance or reports) also lets that worker read the **worker list** — rows about other people are meaningless without the names — while the **Workers page** itself only appears with `workers.view`.
 
 What a grant changes: the **navigation** gains that destination (and "My Time"/"My Tasks" become the team-wide "Time Entries"/"Tasks"), the **route** starts resolving, and the matching buttons appear. Nothing else about the person changes — a granted worker still clocks in and out like everyone else, and only the admin can wipe the workspace or load sample data.
 
@@ -80,6 +81,7 @@ It is enforced in three places, not just the UI: the **app** hides what you cann
 - **Settings → Profile** *(worker)* — workers upload their own **profile picture** from their account settings. The picture is saved to their worker profile and shows up **for the admin** next to their name on the Workers page, the Dashboard and the "On the clock now" panel — not just a bare name.
 - **Settings → Payment methods** *(worker)* — each worker chooses how they can be paid: **Cash**, **QR Code**, or both. Enabling **QR Code** requires uploading their QR code image (a screenshot/photo of their GCash, Maya, banking-app, etc. QR — the image is automatically downscaled before saving). The methods and QR image are saved on the worker's profile.
 - **Payments** — the admin turns a worker's unsettled time & earnings into a **settlement**: a **Reset & settle** action on a worker creates an **unpaid** payment for the time that has not been settled yet. **Time entries are never deleted by a settlement** — the entries it paid for are marked **Settled** (their hours, notes and comments all stay in Time Entries), so the next settlement only covers time worked since. An entry only disappears when the admin **deletes it by hand**. The admin then drives the status **unpaid → pending → paid** (with a "Back to unpaid" option) and can delete payments. When the admin clicks **Mark paid**, a dialog shows the **payment methods that worker accepts** (Cash / QR Code, with the QR image ready to scan) and the admin **picks the method they are paying with**; it is stored on the payment (`payments.payment_method`, see `supabase/payment-paid-method.sql`) and shown in the **Paid via** column of the history. The **worker** sees their own payments **read-only**, with no edit controls, and their own enabled methods and QR code at the top of the page.
+- **Finance** *(admin-only, per-worker access off by default)* — the business ledger in its own section: **subscriptions** (recurring services like Adobe or QuickBooks — name, amount, **monthly/yearly cycle**, next bill date; "Billed" rolls the date one cycle forward, and a paused subscription stops showing up), **worker payroll** (a run per worker per month — the amount is **pre-filled from what their tracked time earned** that month, editable, with a pay day that gets flagged when it passes) and **due dates** (a unified agenda of every open line — overdue first, red, then upcoming — plus one-off **bills** like rent or tax with their deadlines). Marking a payroll run or bill **paid** stamps it; the Payments page keeps its own settle-tracked-time flow untouched. Everything is **read-only** for a worker granted `finance.view`; adding, editing or marking paid needs `finance.manage`. See `supabase/finance.sql`.
 - **Clients** *(admin-managed, used by both roles)* — a **master list of every client** the team works for, opened from **Tasks → Clients**. The admin adds a client (name + one of eight **colour tags**), renames or re-colours it, and can **mark it inactive at any time**. Only **active** clients appear in the dropdowns when assigning a task or clocking in; an inactive client stays on the work it already labels (board, entries, reports) so history never loses its name. A client can only be **deleted while nothing uses it** — otherwise the app points you at *mark inactive* instead. Workers can **read** the list (they need it for their filters) but never change it. See `supabase/clients.sql`.
 - **Tasks** *(both roles)* — a **kanban board** with five stages: **To Do → In Progress → Waiting → Approval → Completed**, laid out as a **row of lanes** (it scrolls sideways one lane at a time on a phone). **Drag and drop** a card between lanes to change its stage (a drop indicator shows exactly where it will land, cards keep their manual order inside a lane, and dragging to the edge scrolls the row). On phones — or with a keyboard — the **‹ ›** buttons on each card move it one stage at a time instead of dragging. Every task belongs to a **client** and has a title, optional details, a **priority** (Low / Medium / High) and an optional **due date** (overdue cards are flagged in red). Each card shows its client's colour badge.
   - **Both roles** get a **client filter** and a **priority filter** over the board.
@@ -186,6 +188,8 @@ This creates the `workers`, `time_entries`, `active_timers`, `settings`, `paymen
 > For **Clients**, run **`supabase/clients.sql`** once. It creates the `clients` table (name, colour tag, active/inactive) with RLS policies that let the **admin manage the list** while **workers may only read it**, adds `client_id` to `tasks`, `time_entries` and `active_timers`, and **backfills** every existing task/entry to an **"Unassigned"** client so nothing is left untagged. Fresh installs get the table from `schema.sql`. Safe to re-run. Until it is applied the app still runs — it just reports an empty client list and leaves work untagged.
 >
 > **Shortcut:** if you have an existing database that predates both the Clients feature and per-worker access, **`supabase/RUN-THIS-clients-and-permissions.sql`** is a single copy-paste bundle of the two migrations below, in the right order, with verification queries at the end.
+>
+> For the **Finance** section, run **`supabase/finance.sql`** once. It creates the `finance_items` ledger (subscriptions, per-worker monthly payroll and one-off bills, all with due dates) with RLS that keeps it **admin-only**: a worker can read it only with `finance.view` and write only with `finance.manage`, both off by default. If the per-worker-permissions migration below has not been applied yet, the table is simply locked to the admin; re-run this file after it. Fresh installs get everything from `schema.sql`. Safe to re-run. Until it is applied the app still runs — the Finance section just reports an empty ledger.
 >
 > For **per-worker access** (letting the admin grant individual admin capabilities to individual workers), run **`supabase/worker-permissions.sql`** once. It adds `workers.permissions` (a validated `text[]`), the `public.has_permission(text)` helper, and widens the RLS policies on workers, time entries, timers, payments, tasks, clients, settings and entry comments with one extra "…or I hold this capability" branch each. Fresh installs get it from `schema.sql`. Safe to re-run. Until it is applied the app still runs — everyone keeps the classic admin/worker split, and saving the Access tick boxes reports that the migration is needed.
 >
@@ -321,6 +325,7 @@ time-tracker/
 ├─ supabase/schema.sql          # Database tables, RLS, triggers
 ├─ supabase/settle-keeps-entries.sql    # One-time migration: settlements keep time entries
 ├─ supabase/tasks.sql           # One-time migration: Tasks kanban board (+ per-role RLS)
+├─ supabase/finance.sql         # One-time migration: Finance ledger (subs, payroll, due dates)
 ├─ supabase/clients.sql         # One-time migration: Clients master list + client_id backfill
 ├─ supabase/worker-permissions.sql      # One-time migration: per-worker admin capabilities (+ RLS)
 ├─ supabase/RUN-THIS-clients-and-permissions.sql   # Copy-paste bundle of the two migrations above
@@ -329,7 +334,7 @@ time-tracker/
 │  │                          # + platform.ts (shell detection), native.ts (Capacitor bootstrap), useInstallPrompt.ts
 │  ├─ components/               # shared UI + app components (shadcn-style), incl. AvatarBubble
 │  │                          # + InstallAppCard.tsx (Settings → “Get the app”)
-│  ├─ pages/                    # Dashboard, Tracker, Entries, Tasks, Workers, Reports, Settings, Payments, Auth
+│  ├─ pages/                    # Dashboard, Tracker, Entries, Tasks, Workers, Reports, Settings, Payments, Finance, Auth
 │  ├─ App.tsx                   # Routing + auth gate (HashRouter inside native shells)
 │  └─ main.tsx                  # mounts app, registers the PWA service worker (browser shells only)
 ├─ ios/                         # Capacitor iOS project (Xcode) — App Store / TestFlight

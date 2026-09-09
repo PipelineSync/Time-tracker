@@ -15,9 +15,10 @@ import type {
   TaskStatus,
   Client,
   Permission,
+  FinanceItem,
 } from './types'
 import { DEFAULT_SLACK_SETTINGS, DEFAULT_CLIENT_COLOR, PERMISSIONS, TEAM_VIEW_PERMISSIONS, normalizePermissions } from './types'
-import type { BackendResult, DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput } from './backend'
+import type { BackendResult, DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, CreateFinanceItemInput } from './backend'
 import { ACCOUNT_DEACTIVATED_MESSAGE } from './backend'
 import {
   createClient,
@@ -491,6 +492,63 @@ function normalizeClientRow(c: Client): Client {
     color: c.color ?? DEFAULT_CLIENT_COLOR,
     status: c.status === 'inactive' ? 'inactive' : 'active',
   }
+}
+
+// ---- Finance rows -----------------------------------------------------------
+
+const FINANCE_COLUMNS =
+  'id, kind, name, worker_id, amount, cycle, period_month, due_date, status, paid_at, note, created_at, updated_at'
+
+/** Subscriptions live in active/paused; payroll and bills in unpaid/paid. */
+function financeStatusFor(kind: FinanceItem['kind'], status: unknown): FinanceItem['status'] {
+  if (kind === 'subscription') return status === 'paused' ? 'paused' : 'active'
+  return status === 'paid' ? 'paid' : 'unpaid'
+}
+
+/** Defensive defaults for finance rows loaded from the database. */
+function normalizeFinanceRow(f: FinanceItem): FinanceItem {
+  const kind: FinanceItem['kind'] = f.kind === 'subscription' || f.kind === 'payroll' || f.kind === 'bill' ? f.kind : 'bill'
+  return {
+    ...f,
+    kind,
+    name: typeof f.name === 'string' && f.name.trim() ? f.name.trim() : null,
+    worker_id: kind === 'payroll' ? f.worker_id ?? null : null,
+    amount: Number.isFinite(f.amount) ? Math.max(0, f.amount) : 0,
+    cycle: kind === 'subscription' ? (f.cycle === 'yearly' ? 'yearly' : 'monthly') : null,
+    period_month: kind === 'payroll' && typeof f.period_month === 'string' ? f.period_month : null,
+    due_date: typeof f.due_date === 'string' ? f.due_date.slice(0, 10) : new Date().toISOString().slice(0, 10),
+    status: financeStatusFor(kind, f.status),
+    paid_at: financeStatusFor(kind, f.status) === 'paid' ? f.paid_at ?? null : null,
+    note: typeof f.note === 'string' && f.note.trim() ? f.note : null,
+  }
+}
+
+/** Client-side validation mirroring the database constraints, for nice errors. */
+function validateFinanceInput(input: CreateFinanceItemInput): string | null {
+  const name = input.name?.trim() || null
+  if (input.kind === 'subscription' || input.kind === 'bill') {
+    if (!name) return input.kind === 'subscription' ? 'Give the subscription a name.' : 'Give the bill a label.'
+    if (name.length > 80) return 'Names are limited to 80 characters.'
+  }
+  if (!Number.isFinite(Number(input.amount)) || Number(input.amount) < 0) return 'Enter an amount of 0 or more.'
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(input.due_date ?? ''))) return 'Pick a due date.'
+  if (input.kind === 'payroll') {
+    if (!input.worker_id) return 'Choose the worker being paid.'
+    if (!/^\d{4}-\d{2}$/.test(String(input.period_month ?? ''))) return 'Choose the month this pay covers.'
+  }
+  return null
+}
+
+/** Turn the database's complaint about a finance insert into a readable one. */
+function financeWriteError(input: CreateFinanceItemInput, error: { code?: string; message?: string }): string {
+  if (isMissingTable(error as { code?: string; message?: string }, 'finance_items')) {
+    return 'Finance is not set up on this database yet. Run supabase/finance.sql in the Supabase SQL editor.'
+  }
+  // One payroll run per worker per month (finance_items_payroll_unique).
+  if ((error.code === '23505' || error.code === '23514') && input.kind === 'payroll') {
+    return 'That worker already has a payroll line for this month — edit it instead.'
+  }
+  return error.message ?? 'Could not save the finance line.'
 }
 
 type QueryResult = { data: unknown; error: { code?: string; message?: string } | null }
@@ -1489,6 +1547,100 @@ export const supabaseBackend: DataBackend = {
     return ok(null)
   },
 
+  // ---- Finance (subscriptions, payroll, bills) ------------------------------
+  // supabase/finance.sql owns the boundary: the workspace's rows are readable
+  // by the admin and by workers holding finance.view, writable only by the
+  // admin or a finance.manage holder. A database without the migration behaves
+  // like an empty ledger (list) or explains what to run (writes).
+
+  async listFinanceItems() {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (!canDo(me.data!, 'finance.view')) return ok([] as FinanceItem[])
+    const { data, error } = await client()
+      .from('finance_items')
+      .select(FINANCE_COLUMNS)
+      .order('due_date', { ascending: true })
+      .order('created_at', { ascending: false })
+    if (error) {
+      if (isMissingTable(error as { code?: string; message?: string }, 'finance_items')) {
+        console.warn('[work-tracker] the finance_items table is missing — run supabase/finance.sql to enable the Finance section.')
+        return ok([] as FinanceItem[])
+      }
+      return fail(error.message)
+    }
+    return ok(((data as FinanceItem[]) ?? []).map(normalizeFinanceRow))
+  },
+
+  async createFinanceItem(input: CreateFinanceItemInput) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (!canDo(me.data!, 'finance.manage')) return denied('add finance lines')
+    const err = validateFinanceInput(input)
+    if (err) return fail(err)
+    const now = new Date().toISOString()
+    const status = financeStatusFor(input.kind, input.status)
+    const { data, error } = await client()
+      .from('finance_items')
+      .insert({
+        kind: input.kind,
+        name: input.kind === 'payroll' ? null : input.name?.trim() || null,
+        worker_id: input.kind === 'payroll' ? input.worker_id ?? null : null,
+        amount: Math.round(input.amount * 100) / 100,
+        cycle: input.kind === 'subscription' ? (input.cycle === 'yearly' ? 'yearly' : 'monthly') : null,
+        period_month: input.kind === 'payroll' ? input.period_month ?? null : null,
+        due_date: input.due_date,
+        status,
+        paid_at: status === 'paid' ? now : null,
+        note: input.note?.trim() || null,
+      })
+      .select()
+      .single()
+    if (error) return fail(financeWriteError(input, error))
+    return ok(normalizeFinanceRow(data as FinanceItem))
+  },
+
+  async updateFinanceItem(id, patch) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (!canDo(me.data!, 'finance.manage')) return denied('edit finance lines')
+    const current = await client().from('finance_items').select(FINANCE_COLUMNS).eq('id', id).maybeSingle()
+    if (current.error) return fail(current.error.message)
+    if (!current.data) return fail('Finance line not found.')
+    const kind = (current.data as FinanceItem).kind
+    if (patch.amount !== undefined && (!Number.isFinite(Number(patch.amount)) || Number(patch.amount) < 0)) {
+      return fail('Enter an amount of 0 or more.')
+    }
+    if (patch.due_date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(String(patch.due_date))) {
+      return fail('Pick a due date.')
+    }
+    const update: Record<string, unknown> = {}
+    if (patch.name !== undefined) update.name = kind === 'payroll' ? null : patch.name?.trim() || null
+    if (patch.worker_id !== undefined) update.worker_id = kind === 'payroll' ? patch.worker_id ?? null : null
+    if (patch.amount !== undefined) update.amount = Math.round(Number(patch.amount) * 100) / 100
+    if (patch.cycle !== undefined) update.cycle = kind === 'subscription' ? (patch.cycle === 'yearly' ? 'yearly' : 'monthly') : null
+    if (patch.period_month !== undefined) update.period_month = kind === 'payroll' ? patch.period_month ?? null : null
+    if (patch.due_date !== undefined) update.due_date = patch.due_date
+    if (patch.status !== undefined) {
+      update.status = financeStatusFor(kind, patch.status)
+      // Marking paid stamps the time; moving back to unpaid clears it.
+      update.paid_at = update.status === 'paid' ? ((current.data as FinanceItem).paid_at ?? new Date().toISOString()) : null
+    }
+    if (patch.note !== undefined) update.note = patch.note?.trim() || null
+    const { data, error } = await client().from('finance_items').update(update).eq('id', id).select().single()
+    if (error) return fail(error.message)
+    return ok(normalizeFinanceRow(data as FinanceItem))
+  },
+
+  async deleteFinanceItem(id) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (!canDo(me.data!, 'finance.manage')) return denied('delete finance lines')
+    const { error } = await client().from('finance_items').delete().eq('id', id)
+    if (error) return fail(error.message)
+    return ok(null)
+  },
+
   // ---- Clients (master list) ----------------------------------------------
   // supabase/clients.sql owns the real boundary: the admin (workspace owner)
   // may insert / update / delete, both roles may read. A database that has not
@@ -1754,6 +1906,7 @@ export const supabaseBackend: DataBackend = {
     await client().from('tasks').delete().neq('id', '')
     await client().from('time_entries').delete().neq('id', '')
     await client().from('clients').delete().neq('id', '')
+    await client().from('finance_items').delete().neq('id', '')
     await client().from('active_timers').delete().neq('id', '')
     await client().from('workers').delete().neq('id', '')
     return ok(null)
@@ -1764,7 +1917,7 @@ export const supabaseBackend: DataBackend = {
     if (me.error) return fail(me.error)
     if (me.data!.role !== 'admin') return fail('Only the admin can load sample data.')
     const sb = client()
-    const { workers, clients, entries, settings } = (await import('./demoSeed')).buildDemoSeed()
+    const { workers, clients, entries, settings, financeItems } = (await import('./demoSeed')).buildDemoSeed()
     const realIdBySeedId = new Map<string, string>()
     // Sample clients first, so the seeded entries can point at them.
     const clientIdBySeedId = new Map<string, string>()
@@ -1791,6 +1944,24 @@ export const supabaseBackend: DataBackend = {
       }
     }
     await sb.from('settings').insert({ business_name: settings.business_name, currency: settings.currency, timezone: settings.timezone, default_hourly_rate: settings.default_hourly_rate })
+    // Sample finance ledger — best effort: a database without the
+    // supabase/finance.sql migration simply keeps its empty Finance section.
+    for (const f of financeItems) {
+      const workerId = f.worker_id ? realIdBySeedId.get(f.worker_id) ?? null : null
+      if (f.kind === 'payroll' && !workerId) continue
+      await sb.from('finance_items').insert({
+        kind: f.kind,
+        name: f.name,
+        worker_id: workerId,
+        amount: f.amount,
+        cycle: f.cycle,
+        period_month: f.period_month,
+        due_date: f.due_date,
+        status: f.status,
+        paid_at: f.paid_at,
+        note: f.note,
+      })
+    }
     return ok(null)
   },
 }

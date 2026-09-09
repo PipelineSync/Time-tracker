@@ -1,6 +1,21 @@
-import type { Worker, TimeEntry, Settings, Client, Task } from './types'
+import type { Worker, TimeEntry, Settings, Client, Task, FinanceItem } from './types'
 import { PERMISSION_PRESETS } from './types'
+import { toISODate } from './finance'
 import { uid } from './utils'
+
+/** Local 'YYYY-MM-DD' for a date, `at` days from today. */
+function dateOffset(at: number): string {
+  return toISODate(new Date(Date.now() + at * 24 * 60 * 60 * 1000))
+}
+
+/** 'YYYY-MM' `shift` months before/after the current one. */
+function monthOffset(shift: number): { ym: string; label: string } {
+  const now = new Date()
+  const d = new Date(now.getFullYear(), now.getMonth() + shift, 1)
+  const ym = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+  const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0)
+  return { ym, label: toISODate(lastDay) }
+}
 
 /**
  * A tiny fake QR-code image for demo data. It is not a scannable QR code —
@@ -185,7 +200,75 @@ export function buildDemoSeed() {
     avatar_url: null,
   }
 
-  return { workers, clients, entries, tasks, settings }
+  // Finance: a couple of subscriptions, a paid + an unpaid payroll run per
+  // active worker, and one-off bills — enough that the Finance page and the
+  // reports finance card show overdue / upcoming / paid states at once.
+  const lastMonth = monthOffset(-1)
+  const thisMonth = monthOffset(0)
+  const financeItems: FinanceItem[] = [
+    {
+      id: 'f-seed-1', kind: 'subscription', name: 'Adobe Creative Cloud', worker_id: null,
+      amount: 59.99, cycle: 'monthly', period_month: null, due_date: dateOffset(3),
+      status: 'active', paid_at: null, note: 'Design tools, 3 seats',
+      created_at: daysAgo(120).toISOString(), updated_at: daysAgo(24).toISOString(),
+    },
+    {
+      id: 'f-seed-2', kind: 'subscription', name: 'QuickBooks', worker_id: null,
+      amount: 38, cycle: 'monthly', period_month: null, due_date: dateOffset(-2),
+      status: 'active', paid_at: null, note: null,
+      created_at: daysAgo(300).toISOString(), updated_at: daysAgo(32).toISOString(),
+    },
+    {
+      id: 'f-seed-3', kind: 'subscription', name: 'Microsoft 365', worker_id: null,
+      amount: 149.99, cycle: 'yearly', period_month: null, due_date: dateOffset(46),
+      status: 'active', paid_at: null, note: 'Annual licence',
+      created_at: daysAgo(320).toISOString(), updated_at: daysAgo(320).toISOString(),
+    },
+    {
+      id: 'f-seed-4', kind: 'payroll', name: null, worker_id: 'w-seed-1',
+      amount: 1180, cycle: null, period_month: lastMonth.ym, due_date: lastMonth.label,
+      status: 'paid', paid_at: lastMonth.label + 'T09:00:00.000Z', note: 'Cash, settled in person',
+      created_at: lastMonth.ym + '-27T09:00:00.000Z', updated_at: lastMonth.label + 'T09:00:00.000Z',
+    },
+    {
+      id: 'f-seed-5', kind: 'payroll', name: null, worker_id: 'w-seed-2',
+      amount: 1450, cycle: null, period_month: lastMonth.ym, due_date: lastMonth.label,
+      status: 'paid', paid_at: lastMonth.label + 'T09:00:00.000Z', note: null,
+      created_at: lastMonth.ym + '-27T09:00:00.000Z', updated_at: lastMonth.label + 'T09:00:00.000Z',
+    },
+    {
+      id: 'f-seed-6', kind: 'payroll', name: null, worker_id: 'w-seed-1',
+      amount: 1240, cycle: null, period_month: thisMonth.ym, due_date: dateOffset(9),
+      status: 'unpaid', paid_at: null, note: 'Payday on the 25th',
+      created_at: thisMonth.ym + '-01T09:00:00.000Z', updated_at: thisMonth.ym + '-01T09:00:00.000Z',
+    },
+    {
+      id: 'f-seed-7', kind: 'payroll', name: null, worker_id: 'w-seed-2',
+      amount: 1520, cycle: null, period_month: thisMonth.ym, due_date: dateOffset(-1),
+      status: 'unpaid', paid_at: null, note: null,
+      created_at: thisMonth.ym + '-01T09:00:00.000Z', updated_at: thisMonth.ym + '-01T09:00:00.000Z',
+    },
+    {
+      id: 'f-seed-8', kind: 'bill', name: 'Office rent', worker_id: null,
+      amount: 900, cycle: null, period_month: null, due_date: dateOffset(12),
+      status: 'unpaid', paid_at: null, note: 'Ground floor unit',
+      created_at: daysAgo(20).toISOString(), updated_at: daysAgo(20).toISOString(),
+    },
+    {
+      id: 'f-seed-9', kind: 'bill', name: 'Electricity', worker_id: null,
+      amount: 118.4, cycle: null, period_month: null, due_date: dateOffset(5),
+      status: 'unpaid', paid_at: null, note: null,
+      created_at: daysAgo(6).toISOString(), updated_at: daysAgo(6).toISOString(),
+    },
+    {
+      id: 'f-seed-10', kind: 'bill', name: 'Public liability insurance', worker_id: null,
+      amount: 320, cycle: null, period_month: null, due_date: dateOffset(-40),
+      status: 'paid', paid_at: daysAgo(41).toISOString(), note: 'Renewed for 12 months',
+      created_at: daysAgo(45).toISOString(), updated_at: daysAgo(41).toISOString(),
+    },
+  ]
+
+  return { workers, clients, entries, tasks, settings, financeItems }
 }
 
 // Re-export uid for convenience

@@ -12,18 +12,24 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { StatCard } from '@/components/StatCard'
 import { Skeleton } from '@/components/ui/skeleton'
 import { toast } from 'sonner'
-import { Download, BarChart3, Clock, DollarSign, Hash, TrendingUp } from 'lucide-react'
-import { money, formatMinutes } from '@/lib/utils'
+import { Download, BarChart3, Clock, DollarSign, Hash, Landmark, TrendingUp } from 'lucide-react'
+import { money, formatMinutes, formatDate } from '@/lib/utils'
 import { dateRangeFor, filterEntriesInRange, summarizeEntries, hoursByWorker, hoursByClient } from '@/lib/stats'
 import { ClientColorStyles } from '@/lib/types'
 import { ClientDot } from '@/components/ClientBadge'
+import { daysUntil, dueLabel, financeByMonth, financeChartMonths, monthKeysBetween, subscriptionsPerMonth } from '@/lib/finance'
+import { Badge } from '@/components/ui/badge'
 
 const COLORS = ['#3b82f6', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899', '#84cc16']
 
 type Period = 'today' | 'week' | 'month' | 'custom'
 
 export function ReportsPage() {
-  const { entries, workers, clients, settings, dataLoading, loadOlderEntries, oldestEntryTime } = useStore()
+  const { entries, workers, clients, settings, financeItems, can, dataLoading, loadOlderEntries, oldestEntryTime } = useStore()
+  // The finance ledger only reaches users the Finance section is open to
+  // (`finance.view`) — both backends hand everyone else an empty list — so the
+  // section is gated on the same permission and never leaks numbers.
+  const showFinance = can('finance.view')
   const currency = settings?.currency || 'USD'
   const [period, setPeriod] = useState<Period>('week')
   const [fromDate, setFromDate] = useState('')
@@ -58,6 +64,66 @@ export function ReportsPage() {
 
   const byWorker = useMemo(() => hoursByWorker(filtered, workers), [filtered, workers])
   const byClient = useMemo(() => hoursByClient(filtered, clients), [filtered, clients])
+
+  // ---- Finance for the same range (subscriptions + payroll + bills) ----
+  // Only ever computed when the Finance section is visible to this account;
+  // the ledger arrives empty for everyone else anyway.
+  const finance = useMemo(() => {
+    if (!showFinance) return null
+    const monthsInRange = monthKeysBetween(range.from, range.to)
+    const fromT = range.from.getTime()
+    const toT = range.to.getTime()
+    const dueInRange = (iso: string) => {
+      const t = new Date(`${iso.slice(0, 10)}T12:00:00`).getTime()
+      return t >= fromT && t <= toT
+    }
+    let subsBilled = 0
+    let payrollTotal = 0
+    let billsTotal = 0
+    let paidTotal = 0
+    let unpaidTotal = 0
+    const agenda: typeof financeItems = []
+    for (const item of financeItems) {
+      if (item.kind === 'subscription') {
+        // Active subs bill once per cycle; count the ones whose next bill
+        // date falls in the range, plus the standing monthly run-rate.
+        if (item.status === 'active' && dueInRange(item.due_date)) {
+          subsBilled += item.amount
+          unpaidTotal += item.amount
+          agenda.push(item)
+        }
+      } else if (item.kind === 'payroll') {
+        if (item.period_month && monthsInRange.includes(item.period_month)) {
+          payrollTotal += item.amount
+          if (item.status === 'paid') paidTotal += item.amount
+          else unpaidTotal += item.amount
+          if (item.status !== 'paid') agenda.push(item)
+        }
+      } else if (dueInRange(item.due_date)) {
+        billsTotal += item.amount
+        if (item.status === 'paid') paidTotal += item.amount
+        else unpaidTotal += item.amount
+        agenda.push(item)
+      }
+    }
+    agenda.sort((a, b) => a.due_date.localeCompare(b.due_date))
+    const chartMonths = financeChartMonths(range)
+    const chart = financeByMonth(financeItems, chartMonths).map((r) => ({
+      ...r,
+      label: r.month.slice(5) + '/' + r.month.slice(2, 4),
+    }))
+    return {
+      subsPerMonth: subscriptionsPerMonth(financeItems),
+      subsBilled: Math.round(subsBilled * 100) / 100,
+      payrollTotal: Math.round(payrollTotal * 100) / 100,
+      billsTotal: Math.round(billsTotal * 100) / 100,
+      grandTotal: Math.round((subsBilled + payrollTotal + billsTotal) * 100) / 100,
+      paidTotal: Math.round(paidTotal * 100) / 100,
+      unpaidTotal: Math.round(unpaidTotal * 100) / 100,
+      agenda,
+      chart,
+    }
+  }, [showFinance, financeItems, range])
 
   // Group by day for over-time charts
   const overTime = useMemo(() => {
@@ -161,6 +227,37 @@ export function ReportsPage() {
       ]))
     }
     lines.push(line(['', 'TOTAL', '', '', '', '', totalHours.toFixed(2), '', totalEarnings.toFixed(2), '']))
+
+    // ---- Finance (only when the Finance section is open to this account) ----
+    if (finance && financeItems.length > 0) {
+      lines.push('')
+      lines.push(line(['FINANCE — SUBSCRIPTIONS']))
+      lines.push(line(['Name', 'Amount', 'Cycle', 'Next due', 'Status']))
+      for (const s of financeItems.filter((f) => f.kind === 'subscription')) {
+        lines.push(line([s.name || '', s.amount.toFixed(2), s.cycle || 'monthly', s.due_date, s.status]))
+      }
+      lines.push(line(['Subscriptions per month (annual divided by 12)', finance.subsPerMonth.toFixed(2)]))
+      lines.push(line(['Billed in period', finance.subsBilled.toFixed(2)]))
+      lines.push('')
+      lines.push(line(['FINANCE — PAYROLL & BILLS']))
+      lines.push(line(['Type', 'Who / what', 'Month', 'Due', 'Amount', 'Status']))
+      const ledgerRows = financeItems
+        .filter((f) => f.kind === 'payroll' || f.kind === 'bill')
+        .sort((a, b) => a.due_date.localeCompare(b.due_date))
+      for (const f of ledgerRows) {
+        lines.push(line([
+          f.kind,
+          f.kind === 'payroll' ? workers.find((w) => w.id === f.worker_id)?.name || 'Worker' : f.name || '',
+          f.period_month || '',
+          f.due_date,
+          f.amount.toFixed(2),
+          f.status,
+        ]))
+      }
+      lines.push(line(['Payroll in period', '', '', '', finance.payrollTotal.toFixed(2), '']))
+      lines.push(line(['Bills due in period', '', '', '', finance.billsTotal.toFixed(2), '']))
+      lines.push(line(['TOTAL FINANCE IN PERIOD', '', '', '', finance.grandTotal.toFixed(2), '']))
+    }
 
     // BOM so Excel opens UTF-8 (currency/accents) correctly.
     const blob = new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' })
@@ -345,6 +442,83 @@ export function ReportsPage() {
             </div>
           </CardContent>
         </Card>
+
+        {/* Finance — subscriptions, payroll and bills for the same period.
+            Only rendered when the Finance section is open to this account
+            and there is actually a ledger to summarize. */}
+        {finance && financeItems.length > 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Landmark className="h-4 w-4" /> Finance
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-5">
+              <div className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm sm:grid-cols-4">
+                <div>
+                  <p className="text-xs uppercase tracking-wide text-muted-foreground">Subscriptions</p>
+                  <p className="font-semibold">{money(finance.subsBilled, currency)}</p>
+                  <p className="text-xs text-muted-foreground">{money(finance.subsPerMonth, currency)} / month run-rate</p>
+                </div>
+                <div>
+                  <p className="text-xs uppercase tracking-wide text-muted-foreground">Payroll</p>
+                  <p className="font-semibold">{money(finance.payrollTotal, currency)}</p>
+                  <p className="text-xs text-muted-foreground">runs covering these months</p>
+                </div>
+                <div>
+                  <p className="text-xs uppercase tracking-wide text-muted-foreground">Bills</p>
+                  <p className="font-semibold">{money(finance.billsTotal, currency)}</p>
+                  <p className="text-xs text-muted-foreground">due inside the period</p>
+                </div>
+                <div>
+                  <p className="text-xs uppercase tracking-wide text-muted-foreground">Total out</p>
+                  <p className="font-semibold">{money(finance.grandTotal, currency)}</p>
+                  <p className="text-xs text-muted-foreground">{money(finance.unpaidTotal, currency)} still open</p>
+                </div>
+              </div>
+
+              {finance.chart.length > 0 && (
+                <ResponsiveContainer width="100%" height={220}>
+                  <BarChart data={finance.chart}>
+                    <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+                    <XAxis dataKey="label" fontSize={12} />
+                    <YAxis fontSize={12} />
+                    <Tooltip formatter={(v: number, key: string) => [money(v, currency), key === 'subscriptions' ? 'Subscriptions' : key === 'payroll' ? 'Payroll' : 'Bills']} />
+                    <Legend />
+                    <Bar dataKey="subscriptions" stackId="costs" fill="#8b5cf6" />
+                    <Bar dataKey="payroll" stackId="costs" fill="#3b82f6" />
+                    <Bar dataKey="bills" stackId="costs" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
+
+              <div>
+                <h4 className="mb-2 text-sm font-semibold">Lines due or billed in the period</h4>
+                {finance.agenda.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">Nothing due in this period.</p>
+                ) : (
+                  <div className="space-y-1.5 text-sm">
+                    {finance.agenda.map((f) => {
+                      const days = daysUntil(f.due_date)
+                      return (
+                        <div key={f.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-muted/50 px-3 py-2">
+                          <span className="flex min-w-0 items-center gap-2 font-medium">
+                            <span className="truncate">{f.kind === 'payroll' ? `${workers.find((w) => w.id === f.worker_id)?.name || 'Worker'} — payroll` : f.name || f.kind}</span>
+                            <Badge variant="muted" className="capitalize">{f.kind}</Badge>
+                          </span>
+                          <span className="whitespace-nowrap text-muted-foreground">
+                            {money(f.amount, currency)} · {formatDate(f.due_date)}
+                            <span className={days < 0 ? 'text-destructive' : ''}> ({dueLabel(days).toLowerCase()})</span>
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        )}
       </div>
     </div>
   )

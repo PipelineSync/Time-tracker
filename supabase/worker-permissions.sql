@@ -21,6 +21,7 @@
 --   entries.view_all    entries.manage
 --   tasks.view_all      tasks.manage_all
 --   payments.view_all   payments.manage
+--   finance.view        finance.manage
 --   reports.view
 --   clients.manage
 --   settings.manage
@@ -48,6 +49,8 @@ alter table public.workers add constraint workers_permissions_valid check (
     'tasks.manage_all',
     'payments.view_all',
     'payments.manage',
+    'finance.view',
+    'finance.manage',
     'reports.view',
     'clients.manage',
     'settings.manage'
@@ -95,6 +98,7 @@ as $$
       or public.has_permission('entries.view_all')
       or public.has_permission('tasks.view_all')
       or public.has_permission('payments.view_all')
+      or public.has_permission('finance.view')
       or public.has_permission('reports.view');
 $$;
 
