@@ -1,13 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { PERMISSION_GROUPS, PERMISSION_PRESETS, normalizePermissions, presetFor } from '@/lib/types'
-import type { Permission, PermissionPreset } from '@/lib/types'
-import { Button } from '@/components/ui/button'
+import type { Permission } from '@/lib/types'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
 import { ChevronDown, ShieldCheck } from 'lucide-react'
-
-const PRESET_ORDER: PermissionPreset[] = ['worker', 'supervisor', 'manager', 'full']
 
 /**
  * The "Access" section of the add/edit worker form: which of the admin's
@@ -88,30 +85,6 @@ export function WorkerPermissionsField({
 
       {open && (
         <div className="space-y-3 border-t p-3">
-          <p className="text-xs text-muted-foreground">
-            Pick which of your admin capabilities this worker gets. With nothing ticked they only see their own time
-            and their own tasks.
-          </p>
-
-          <div className="flex flex-wrap gap-1.5">
-            {PRESET_ORDER.map((key) => {
-              const p = PERMISSION_PRESETS[key]
-              return (
-                <Button
-                  key={key}
-                  type="button"
-                  size="sm"
-                  variant={preset === key ? 'default' : 'outline'}
-                  disabled={disabled}
-                  title={p.description}
-                  onClick={() => onChange([...p.permissions])}
-                >
-                  {p.label}
-                </Button>
-              )
-            })}
-          </div>
-
           <div className="space-y-2">
             {PERMISSION_GROUPS.map((group) => (
               <div key={group.key} className="rounded-lg border p-2.5">

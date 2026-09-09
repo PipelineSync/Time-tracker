@@ -40,9 +40,9 @@ Workers **clock in, take breaks, and clock out** — their rate is set by the ad
 ### Per-worker access
 A worker does not have to be *only* a worker. When the admin adds someone (**Workers → Add worker**, or **Edit** on an existing card) the form has an **Access** section: tick which of the admin's capabilities that person gets. Nothing is ticked by default, so an ordinary worker is exactly as before — their own time, their own board.
 
-Four one-click **presets** cover the usual cases, and any combination can be ticked by hand:
+The usual combinations below can be set by ticking the boxes (a matching combination is named in the collapsed summary):
 
-| Preset | What they get |
+| Level | What they get |
 |---|---|
 | **Worker** | Nothing extra. Their own time and their own tasks. *(default)* |
 | **Supervisor** | Dashboard, the team list, everyone's time (read-only) and full control of **everyone's board**. No money. |
