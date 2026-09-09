@@ -1808,8 +1808,14 @@ export const supabaseBackend: DataBackend = {
     const title = input.title.trim()
     if (!title) return fail('Give the task a title.')
     // Without tasks.manage_all a worker can only create tasks for themselves
-    // (RLS enforces it too).
-    const workerId = canDo(me.data!, 'tasks.manage_all') ? input.worker_id : me.data!.workerId
+    // (RLS enforces it too). A task manager who doesn't pass a worker_id is
+    // treated as creating a task for themselves — same end result as a
+    // regular worker, just without the assignment UI step. This also avoids
+    // a race where the form's `canAssign` view and the backend's permission
+    // check briefly disagree.
+    const workerId = canDo(me.data!, 'tasks.manage_all')
+      ? (input.worker_id || me.data!.workerId || '')
+      : me.data!.workerId
     if (!workerId) return fail('Choose who the task is for.')
     const status: TaskStatus = input.status ?? 'todo'
     const sb = client()

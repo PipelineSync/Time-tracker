@@ -138,11 +138,60 @@ async function scenario4_missingColumnFallback() {
   }
 }
 
+async function scenario5_createTask_without_worker_id() {
+  console.log('\n--- S5: a task manager who omits worker_id still gets a task on their own board ---')
+  // Reproduces the published-app symptom where a worker with tasks.manage_all
+  // (Supervisor / Manager / Full access) clicks "Add task" and the form
+  // briefly omits a worker_id — the backend must fall back to their own id
+  // instead of refusing with "Choose who the task is for."
+  resetState()
+  // Seed two users (admin + worker), one client, and the worker row with
+  // Supervisor permissions. The admin signs in to grant those, then the
+  // worker signs in to actually create the task — exactly the published-app
+  // sequence.
+  state.users = [
+    { id: 'user-admin', email: 'admin@x.com', password: 'admin123' },
+    { id: 'user-john', email: 'john@example.com', password: 'worker123' },
+  ]
+  state.profiles = [
+    { user_id: 'user-admin', role: 'admin', worker_id: null },
+    { user_id: 'user-john', role: 'worker', worker_id: 'worker-1' },
+  ]
+  state.workers = [
+    {
+      id: 'worker-1',
+      name: 'John',
+      email: 'john@example.com',
+      hourly_rate: 20,
+      status: 'active',
+      permissions: ['tasks.view_all', 'tasks.manage_all', 'workers.view', 'dashboard.view', 'entries.view_all'],
+    },
+  ]
+  state.clients = [{ id: 'client-1', name: 'Acme', color: 'blue', status: 'active', created_at: new Date().toISOString(), updated_at: new Date().toISOString() }]
+  state.authUser = { id: 'user-john', email: 'john@example.com' }
+  // signInWithPassword sets state.authUser and forces the auth cache to
+  // re-resolve, so the backend's me.data!.workerId is correct.
+  const session = await supabaseBackend.signIn('john@example.com', 'worker123')
+  assert(!session.error, `the worker can sign in (got: ${session.error})`)
+  assert(session.data?.workerId === 'worker-1', `the session carries the worker id (got: ${session.data?.workerId})`)
+
+  // The form sends no worker_id (mirrors the buggy `worker_id: canAssign ? form.workerId : undefined`).
+  const clients = (await supabaseBackend.listClients()).data || []
+  const client = clients[0]
+  const res = await supabaseBackend.createTask({ client_id: client.id, title: 'My own task' })
+  assert(!res.error, `createTask without worker_id still succeeds (got: ${res.error})`)
+  assert(
+    res.data?.worker_id === 'worker-1',
+    `the task lands on the worker's own board (got worker_id: ${res.data?.worker_id})`,
+  )
+}
+
 async function main() {
   await scenario1_selectIncludesPermissions()
   await scenario2_roundTrip()
   await scenario3_revokeAllPersists()
   await scenario4_missingColumnFallback()
+  await scenario5_createTask_without_worker_id()
   console.log(failures ? `\n${failures} CHECK(S) FAILED` : '\nALL CHECKS PASSED')
   process.exit(failures ? 1 : 0)
 }

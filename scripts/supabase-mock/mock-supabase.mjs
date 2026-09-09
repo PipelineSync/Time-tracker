@@ -7,6 +7,9 @@ export const state = {
   users: [], // { id, email, password }
   profiles: [], // { user_id, role, worker_id }
   workers: [], // { id, name, email, permissions, ... }
+  // Tasks created via the backend. Each task is the full row the Supabase
+  // mock returns from .insert(...).select().single().
+  tasks: [],
   authUser: null, // { id, email } currently signed in
   getUserError: null, // injected error for auth.getUser
   profileQueryError: null, // injected error for profiles queries
@@ -31,6 +34,7 @@ export function resetState() {
   state.users = []
   state.profiles = []
   state.workers = []
+  state.tasks = []
   state.authUser = null
   state.getUserError = null
   state.profileQueryError = null
@@ -141,9 +145,32 @@ function from(table) {
           },
         }),
     }),
-    insert: () => ({
-      single: async () => ({ data: null, error: { message: 'insert not supported in mock' } }),
-    }),
+    insert: (payload) => {
+      const inserted = Array.isArray(payload) ? payload : [payload]
+      // Tasks: the createTask path inserts a single row and reads it back.
+      if (table === 'tasks') {
+        return {
+          select: () => ({
+            single: async () => {
+              const row = inserted[0] || {}
+              const full = {
+                id: row.id || `task-${state.tasks.length + 1}`,
+                position: 0,
+                completed_at: null,
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+                ...row,
+              }
+              state.tasks.push(full)
+              return { data: full, error: null }
+            },
+          }),
+        }
+      }
+      return {
+        single: async () => ({ data: null, error: { message: 'insert not supported in mock' } }),
+      }
+    },
     update: (payload) => {
       state.lastWorkersUpdatePayload = payload
       return {

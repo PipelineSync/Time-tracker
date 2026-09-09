@@ -1443,8 +1443,13 @@ export const localBackend: DataBackend = {
     const title = input.title.trim()
     if (!title) return { data: null, error: 'Give the task a title.' }
     // Workers can only ever create tasks for themselves.
-    // Only a task manager may put a card on someone else's board.
-    const workerId = can(c, 'tasks.manage_all') ? input.worker_id : c.user.workerId
+    // Only a task manager may put a card on someone else's board. A manager
+    // who doesn't pass a worker_id is treated as creating a task for
+    // themselves — same end result as a regular worker, just without the
+    // assignment UI step.
+    const workerId = can(c, 'tasks.manage_all')
+      ? (input.worker_id || c.user.workerId || '')
+      : c.user.workerId
     if (!workerId) return { data: null, error: 'Choose who the task is for.' }
     if (!c.data.workers.some((w) => w.id === workerId)) return { data: null, error: 'Worker not found.' }
     const status = normalizeTaskStatus(input.status)

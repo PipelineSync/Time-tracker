@@ -212,6 +212,34 @@ async function main() {
     'revoking access closes the team board again'
   )
 
+  // ---- 6. a task manager who omits worker_id still gets a task ---------
+  // Reproduces the published-app symptom where a worker with tasks.manage_all
+  // (Supervisor / Manager / Full access) clicks "Add task" and the form
+  // briefly omits a worker_id — the backend must fall back to their own id
+  // instead of refusing with "Choose who the task is for."
+  await localBackend.signIn('admin', 'admin.pipelinesync')
+  await localBackend.updateWorker(lead.id, { permissions: [...PERMISSION_PRESETS.supervisor.permissions] })
+  await localBackend.signIn('lena@example.com', 'worker123')
+  const ownTask = await localBackend.createTask({
+    // worker_id deliberately omitted — mirrors what the form used to send
+    // when its `canAssign` was briefly out of sync with the backend.
+    client_id: client.id,
+    title: 'Lena\'s own task (no worker_id)',
+  })
+  assert(
+    !ownTask.error && ownTask.data?.worker_id === lead.id,
+    `a manager who omits worker_id still gets a task on their own board (got: ${ownTask.error})`,
+  )
+
+  // And a regular worker (no tasks.manage_all) without a worker_id still
+  // lands on their own board — that path has not changed.
+  await localBackend.signIn('pat@example.com', 'worker123')
+  const patOwnTask = await localBackend.createTask({ client_id: client.id, title: 'Pat\'s own task (no worker_id)' })
+  assert(
+    !patOwnTask.error && patOwnTask.data?.worker_id === plain.id,
+    `a regular worker without worker_id still gets a task on their own board (got: ${patOwnTask.error})`,
+  )
+
   console.log(process.exitCode ? '\nSome checks FAILED.' : '\nAll permission checks passed.')
 }
 
