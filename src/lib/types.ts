@@ -73,7 +73,25 @@ export interface ActiveTimer {
   client_id: string | null
   /** @deprecated legacy free-text scope, kept for timers started before clients. */
   project: string | null
+  /**
+   * Start of the *current client segment*. Reset when the worker switches
+   * clients so each client is billed only for the minutes worked for them.
+   * Wall-clock display uses `session_start` + `prior_worked_ms` instead, so
+   * switching does not zero the on-screen timer.
+   */
   start_time: string // ISO
+  /**
+   * Original clock-in for this whole shift. Stays put across client switches
+   * so the UI can show "Clocked in at …" for the full session. Falls back to
+   * `start_time` on timers that predate this field.
+   */
+  session_start?: string | null
+  /**
+   * Working milliseconds already split off into finished entries earlier in
+   * this shift (previous clients). Added to the live segment so the displayed
+   * clock keeps counting up across switches instead of resetting.
+   */
+  prior_worked_ms?: number
   notes: string | null
   hourly_rate: number
   paused: boolean

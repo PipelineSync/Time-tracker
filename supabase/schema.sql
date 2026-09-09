@@ -54,7 +54,13 @@ create table if not exists public.active_timers (
   user_id       uuid not null references auth.users (id) on delete cascade,
   worker_id     uuid not null references public.workers (id) on delete cascade,
   project       text,
+  -- Start of the *current client segment* (resets on Switch client).
   start_time    timestamptz not null default now(),
+  -- Original clock-in for the whole shift (stays put across client switches so
+  -- the on-screen timer keeps counting). See supabase/switch-client-session.sql.
+  session_start timestamptz,
+  -- Working ms already split into finished entries earlier in this shift.
+  prior_worked_ms bigint not null default 0,
   notes         text,
   hourly_rate   numeric(10,2) not null default 0 check (hourly_rate >= 0),
   paused        boolean not null default false,
@@ -62,6 +68,10 @@ create table if not exists public.active_timers (
   total_pause_ms bigint not null default 0,
   created_at    timestamptz not null default now()
 );
+
+-- Safe migration for databases created before session_start/prior_worked_ms.
+alter table public.active_timers add column if not exists session_start timestamptz;
+alter table public.active_timers add column if not exists prior_worked_ms bigint not null default 0;
 
 -- Enforce only one active timer per worker at the database level. Rows are
 -- owned by the workspace admin (user_id), so a user_id unique index would

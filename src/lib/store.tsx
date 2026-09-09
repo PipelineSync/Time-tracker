@@ -158,8 +158,9 @@ interface StoreValue {
   stopTimer: (note?: string) => Promise<BackendResult<TimeEntry>>
   /**
    * Worker-only: keep the clock running but move it to a different client. The
-   * time already worked is split into a finished entry for the old client and a
-   * fresh timer starts for the new one. Returns the new running timer.
+   * time already worked is split into a finished entry for the old client
+   * (correct per-client allocation) while the on-screen shift clock keeps
+   * counting — it does not reset. Returns the new running timer.
    */
   switchClient: (clientId: string, notes?: string) => Promise<BackendResult<ActiveTimer>>
   cancelTimer: () => Promise<void>

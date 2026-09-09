@@ -10,7 +10,7 @@ import { ClockInDialog } from '@/components/ClockInDialog'
 import { SwitchClientDialog } from '@/components/SwitchClientDialog'
 import { toast } from 'sonner'
 import { Square, Pause, PlayCircle, LogIn, TimerReset, Repeat } from 'lucide-react'
-import { formatMinutes, money, timerElapsedMs } from '@/lib/utils'
+import { formatMinutes, money, timerElapsedMs, timerSessionStart } from '@/lib/utils'
 import { ClientColorStyles } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
@@ -196,7 +196,7 @@ export function TrackerPage() {
             <div className="rounded-2xl bg-primary/5 px-10 py-8">
               <TimerDisplay ms={elapsedMs} running={running} />
             </div>
-            <p className="text-sm text-muted-foreground">Clocked in {new Date(myTimer.start_time).toLocaleString()}</p>
+            <p className="text-sm text-muted-foreground">Clocked in {new Date(timerSessionStart(myTimer)).toLocaleString()}</p>
             {(myTimer.project || myTimer.notes) && (
               <div className="w-full max-w-md space-y-1 rounded-lg bg-muted/50 px-4 py-3 text-center">
                 {myTimer.project && <p className="text-sm font-semibold">{myTimer.project}</p>}

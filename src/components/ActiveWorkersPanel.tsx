@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Coffee, Radio, UserRound } from 'lucide-react'
-import { cn, formatDateTime, formatMsShort, initials, timerBreakMs, timerElapsedMs } from '@/lib/utils'
+import { cn, formatDateTime, formatMsShort, initials, timerBreakMs, timerElapsedMs, timerSessionStart } from '@/lib/utils'
 import type { ActiveTimer, Worker } from '@/lib/types'
 
 interface Row {
@@ -114,7 +114,7 @@ export function ActiveWorkersPanel() {
                       )}
                     </div>
                     <p className="truncate text-xs text-muted-foreground">
-                      Since {formatDateTime(r.timer.start_time)}
+                      Since {formatDateTime(timerSessionStart(r.timer))}
                       {(() => {
                         const scope = clients.find((c) => c.id === r.timer.client_id)?.name || r.timer.project
                         return scope ? ` · ${scope}` : ''
