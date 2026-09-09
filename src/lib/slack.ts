@@ -25,17 +25,21 @@ export interface SlackEventRef {
   timer_id?: string
   entry_id?: string
   payment_id?: string
+  task_id?: string
+  previous_status?: string
   /** Plain-text fallback used by the demo-mode direct post only. */
   demoText?: string
 }
 
-function toggleFor(settings: { notify_clock_in: boolean; notify_clock_out: boolean; notify_break_start: boolean; notify_break_end: boolean; notify_payment_paid: boolean }, event: SlackEvent): boolean {
+function toggleFor(settings: { notify_clock_in: boolean; notify_clock_out: boolean; notify_break_start: boolean; notify_break_end: boolean; notify_payment_paid: boolean; notify_task_created: boolean; notify_task_moved: boolean }, event: SlackEvent): boolean {
   switch (event) {
     case 'clock_in': return settings.notify_clock_in
     case 'clock_out': return settings.notify_clock_out
     case 'break_start': return settings.notify_break_start
     case 'break_end': return settings.notify_break_end
     case 'payment_paid': return settings.notify_payment_paid
+    case 'task_created': return settings.notify_task_created
+    case 'task_moved': return settings.notify_task_moved
   }
 }
 
@@ -61,6 +65,8 @@ export async function notifySlackAsync(event: SlackEvent, ref: SlackEventRef): P
           timer_id: ref.timer_id,
           entry_id: ref.entry_id,
           payment_id: ref.payment_id,
+          task_id: ref.task_id,
+          previous_status: ref.previous_status,
         }),
         // Never let a slow Slack hold up the UI path that triggered this.
         signal: AbortSignal.timeout(10_000),
@@ -78,7 +84,7 @@ export async function notifySlackAsync(event: SlackEvent, ref: SlackEventRef): P
       // side keeps application/json — CORS does not apply there.
       const cfg = await localBackend.getSlackSettings()
       if (cfg.error || !cfg.data) return
-      const url = cfg.data.webhook_url?.trim()
+      const url = (event === 'task_created' || event === 'task_moved' ? cfg.data.task_webhook_url : cfg.data.webhook_url)?.trim()
       if (!url || !/^https:\/\/hooks\.slack\.com\//.test(url)) return
       if (!toggleFor(cfg.data, event)) return
       const text = ref.demoText || `${SlackEventNames[event]} happened.`
@@ -99,7 +105,7 @@ export async function notifySlackAsync(event: SlackEvent, ref: SlackEventRef): P
  * string on failure, null on success — unlike notifySlack this one surfaces
  * problems so the admin can fix their setup.
  */
-export async function sendSlackTestMessage(): Promise<string | null> {
+export async function sendSlackTestMessage(channel: 'activity' | 'tasks' = 'activity'): Promise<string | null> {
   try {
     if (isSupabaseConfigured()) {
       const token = await getSupabaseAccessToken()
@@ -107,7 +113,7 @@ export async function sendSlackTestMessage(): Promise<string | null> {
       const res = await fetch('/.netlify/functions/slack-notify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ type: 'test' }),
+        body: JSON.stringify({ type: 'test', channel }),
         signal: AbortSignal.timeout(15_000),
       })
       const payload = await res.json().catch(() => ({})) as { error?: string; reason?: string }
@@ -117,14 +123,14 @@ export async function sendSlackTestMessage(): Promise<string | null> {
     }
     // Demo mode: post a hello straight from the browser.
     const cfg = await localBackend.getSlackSettings()
-    const url = cfg.data?.webhook_url?.trim()
-    if (!url) return 'Save a webhook URL first.'
+    const url = (channel === 'tasks' ? cfg.data?.task_webhook_url : cfg.data?.webhook_url)?.trim()
+    if (!url) return `Save the ${channel === 'tasks' ? 'task ' : ''}webhook URL first.`
     if (!/^https:\/\/hooks\.slack\.com\//.test(url)) return 'That does not look like a Slack webhook URL (it should start with https://hooks.slack.com/).'
     const res = await fetch(url, {
       method: 'POST',
       // text/plain, not application/json — see the CORS note in notifySlackAsync.
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ text: '👋 Slack notifications are working! (demo mode — sent from your browser)' }),
+      body: JSON.stringify({ text: channel === 'tasks' ? '🧪 Task Slack automation is working! (demo mode)' : '👋 Slack notifications are working! (demo mode — sent from your browser)' }),
       signal: AbortSignal.timeout(15_000),
     })
     if (!res.ok) return `Slack responded ${res.status}. Check the webhook URL.`

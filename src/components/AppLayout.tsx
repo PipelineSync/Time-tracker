@@ -10,6 +10,7 @@ import {
   Settings,
   Wallet,
   Landmark,
+  CircleDollarSign,
   LogOut,
   KeyRound,
   Moon,
@@ -135,6 +136,7 @@ export function AppLayout() {
       <DropdownMenuContent align="end" className="w-56">
         <DropdownMenuLabel className="truncate">{user?.email}</DropdownMenuLabel>
         <DropdownMenuSeparator />
+        <DropdownMenuItem onClick={() => navigate('/personal')}><CircleDollarSign className="mr-2 h-4 w-4" /> Switch to Personal Tracker</DropdownMenuItem>
         <DropdownMenuItem onClick={() => setChangePwOpen(true)}><KeyRound className="mr-2 h-4 w-4" /> Change password</DropdownMenuItem>
         <DropdownMenuItem
           onClick={async () => {

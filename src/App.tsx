@@ -18,6 +18,7 @@ const ReportsPage = lazy(() => import('@/pages/ReportsPage').then((m) => ({ defa
 const SettingsPage = lazy(() => import('@/pages/SettingsPage').then((m) => ({ default: m.SettingsPage })))
 const TasksPage = lazy(() => import('@/pages/TasksPage').then((m) => ({ default: m.TasksPage })))
 const FinancePage = lazy(() => import('@/pages/FinancePage').then((m) => ({ default: m.FinancePage })))
+const PersonalFinancePage = lazy(() => import('@/pages/PersonalFinancePage').then((m) => ({ default: m.PersonalFinancePage })))
 
 export function App() {
   const { user, authLoading, isAdmin, can } = useStore()
@@ -40,6 +41,8 @@ export function App() {
     <Router>
       <Suspense fallback={<FullScreenLoader />}>
         <Routes>
+        {/* Every signed-in admin and worker has a separate, owner-only personal tracker. */}
+        <Route path="/personal" element={<PersonalFinancePage />} />
         <Route element={<AppLayout />}>
           {/* Workers clock in/out */}
           {!isAdmin && <Route path="/tracker" element={<TrackerPage />} />}

@@ -396,6 +396,8 @@ export type SlackEvent =
   | 'break_start'
   | 'break_end'
   | 'payment_paid'
+  | 'task_created'
+  | 'task_moved'
 
 /** Human label for each Slack event (used by demo-mode fallback texts). */
 export const SlackEventNames: Record<SlackEvent, string> = {
@@ -404,6 +406,8 @@ export const SlackEventNames: Record<SlackEvent, string> = {
   break_start: 'Break started',
   break_end: 'Back from break',
   payment_paid: 'Payment paid',
+  task_created: 'Task created',
+  task_moved: 'Task stage changed',
 }
 
 /**
@@ -421,6 +425,9 @@ export interface SlackSettings {
   notify_break_start: boolean
   notify_break_end: boolean
   notify_payment_paid: boolean
+  task_webhook_url: string | null
+  notify_task_created: boolean
+  notify_task_moved: boolean
 }
 
 /** Defaults used whenever no Slack settings row exists yet. */
@@ -431,6 +438,9 @@ export const DEFAULT_SLACK_SETTINGS: SlackSettings = {
   notify_break_start: true,
   notify_break_end: true,
   notify_payment_paid: true,
+  task_webhook_url: null,
+  notify_task_created: true,
+  notify_task_moved: true,
 }
 
 
