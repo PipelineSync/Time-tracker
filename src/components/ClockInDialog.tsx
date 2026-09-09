@@ -15,12 +15,15 @@ import { useStore } from '@/lib/store'
 import { ClientSelect } from '@/components/ClientSelect'
 
 /**
- * Shown when a worker clocks in: they pick the client they are working for and
- * can leave a note. Both are stored on the running timer and carried over to
- * the time entry when they clock out, so every hour is attributed.
+ * Shown when a worker clocks in: they must pick the client they are working
+ * for (every hour is attributed to a client) and may leave a note. The client
+ * rides along on the running timer and lands on the time entry at clock-out.
  *
  * The client is pre-filled with the one from their last shift (or the only
- * active client), so the common case is still just "Clock In".
+ * active one), so the common case is still just "Clock In". A worker cannot
+ * clock in without a client — the button stays disabled until one is chosen,
+ * and if the workspace has no active clients at all the dialog tells the
+ * worker to ask the admin to add one before they can clock in.
  */
 export function ClockInDialog({
   open,
@@ -53,6 +56,9 @@ export function ClockInDialog({
   }, [open, defaultClientId, activeClients])
 
   async function handleConfirm() {
+    // Hard guard — the button is already disabled without a client, but never
+    // let a clock-in proceed without one.
+    if (!clientId) return
     setLoading(true)
     try {
       await onConfirm({ clientId, notes: notes.trim() })
@@ -67,14 +73,17 @@ export function ClockInDialog({
         <DialogHeader>
           <DialogTitle>Clock in{workerName ? `, ${workerName}` : ''}?</DialogTitle>
           <DialogDescription>
-            Pick who you're working for. The client and note are saved on this shift and appear on the
-            time entry when you clock out.
+            {noClients
+              ? 'A client is required to clock in. Ask your admin to add one, then try again.'
+              : "Pick who you're working for. The client and note are saved on this shift and appear on the time entry when you clock out."}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="clock-in-client">Client</Label>
+            <Label htmlFor="clock-in-client">
+              Client <span className="text-destructive" aria-hidden>*</span>
+            </Label>
             <ClientSelect
               id="clock-in-client"
               value={clientId}
@@ -84,8 +93,7 @@ export function ClockInDialog({
             />
             {noClients && (
               <p className="text-xs text-muted-foreground">
-                Your admin hasn't added any clients yet — you can still clock in, and they can tag this
-                shift later.
+                Your admin hasn't added any clients yet. Once they add at least one, you can clock in.
               </p>
             )}
           </div>
@@ -109,8 +117,8 @@ export function ClockInDialog({
           </Button>
           <Button
             onClick={handleConfirm}
-            disabled={loading || (!clientId && !noClients)}
-            title={!clientId && !noClients ? 'Choose a client first' : undefined}
+            disabled={loading || !clientId}
+            title={!clientId ? 'Choose a client first' : undefined}
             className="gap-2 bg-[#06245B] hover:bg-[#0a306e] dark:bg-white dark:text-[#06245B] dark:hover:bg-white/90"
           >
             <LogIn className="h-4 w-4" />

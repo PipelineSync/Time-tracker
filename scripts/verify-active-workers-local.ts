@@ -34,12 +34,25 @@ async function main() {
   const workers = (await localBackend.listWorkers()).data || []
   assert(workers.length >= 3, `seeded workers exist (${workers.length})`)
 
-  // 2) Three different workers clock in, one after another.
+  // The seed ships a client list; the worker flow now requires one.
+  const clients = (await localBackend.listClients()).data || []
+  assert(clients.length > 0, 'seeded workspace has at least one client')
+  const clientId = clients[0].id
+
+  // 2) A worker who tries to clock in without a client is refused.
+  const first = await localBackend.signIn('john@example.com', 'worker123')
+  assert(!first.error, 'john can sign in')
+  const noClient = await localBackend.startTimer({ worker_id: first.data!.workerId! })
+  assert(!!noClient.error, 'a worker cannot clock in without a client')
+  // Sign out so the loop below starts each worker from a clean session.
+  await localBackend.signOut()
+
+  // 3) Three different workers clock in, one after another.
   const logins = ['john@example.com', 'sarah@example.com', 'mike@example.com']
   for (const email of logins) {
     const res = await localBackend.signIn(email, 'worker123')
     assert(!res.error, `${email} can sign in`)
-    const started = await localBackend.startTimer({ worker_id: res.data!.workerId! })
+    const started = await localBackend.startTimer({ worker_id: res.data!.workerId!, client_id: clientId })
     assert(!started.error && !!started.data, `${email} can clock in while others are working`)
     // A worker only ever sees their own timer.
     const mine = (await localBackend.listActiveTimers()).data || []
@@ -91,7 +104,7 @@ async function main() {
   assert(!all.some((t) => t.worker_id === john.data!.workerId), 'john is gone from the active list')
 
   // 7) The admin cannot double-start a timer for a worker already clocked in.
-  const dup = await localBackend.startTimer({ worker_id: all[0].worker_id })
+  const dup = await localBackend.startTimer({ worker_id: all[0].worker_id, client_id: clientId })
   assert(!!dup.error, 'starting a second timer for the same worker is rejected')
 
   console.log(process.exitCode ? '\nSome checks FAILED' : '\nAll checks passed')

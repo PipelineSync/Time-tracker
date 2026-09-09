@@ -88,9 +88,18 @@ export function TaskFormDialog({
         dueDate: task.due_date ? task.due_date.slice(0, 10) : '',
       })
     } else {
+      // Seed the assignee. Managers (anyone with tasks.manage_all) may put a
+      // card on someone else's board, so the field is pre-populated with the
+      // first pickable worker. A regular worker's own id is the only valid
+      // choice — fall back to that, even if `canAssign` flipped on a stale
+      // render, so the form never opens with a missing assignee.
+      const ownId = user?.workerId || ''
+      const seedAssignee = canAssign
+        ? defaultWorkerId || pickable[0]?.id || ownId
+        : ownId
       setForm({
         ...emptyForm(defaultStatus),
-        workerId: canAssign ? defaultWorkerId || pickable[0]?.id || '' : user?.workerId || '',
+        workerId: seedAssignee,
         // One client on the list is not a choice — pre-pick it.
         clientId: defaultClientId || (activeClients.length === 1 ? activeClients[0].id : ''),
       })
@@ -110,8 +119,20 @@ export function TaskFormDialog({
       toast.error('Give the task a title.')
       return
     }
-    if (canAssign && !form.workerId) {
-      toast.error('Choose who the task is for.')
+    // The assignee is the picked worker when the user can assign to others,
+    // otherwise it's the signed-in worker themselves. Always pass it
+    // explicitly: relying on a server-side fallback creates a race when the
+    // form's view of `canAssign` is briefly out of sync with the backend's.
+    const assignee = canAssign ? form.workerId : user?.workerId || ''
+    if (!assignee) {
+      if (canAssign) {
+        toast.error('Choose who the task is for.')
+      } else {
+        // No Assign-to field is shown, so the worker is on their own — but
+        // their profile is missing, which means the admin needs to fix the
+        // account before this worker can add tasks.
+        toast.error('Your worker profile is missing — please contact your administrator.')
+      }
       return
     }
     if (!form.clientId) {
@@ -134,7 +155,7 @@ export function TaskFormDialog({
         toast.success('Task updated.')
       } else {
         const created = await createTask({
-          worker_id: canAssign ? form.workerId : undefined,
+          worker_id: assignee,
           client_id: form.clientId,
           title,
           description: form.description.trim() || null,
