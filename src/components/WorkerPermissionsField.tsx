@@ -47,6 +47,13 @@ export function WorkerPermissionsField({
     const next = new Set(active)
     if (on) {
       next.add(permission)
+      // If toggling finance.subscription, disable finance.payroll and vice versa
+      const perm = permission as string
+      if (perm === 'finance.subscription') {
+        next.delete('finance.payroll')
+      } else if (perm === 'finance.payroll') {
+        next.delete('finance.subscription')
+      }
       // Granting a "manage" capability implies being able to see the area.
       for (const group of PERMISSION_GROUPS) {
         for (const item of group.items) {

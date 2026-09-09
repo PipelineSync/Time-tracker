@@ -75,7 +75,14 @@ function buildNav(isAdmin: boolean, can: (p: Permission) => boolean): NavItem[] 
   // Payments now live in Finance → Payroll. Workers always get in (their own
   // payment history sits in the Payroll tab); the extra tabs and the ledger
   // appear only once the admin grants Finance access (off by default).
-  items.push(can('finance.view') ? NAV.finance : NAV.payroll)
+  // Show finance nav if worker has subscription or payroll access; otherwise show payroll tab.
+  const hasFinanceSubscription = can('finance.subscription')
+  const hasFinancePayroll = can('finance.payroll')
+  if (hasFinanceSubscription || hasFinancePayroll) {
+    items.push(NAV.finance)
+  } else {
+    items.push(NAV.payroll)
+  }
   if (can('workers.view')) items.push(NAV.workers)
   if (can('reports.view')) items.push(NAV.reports)
   items.push(NAV.settings)

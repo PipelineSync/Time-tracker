@@ -190,7 +190,7 @@ export function WorkersPage() {
                     )}
                     {canSettle && (
                       <Button variant="outline" size="sm" className="gap-1" onClick={() => setSettling(w)} title="Settle unsettled time into a payment — time entries are kept">
-                        <RotateCcw className="h-4 w-4" /> Reset
+                        <RotateCcw className="h-4 w-4" /> Settle
                       </Button>
                     )}
                     {canManage && (
