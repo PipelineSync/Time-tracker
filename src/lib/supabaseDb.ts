@@ -138,13 +138,21 @@ const fail = <T,>(error: string): BackendResult<T> => ({ data: null, error })
  * Normalize a worker row from the database. Older rows (and databases that
  * haven't applied supabase/worker-payment-methods.sql yet) may not carry the
  * payment-method columns, so default them here. A QR image only matters while
- * the worker actually accepts QR payments.
+ * the worker actually accepts QR payments. The `permissions` array is
+ * normalized too: a missing or non-array value (which happens on databases
+ * that have not run supabase/worker-permissions.sql) becomes an empty list,
+ * so the Worker's "Access" form never sees a half-shaped value.
  */
 function normalizeWorker(w: Worker): Worker {
   const methods: PaymentMethod[] = Array.isArray(w.payment_methods)
     ? w.payment_methods.filter((m): m is PaymentMethod => m === 'cash' || m === 'qr')
     : []
-  return { ...w, payment_methods: methods, qr_code_url: methods.includes('qr') ? (w.qr_code_url ?? null) : null }
+  return {
+    ...w,
+    payment_methods: methods,
+    qr_code_url: methods.includes('qr') ? (w.qr_code_url ?? null) : null,
+    permissions: normalizePermissions(w.permissions),
+  }
 }
 const normalizeWorkers = (rows: Worker[] | null): Worker[] => (rows ?? []).map(normalizeWorker)
 
@@ -822,7 +830,13 @@ export const supabaseBackend: DataBackend = {
     // qr_code_url are base64 data URLs and by far the heaviest fields on the
     // row. The UI merges the separately fetched listWorkerAvatars() snapshot
     // back in, so pictures are downloaded once per sign-in, not every minute.
-    const columns = 'id, name, email, hourly_rate, status, position, payment_methods, created_at, updated_at'
+    //
+    // `permissions` is read in full: the per-worker Access section of the
+    // Workers page reads it from this list, and omitting it (the previous
+    // behaviour) made a freshly saved tick box look like it had snapped
+    // back to off — the database was correct, the round-trip was just
+    // dropping the column.
+    const columns = 'id, name, email, hourly_rate, status, position, payment_methods, permissions, created_at, updated_at'
     const stripImages = (rows: Worker[]): Worker[] =>
       normalizeWorkers(rows).map((w) => ({ ...w, avatar_url: null, qr_code_url: null }))
     const fetchRows = async () => {
@@ -832,7 +846,19 @@ export const supabaseBackend: DataBackend = {
       }
       return client().from('workers').select(columns).order('name')
     }
-    const { data, error } = await fetchRows()
+    let { data, error } = await fetchRows()
+    if (error && isMissingColumn(error as { code?: string; message?: string }, 'permissions')) {
+      // Database without supabase/worker-permissions.sql: drop the column and
+      // warn in the console. The store still loads (with permissions: []),
+      // and the access tick boxes explain what to run.
+      console.warn('[workers] the workers.permissions column is missing — run supabase/worker-permissions.sql to enable per-worker access.')
+      const noPermColumns = columns.replace('permissions, ', '')
+      const retry = await (canSeeTeam(me.data!) || !me.data!.workerId
+        ? client().from('workers').select(noPermColumns).order('name')
+        : client().from('workers').select(noPermColumns).eq('id', me.data!.workerId))
+      data = (retry.data as Worker[] | null) ?? null
+      error = retry.error
+    }
     if (!error) return ok(stripImages((data as Worker[]) ?? []))
     // A database from before the position/payment-methods columns existed:
     // fall back to the original column set instead of breaking the worker list.
