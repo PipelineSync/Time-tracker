@@ -16,7 +16,7 @@ import { formatMinutes, money, timerElapsedMs } from '@/lib/utils'
  * The admin has no start-timer — they add time via manual entries.
  */
 export function TrackerPage() {
-  const { workers, entries, clients, activeTimer, startTimer, pauseTimer, resumeTimer, stopTimer, cancelTimer, settings, user, dataLoading } = useStore()
+  const { workers, entries, clients, activeClients, activeTimer, startTimer, pauseTimer, resumeTimer, stopTimer, cancelTimer, settings, user, dataLoading } = useStore()
 
   const [starting, setStarting] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -30,6 +30,10 @@ export function TrackerPage() {
   // The backend already scopes activeTimer to the signed-in worker (including
   // self-healed leftovers from a previous session), so no extra matching here.
   const myTimer = activeTimer ?? null
+  // A worker cannot clock in without an active client — the Clock In dialog
+  // surfaces this, but the page itself also reflects it so the button never
+  // even pretends to work.
+  const noActiveClients = activeClients.length === 0
 
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000)
@@ -55,10 +59,15 @@ export function TrackerPage() {
       toast.error('No worker profile linked to this account. Please contact your administrator.')
       return
     }
+    // A client is required to clock in. The dialog already disables the
+    // "Clock In" button until one is chosen, but never accept a missing
+    // selection here either.
+    const clientId = input?.clientId?.trim()
+    if (!clientId) {
+      toast.error('Choose a client before clocking in.')
+      return
+    }
     setStarting(true)
-    // Fall back to the client of the last shift when the dialog was skipped, so
-    // the hours still land against someone.
-    const clientId = input?.clientId || lastClientId || undefined
     const res = await startTimer({
       worker_id: currentWorkerId,
       client_id: clientId,
@@ -184,11 +193,18 @@ export function TrackerPage() {
               size="lg"
               className="gap-2 bg-[#06245B] px-10 text-base hover:bg-[#0a306e] dark:bg-white dark:text-[#06245B] dark:hover:bg-white/90"
               onClick={() => setClockInOpen(true)}
-              disabled={starting || !currentWorkerId}
+              disabled={starting || !currentWorkerId || noActiveClients}
+              title={noActiveClients ? 'Add a client before clocking in' : undefined}
             >
               {starting ? 'Clocking in…' : (<><LogIn className="h-5 w-5" /> Clock In</>)}
             </Button>
-            <p className="text-xs text-muted-foreground">Your hourly rate is set by your administrator.</p>
+            {noActiveClients ? (
+              <p className="max-w-sm text-center text-xs text-muted-foreground">
+                Your admin hasn't added any clients yet. You'll be able to clock in as soon as they add at least one.
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground">Your hourly rate is set by your administrator.</p>
+            )}
           </CardContent>
         </Card>
       )}

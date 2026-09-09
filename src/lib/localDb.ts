@@ -845,6 +845,12 @@ export const localBackend: DataBackend = {
       const w = c.data.workers.find((x) => x.id === workerId)
       if (!w) return { data: null, error: 'No worker profile linked to this account.' }
       rate = w.hourly_rate
+      // Every shift is booked to a client. A worker calling startTimer without
+      // a client_id means the UI skipped the dialog — refuse the clock-in so
+      // untagged hours never land in the ledger.
+      if (!input.client_id) {
+        return { data: null, error: 'Choose a client before clocking in.' }
+      }
     } else {
       const w = c.data.workers.find((x) => x.id === workerId)
       if (!w) return { data: null, error: 'Select a worker.' }

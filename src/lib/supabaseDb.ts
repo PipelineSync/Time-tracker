@@ -1130,6 +1130,12 @@ export const supabaseBackend: DataBackend = {
       workerId = me.data!.workerId
       const { data: w } = await client().from('workers').select('hourly_rate').eq('id', workerId).single()
       rate = w?.hourly_rate ?? 0
+      // Every shift is booked to a client. A worker calling startTimer without
+      // a client_id means the UI skipped the dialog — refuse the clock-in so
+      // untagged hours never land in the ledger.
+      if (!input.client_id) {
+        return fail('Choose a client before clocking in.')
+      }
     } else {
       const { data: w } = await client().from('workers').select('hourly_rate').eq('id', workerId).single()
       rate = rate ?? w?.hourly_rate ?? 0
