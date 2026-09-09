@@ -173,7 +173,7 @@ export function FinancePage() {
   // No Finance access at all: this is the worker's "Payroll" screen — their
   // own payments only. The ledger tabs, the summary and other workers' rows
   // simply do not render (and the backends never send them anyway).
-  if (!canFinance) {
+  if (!canFinance && !can('finance.subscription') && !can('finance.payroll')) {
     return (
       <div className="space-y-6">
         <PageHeader title="Payroll" description="Your payment history and how you get paid." />
@@ -184,24 +184,37 @@ export function FinancePage() {
 
   const addButtons = canManage && (
     <>
-      {tab === 'subscriptions' && (
+      {can('finance.subscription') && tab === 'subscriptions' && (
         <Button size="sm" onClick={() => setSubDialog({ open: true, item: null })}>
           <Plus className="mr-1 h-4 w-4" /> Add subscription
         </Button>
       )}
-      {tab === 'payroll' && (
+      {can('finance.payroll') && tab === 'payroll' && (
         <Button size="sm" onClick={() => setPayDialog({ open: true, item: null })}>
           <Plus className="mr-1 h-4 w-4" /> Add payroll run
         </Button>
       )}
       {tab === 'due' && (
         <>
-          <Button size="sm" variant="outline" onClick={() => setSubDialog({ open: true, item: null })}>
-            <Plus className="mr-1 h-4 w-4" /> Subscription
-          </Button>
-          <Button size="sm" variant="outline" onClick={() => setPayDialog({ open: true, item: null })}>
-            <Plus className="mr-1 h-4 w-4" /> Payroll
-          </Button>
+          {can('finance.subscription') && (
+            <Button size="sm" variant="outline" onClick={() => setSubDialog({ open: true, item: null })}>
+              <Plus className="mr-1 h-4 w-4" /> Subscription
+            </Button>
+          )}
+          {can('finance.payroll') && (
+            <Button size="sm" variant="outline" onClick={() => setPayDialog({ open: true, item: null })}>
+              <Plus className="mr-1 h-4 w-4" /> Payroll
+            </Button>
+          )}
+          {(!can('finance.subscription') && !can('finance.payroll')) && (
+            <>
+              <Button size="sm" variant="outline" onClick={() => setSubDialog({ open: true, item: null })}>
+                <Plus className="mr-1 h-4 w-4" /> Subscription
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => setPayDialog({ open: true, item: null })}>
+                <Plus className="mr-1 h-4 w-4" /> Payroll
+              </Button>
+            </>)}
           <Button size="sm" onClick={() => setBillDialog({ open: true, item: null })}>
             <Plus className="mr-1 h-4 w-4" /> Bill
           </Button>
@@ -259,8 +272,12 @@ export function FinancePage() {
       <Tabs value={tab} onValueChange={(v) => changeTab(v as 'due' | 'subscriptions' | 'payroll')}>
         <TabsList>
           <TabsTrigger value="due">Due dates</TabsTrigger>
-          <TabsTrigger value="subscriptions">Subscriptions</TabsTrigger>
-          <TabsTrigger value="payroll">Payroll</TabsTrigger>
+          {can('finance.subscription') && (
+            <TabsTrigger value="subscriptions">Subscriptions</TabsTrigger>
+          )}
+          {can('finance.payroll') && (
+            <TabsTrigger value="payroll">Payroll</TabsTrigger>
+          )}
         </TabsList>
 
         {/* ---------------- Due dates ---------------- */}

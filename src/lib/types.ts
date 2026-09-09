@@ -137,6 +137,8 @@ export type Permission =
   | 'payments.manage'
   | 'finance.view'
   | 'finance.manage'
+  | 'finance.subscription'
+  | 'finance.payroll'
   | 'reports.view'
   | 'clients.manage'
   | 'settings.manage'
@@ -153,6 +155,8 @@ export const PERMISSIONS: Permission[] = [
   'payments.manage',
   'finance.view',
   'finance.manage',
+  'finance.subscription',
+  'finance.payroll',
   'reports.view',
   'clients.manage',
   'settings.manage',
@@ -171,6 +175,8 @@ export const TEAM_VIEW_PERMISSIONS: Permission[] = [
   'tasks.view_all',
   'payments.view_all',
   'finance.view',
+  'finance.subscription',
+  'finance.payroll',
   'reports.view',
 ]
 
@@ -233,6 +239,8 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
     description: 'Subscriptions, worker payroll and bill due dates.',
     items: [
       { key: 'finance.view', label: 'View the finance section', hint: "The business's subscriptions, worker payroll and due dates — plus the finance part of Reports. Off by default: Finance is admin-only until this is ticked." },
+      { key: 'finance.subscription', label: 'View subscriptions', hint: 'Worker can view subscriptions but not manage them.' },
+      { key: 'finance.payroll', label: 'View payroll', hint: 'Worker can view payroll runs but not manage them.' },
       { key: 'finance.manage', label: 'Manage finance', hint: 'Add and edit subscriptions, payroll runs and bills, mark items paid, advance billing dates.', requires: 'finance.view' },
     ],
   },
