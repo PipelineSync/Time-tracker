@@ -17,9 +17,10 @@ import { ClientSelect } from '@/components/ClientSelect'
 /**
  * Shown while a worker is on the clock so they can move to a different client
  * without clocking out. The time already worked is split into a finished entry
- * for the previous client and the running timer starts fresh for the one they
- * pick here. Only ACTIVE clients (other than the one they're currently on) are
- * offered, and an optional note rides along on the new segment.
+ * for the previous client (so each client is billed correctly), while the
+ * on-screen shift clock keeps counting — it does not reset. Only ACTIVE
+ * clients (other than the one they're currently on) are offered, and an
+ * optional note rides along on the new segment.
  */
 export function SwitchClientDialog({
   open,
@@ -71,8 +72,8 @@ export function SwitchClientDialog({
           <DialogTitle>Switch client{workerName ? `, ${workerName}` : ''}?</DialogTitle>
           <DialogDescription>
             {currentClientName
-              ? `You're currently on ${currentClientName}. Switching keeps your clock running — the time you've already worked stays with ${currentClientName}, and a new segment starts for the client you pick below.`
-              : 'Switching keeps your clock running. Pick the client to move to.'}
+              ? `You're currently on ${currentClientName}. Switching keeps your clock running (it will not reset) — the time you've already worked stays with ${currentClientName}, and new time is allocated to the client you pick below.`
+              : 'Switching keeps your clock running (it will not reset). Pick the client to move to — time already worked stays with the previous client.'}
           </DialogDescription>
         </DialogHeader>
 

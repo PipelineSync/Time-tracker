@@ -862,12 +862,17 @@ export const localBackend: DataBackend = {
       if (c.user.role === 'worker') return { data: existing, error: null }
       return { data: null, error: 'That worker already has a running timer.' }
     }
+    const startedAt = input.start_time || new Date().toISOString()
     const timer: ActiveTimer = {
       id: uid(),
       worker_id: workerId,
       client_id: resolveClientId(c.data, input.client_id),
       project: input.project || null,
-      start_time: input.start_time || new Date().toISOString(),
+      start_time: startedAt,
+      // Whole-shift anchors — stay put across client switches so the UI clock
+      // does not reset while each client still gets its own allocated minutes.
+      session_start: startedAt,
+      prior_worked_ms: 0,
       notes: input.notes || null,
       hourly_rate: rate ?? 0,
       paused: false,
@@ -1006,6 +1011,7 @@ export const localBackend: DataBackend = {
     if (timer.paused && timer.pause_start) {
       totalPause += now.getTime() - new Date(timer.pause_start).getTime()
     }
+    // Minutes for THIS client only (from the current segment start).
     const workingMs = Math.max(0, now.getTime() - new Date(timer.start_time).getTime() - totalPause)
     const totalMinutes = Math.max(0, Math.round(workingMs / 60000))
     const breakMinutes = Math.max(0, Math.round(totalPause / 60000))
@@ -1028,12 +1034,18 @@ export const localBackend: DataBackend = {
     }
     c.data.entries.push(entry)
     c.data.activeTimers = c.data.activeTimers.filter((t) => t.id !== timer.id)
+    // Keep the on-screen shift clock continuous: carry forward the original
+    // clock-in and the worked ms already saved to previous clients.
+    const sessionStart = timer.session_start || timer.start_time
+    const priorWorkedMs = Math.max(0, (timer.prior_worked_ms || 0) + workingMs)
     const next: ActiveTimer = {
       id: uid(),
       worker_id: timer.worker_id,
       client_id: newClientId,
       project: null,
       start_time: now.toISOString(),
+      session_start: sessionStart,
+      prior_worked_ms: priorWorkedMs,
       notes: typeof input.notes === 'string' && input.notes.trim() ? input.notes.trim() : null,
       hourly_rate: timer.hourly_rate ?? 0,
       paused: false,

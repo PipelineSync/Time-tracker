@@ -62,15 +62,26 @@ export function formatDurationFromMs(ms: number): string {
   return `${pad(h)}:${pad(m)}:${pad(s)}`
 }
 
-/** Elapsed working time for an active timer, honoring pauses. */
+/**
+ * Elapsed working time for an active timer, honoring pauses.
+ *
+ * Includes `prior_worked_ms` from earlier client segments in the same shift,
+ * so a "Switch client" keeps the on-screen clock continuous while still
+ * allocating each segment to the right client via `start_time`.
+ */
 export function timerElapsedMs(timer: ActiveTimer, now: Date): number {
   const start = new Date(timer.start_time).getTime()
-  let elapsed = now.getTime() - start - (timer.total_pause_ms || 0)
+  let segment = now.getTime() - start - (timer.total_pause_ms || 0)
   if (timer.paused && timer.pause_start) {
     // While paused, freeze at the moment the pause began.
-    elapsed = new Date(timer.pause_start).getTime() - start - (timer.total_pause_ms || 0)
+    segment = new Date(timer.pause_start).getTime() - start - (timer.total_pause_ms || 0)
   }
-  return Math.max(0, elapsed)
+  return Math.max(0, (timer.prior_worked_ms || 0) + Math.max(0, segment))
+}
+
+/** Original clock-in instant for a shift (survives client switches). */
+export function timerSessionStart(timer: ActiveTimer): string {
+  return timer.session_start || timer.start_time
 }
 
 /** Total break time so far for an active timer, including a break in progress. */

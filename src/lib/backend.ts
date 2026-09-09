@@ -157,10 +157,11 @@ export interface DataBackend {
   /**
    * Keep a worker's clock running but move it to a different client (the
    * signed-in worker's own running timer only). The time already worked is
-   * split off into a finished entry for the previous client and a fresh timer
-   * starts for the new one, so each client gets exactly the minutes worked for
-   * it. Returns the new (running) timer. Any break in progress is closed at
-   * the split, exactly as it would be on a clock-out.
+   * split off into a finished entry for the previous client so each client
+   * gets exactly the minutes worked for it, while the on-screen shift clock
+   * keeps counting (session_start + prior_worked_ms) instead of resetting.
+   * Returns the new (running) timer. Any break in progress is closed at the
+   * split, exactly as it would be on a clock-out.
    */
   switchClient(input: { timerId: string; client_id: string; notes?: string }): Promise<BackendResult<ActiveTimer>>
 

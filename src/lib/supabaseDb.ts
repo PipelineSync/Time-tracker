@@ -1176,17 +1176,35 @@ export const supabaseBackend: DataBackend = {
       if (me.data!.role === 'worker') return ok(existing)
       return fail('That worker already has a running timer.')
     }
-    const { data, error } = await withClientColumn<ActiveTimer>((withClient) => client().from('active_timers').insert({
-      worker_id: workerId,
-      ...(withClient ? { client_id: input.client_id ?? null } : {}),
-      project: input.project || null,
-      start_time: input.start_time || new Date().toISOString(),
-      notes: input.notes || null,
-      hourly_rate: rate ?? 0,
-      paused: false,
-      pause_start: null,
-      total_pause_ms: 0,
-    }).select().single() as PromiseLike<{ data: ActiveTimer | null; error: { code?: string; message?: string } | null }>)
+    const startedAt = input.start_time || new Date().toISOString()
+    // session_start / prior_worked_ms keep the on-screen shift clock continuous
+    // across client switches (see switchClient). A database without the
+    // columns still works — withSessionFields retries without them.
+    const insertTimer = (withClient: boolean, withSession: boolean) => {
+      const row: Record<string, unknown> = {
+        worker_id: workerId,
+        project: input.project || null,
+        start_time: startedAt,
+        notes: input.notes || null,
+        hourly_rate: rate ?? 0,
+        paused: false,
+        pause_start: null,
+        total_pause_ms: 0,
+      }
+      if (withClient) row.client_id = input.client_id ?? null
+      if (withSession) {
+        row.session_start = startedAt
+        row.prior_worked_ms = 0
+      }
+      return client().from('active_timers').insert(row).select().single() as PromiseLike<{ data: ActiveTimer | null; error: { code?: string; message?: string } | null }>
+    }
+    let withSession = true
+    let { data, error } = await withClientColumn<ActiveTimer>((withClient) => insertTimer(withClient, withSession))
+    if (error && (isMissingColumn(error, 'session_start') || isMissingColumn(error, 'prior_worked_ms'))) {
+      console.warn('[work-tracker] active_timers.session_start/prior_worked_ms missing — run supabase/switch-client-session.sql so switch-client keeps the clock continuous.')
+      withSession = false
+      ;({ data, error } = await withClientColumn<ActiveTimer>((withClient) => insertTimer(withClient, withSession)))
+    }
     if (error) {
       // 23505 = unique violation on active_timers_one_per_worker: this
       // worker already has an unfinished timer row.
@@ -1319,6 +1337,7 @@ export const supabaseBackend: DataBackend = {
     // finished stretch is booked to the client the worker was on before the
     // switch and carries the shift's original note.
     const totalPause = (timer.total_pause_ms || 0) + (timer.paused && timer.pause_start ? now.getTime() - new Date(timer.pause_start).getTime() : 0)
+    // Minutes for THIS client only (from the current segment start).
     const workingMs = Math.max(0, now.getTime() - new Date(timer.start_time).getTime() - totalPause)
     const totalMinutes = Math.max(0, Math.round(workingMs / 60000))
     const breakMinutes = Math.max(0, Math.round(totalPause / 60000))
@@ -1344,23 +1363,48 @@ export const supabaseBackend: DataBackend = {
     // before insert — the worker_id unique index would reject a second row).
     await client().from('active_timers').delete().eq('id', input.timerId)
     const notes = typeof input.notes === 'string' && input.notes.trim() ? input.notes.trim() : null
-    const created = await withClientColumn<ActiveTimer>((withClient) => client().from('active_timers').insert({
-      worker_id: timer.worker_id,
-      ...(withClient ? { client_id: input.client_id } : {}),
-      project: null,
-      start_time: now.toISOString(),
-      notes,
-      hourly_rate: timer.hourly_rate ?? 0,
-      paused: false,
-      pause_start: null,
-      total_pause_ms: 0,
-    }).select().single() as PromiseLike<{ data: ActiveTimer | null; error: { code?: string; message?: string } | null }>)
+    // Keep the on-screen shift clock continuous: carry forward the original
+    // clock-in and the worked ms already saved to previous clients.
+    const sessionStart = (timer as ActiveTimer).session_start || timer.start_time
+    const priorWorkedMs = Math.max(0, ((timer as ActiveTimer).prior_worked_ms || 0) + workingMs)
+    const insertNext = (withClient: boolean, withSession: boolean) => {
+      const row: Record<string, unknown> = {
+        worker_id: timer.worker_id,
+        project: null,
+        start_time: now.toISOString(),
+        notes,
+        hourly_rate: timer.hourly_rate ?? 0,
+        paused: false,
+        pause_start: null,
+        total_pause_ms: 0,
+      }
+      if (withClient) row.client_id = input.client_id
+      if (withSession) {
+        row.session_start = sessionStart
+        row.prior_worked_ms = priorWorkedMs
+      }
+      return client().from('active_timers').insert(row).select().single() as PromiseLike<{ data: ActiveTimer | null; error: { code?: string; message?: string } | null }>
+    }
+    let withSession = true
+    let created = await withClientColumn<ActiveTimer>((withClient) => insertNext(withClient, withSession))
+    if (created.error && (isMissingColumn(created.error, 'session_start') || isMissingColumn(created.error, 'prior_worked_ms'))) {
+      console.warn('[work-tracker] active_timers.session_start/prior_worked_ms missing — run supabase/switch-client-session.sql so switch-client keeps the clock continuous.')
+      withSession = false
+      created = await withClientColumn<ActiveTimer>((withClient) => insertNext(withClient, withSession))
+    }
     if (created.error || !created.data) {
       // The split entry is saved but the fresh timer did not come up — tell
       // the worker to clock in again so nothing is lost.
       return fail(created.error?.message ?? 'The time was saved, but the switch did not complete. Please clock in again.')
     }
-    return ok(created.data as ActiveTimer)
+    // When the session columns are missing, still return the continuous values
+    // so this page's display does not reset until the next full refresh.
+    const next = created.data as ActiveTimer
+    if (!withSession) {
+      next.session_start = sessionStart
+      next.prior_worked_ms = priorWorkedMs
+    }
+    return ok(next)
   },
 
   async deleteTimer(timerId) {
