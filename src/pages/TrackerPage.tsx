@@ -11,6 +11,8 @@ import { SwitchClientDialog } from '@/components/SwitchClientDialog'
 import { toast } from 'sonner'
 import { Square, Pause, PlayCircle, LogIn, TimerReset, Repeat } from 'lucide-react'
 import { formatMinutes, money, timerElapsedMs } from '@/lib/utils'
+import { ClientColorStyles } from '@/lib/types'
+import { cn } from '@/lib/utils'
 
 /**
  * Worker-only clock in / break / clock out screen.
@@ -153,6 +155,10 @@ export function TrackerPage() {
       (myTimer.paused && myTimer.pause_start ? Math.max(0, now - new Date(myTimer.pause_start).getTime()) : 0)
     : 0
 
+  // The client this shift is currently booked to, shown at the top of the card.
+  const currentClient = myTimer?.client_id ? clients.find((c) => c.id === myTimer.client_id) ?? null : null
+  const currentScope = currentClient?.name ?? myTimer?.project ?? null
+
   return (
     <div className="space-y-6">
       <PageHeader title="Clock In / Out" description="Clock in, take breaks, and clock out." />
@@ -165,6 +171,26 @@ export function TrackerPage() {
               {running ? 'On the clock' : 'On break'}
             </CardDescription>
             <CardTitle className="text-2xl">{workerProfile?.name || 'You'}</CardTitle>
+            {currentScope && (
+              <div className="flex items-center justify-center">
+                <span
+                  className={cn(
+                    'inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-medium',
+                    running
+                      ? 'bg-[#F77A0A]/15 text-[#b85c05] dark:text-[#ffb066]'
+                      : 'bg-[#36B7C9]/15 text-[#0d7c8c] dark:text-[#7fdbe8]'
+                  )}
+                >
+                  <span
+                    className={cn(
+                      'h-2 w-2 rounded-full',
+                      currentClient?.color ? ClientColorStyles[currentClient.color].dot : running ? 'bg-[#F77A0A]' : 'bg-[#36B7C9]'
+                    )}
+                  />
+                  {currentScope}
+                </span>
+              </div>
+            )}
           </CardHeader>
           <CardContent className="flex flex-col items-center space-y-6">
             <div className="rounded-2xl bg-primary/5 px-10 py-8">
