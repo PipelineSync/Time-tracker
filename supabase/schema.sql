@@ -1097,6 +1097,8 @@ alter table public.workers add constraint workers_permissions_valid check (
     'tasks.manage_all',
     'payments.view_all',
     'payments.manage',
+    'finance.view',
+    'finance.manage',
     'reports.view',
     'clients.manage',
     'settings.manage'
@@ -1144,6 +1146,7 @@ as $$
       or public.has_permission('entries.view_all')
       or public.has_permission('tasks.view_all')
       or public.has_permission('payments.view_all')
+      or public.has_permission('finance.view')
       or public.has_permission('reports.view');
 $$;
 
@@ -1376,3 +1379,106 @@ create policy "comments_insert" on public.time_entry_comments
     )
   );
 
+-- ============================================================
+-- Finance (subscriptions, worker payroll, bill due dates)
+-- One ledger table for the Finance section; a worker only reaches it when
+-- the admin grants `finance.view` (read) / `finance.manage` (writes) —
+-- admin-only by default. See supabase/finance.sql for existing databases.
+-- ============================================================
+
+create table if not exists public.finance_items (
+  id           uuid primary key default gen_random_uuid(),
+  -- Workspace owner (the admin). Set automatically by trg_finance_items_user.
+  user_id      uuid not null references auth.users (id) on delete cascade,
+  kind         text not null check (kind in ('subscription','payroll','bill')),
+  -- Label for subscriptions and bills; payroll rows are named by their worker.
+  name         text check (name is null or length(btrim(name)) between 1 and 80),
+  -- The worker being paid (payroll only). Deleting the worker removes the run.
+  worker_id    uuid references public.workers (id) on delete cascade,
+  amount       numeric(12,2) not null default 0 check (amount >= 0),
+  -- Billing cycle (subscriptions only).
+  cycle        text check (cycle is null or cycle in ('monthly','yearly')),
+  -- The month a payroll run covers, 'YYYY-MM' (payroll only).
+  period_month text check (period_month is null or period_month ~ '^[0-9]{4}-[0-9]{2}$'),
+  -- Next bill date / pay day / deadline. A plain calendar date, like tasks.
+  due_date     date not null,
+  -- active/paused are subscription states; unpaid/paid the other two.
+  status       text not null default 'active'
+               check (status in ('active','paused','unpaid','paid')),
+  -- When a payroll run or bill was marked paid (subscriptions never use it).
+  paid_at      timestamptz,
+  note         text,
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now(),
+  -- Shape rules per kind, so rows written outside the app cannot go rogue.
+  constraint finance_items_needs_name check (
+    kind = 'payroll' or (name is not null and btrim(name) <> '')
+  ),
+  constraint finance_items_payroll_fields check (
+    (kind = 'payroll' and worker_id is not null and period_month is not null)
+    or (kind <> 'payroll' and worker_id is null)
+  ),
+  constraint finance_items_cycle_only_subs check (
+    (kind = 'subscription' and cycle is not null) or (kind <> 'subscription' and cycle is null)
+  ),
+  constraint finance_items_status_per_kind check (
+    (kind = 'subscription' and status in ('active','paused'))
+    or (kind <> 'subscription' and status in ('unpaid','paid'))
+  ),
+  constraint finance_items_paid_stamp check (
+    (status = 'paid' and paid_at is not null) or (status <> 'paid' and paid_at is null)
+  )
+);
+
+create index if not exists finance_items_user_idx on public.finance_items (user_id);
+-- The agenda query: one workspace's open lines, oldest due date first.
+create index if not exists finance_items_user_due_idx on public.finance_items (user_id, due_date);
+-- One payroll run per worker per month.
+create unique index if not exists finance_items_payroll_unique
+  on public.finance_items (user_id, worker_id, period_month)
+  where kind = 'payroll';
+
+alter table public.finance_items enable row level security;
+
+-- The admin owns the ledger; a worker reads it with finance.view and changes
+-- it with finance.manage. Both are off by default, so the section is
+-- admin-only until the admin grants them.
+drop policy if exists "finance_items_select" on public.finance_items;
+create policy "finance_items_select" on public.finance_items
+  for select using (
+    ((select auth.uid()) = user_id and (select public.is_admin()))
+    or (user_id = (select public.workspace_owner_id()) and (select public.has_permission('finance.view')))
+  );
+
+drop policy if exists "finance_items_insert" on public.finance_items;
+create policy "finance_items_insert" on public.finance_items
+  for insert with check (
+    ((select auth.uid()) = user_id and (select public.is_admin()))
+    or (user_id = (select public.workspace_owner_id()) and (select public.has_permission('finance.manage')))
+  );
+
+drop policy if exists "finance_items_update" on public.finance_items;
+create policy "finance_items_update" on public.finance_items
+  for update using (
+    ((select auth.uid()) = user_id and (select public.is_admin()))
+    or (user_id = (select public.workspace_owner_id()) and (select public.has_permission('finance.manage')))
+  )
+  with check (
+    ((select auth.uid()) = user_id and (select public.is_admin()))
+    or (user_id = (select public.workspace_owner_id()) and (select public.has_permission('finance.manage')))
+  );
+
+drop policy if exists "finance_items_delete" on public.finance_items;
+create policy "finance_items_delete" on public.finance_items
+  for delete using (
+    ((select auth.uid()) = user_id and (select public.is_admin()))
+    or (user_id = (select public.workspace_owner_id()) and (select public.has_permission('finance.manage')))
+  );
+
+drop trigger if exists trg_finance_items_user on public.finance_items;
+create trigger trg_finance_items_user before insert on public.finance_items
+  for each row execute function public.set_user_id();
+
+drop trigger if exists trg_finance_items_updated on public.finance_items;
+create trigger trg_finance_items_updated before update on public.finance_items
+  for each row execute function public.set_updated_at();

@@ -117,6 +117,8 @@ export type Permission =
   | 'tasks.manage_all'
   | 'payments.view_all'
   | 'payments.manage'
+  | 'finance.view'
+  | 'finance.manage'
   | 'reports.view'
   | 'clients.manage'
   | 'settings.manage'
@@ -131,6 +133,8 @@ export const PERMISSIONS: Permission[] = [
   'tasks.manage_all',
   'payments.view_all',
   'payments.manage',
+  'finance.view',
+  'finance.manage',
   'reports.view',
   'clients.manage',
   'settings.manage',
@@ -148,6 +152,7 @@ export const TEAM_VIEW_PERMISSIONS: Permission[] = [
   'entries.view_all',
   'tasks.view_all',
   'payments.view_all',
+  'finance.view',
   'reports.view',
 ]
 
@@ -205,6 +210,15 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
     ],
   },
   {
+    key: 'finance',
+    label: 'Finance',
+    description: 'Subscriptions, worker payroll and bill due dates.',
+    items: [
+      { key: 'finance.view', label: 'View the finance section', hint: "The business's subscriptions, worker payroll and due dates — plus the finance part of Reports. Off by default: Finance is admin-only until this is ticked." },
+      { key: 'finance.manage', label: 'Manage finance', hint: 'Add and edit subscriptions, payroll runs and bills, mark items paid, advance billing dates.', requires: 'finance.view' },
+    ],
+  },
+  {
     key: 'reports',
     label: 'Reports',
     description: 'Charts and CSV export.',
@@ -246,7 +260,7 @@ export const PERMISSION_PRESETS: Record<PermissionPreset, { label: string; descr
   },
   manager: {
     label: 'Manager',
-    description: 'Supervisor plus time entries, clients, payments and reports.',
+    description: 'Supervisor plus time entries, clients, payments, finance (read) and reports.',
     permissions: [
       'dashboard.view',
       'workers.view',
@@ -256,6 +270,7 @@ export const PERMISSION_PRESETS: Record<PermissionPreset, { label: string; descr
       'tasks.manage_all',
       'payments.view_all',
       'payments.manage',
+      'finance.view',
       'reports.view',
       'clients.manage',
     ],
@@ -541,4 +556,66 @@ export interface Payment {
    * methods when marking it paid). Null until the payment is marked paid.
    */
   payment_method?: PaymentMethod | null
+}
+
+// ---- Finance ----------------------------------------------------------------
+
+/**
+ * What a finance row describes. The Finance section is a single ledger with
+ * three kinds of line:
+ *  - `subscription` — recurring business software/services (Adobe, QuickBooks…),
+ *    billed on a cycle; "paying" one simply rolls its next due date forward.
+ *  - `payroll` — a worker's pay for one month (amount entered by the admin,
+ *    suggested from that worker's tracked earnings for the month).
+ *  - `bill` — a one-off amount that is due on a date (rent, tax, insurance…).
+ */
+export type FinanceKind = 'subscription' | 'payroll' | 'bill'
+
+export const FINANCE_KINDS: FinanceKind[] = ['subscription', 'payroll', 'bill']
+
+export const FinanceKindNames: Record<FinanceKind, string> = {
+  subscription: 'Subscription',
+  payroll: 'Payroll',
+  bill: 'Bill',
+}
+
+/** How often a subscription is billed. */
+export type BillingCycle = 'monthly' | 'yearly'
+
+export const BillingCycleNames: Record<BillingCycle, string> = {
+  monthly: 'Monthly',
+  yearly: 'Yearly',
+}
+
+/**
+ * `active`/`paused` are the subscription states; `unpaid`/`paid` are the
+ * states a payroll run or a bill moves through. Kept in one column because all
+ * three kinds share the same ledger and due-date list.
+ */
+export type FinanceStatus = 'active' | 'paused' | 'unpaid' | 'paid'
+
+export interface FinanceItem {
+  id: string
+  kind: FinanceKind
+  /** Label — required for subscriptions and bills; payroll rows use the worker's name. */
+  name: string | null
+  /** The worker being paid (payroll rows only). */
+  worker_id: string | null
+  amount: number
+  /** Billing cycle (subscriptions only). */
+  cycle: BillingCycle | null
+  /** The month a payroll run covers, 'YYYY-MM' (payroll only). */
+  period_month: string | null
+  /**
+   * The date this line is due — next billing date (subscription), pay day
+   * (payroll) or the deadline (bill). A plain calendar date ('YYYY-MM-DD'),
+   * like task due dates: no time component, interpreted locally.
+   */
+  due_date: string
+  status: FinanceStatus
+  /** When a payroll run or bill was marked paid (subscriptions never use it). */
+  paid_at: string | null
+  note: string | null
+  created_at: string
+  updated_at: string
 }

@@ -16,6 +16,10 @@ import type {
   TaskStatus,
   Client,
   Permission,
+  FinanceItem,
+  FinanceKind,
+  BillingCycle,
+  FinanceStatus,
 } from './types'
 
 export interface BackendResult<T> {
@@ -58,6 +62,26 @@ export interface CreateTaskInput {
   status?: TaskStatus
   priority?: Task['priority']
   due_date?: string | null
+}
+
+/**
+ * Fields the caller may set when adding a finance line. Which ones are
+ * required depends on `kind` (validated by the backends):
+ * subscriptions need a `name` + `cycle`, payroll needs a `worker_id` +
+ * `period_month`, bills need a `name`. `due_date` is always required.
+ */
+export interface CreateFinanceItemInput {
+  kind: FinanceKind
+  name?: string | null
+  worker_id?: string | null
+  amount: number
+  cycle?: BillingCycle | null
+  /** 'YYYY-MM' (payroll only). */
+  period_month?: string | null
+  /** 'YYYY-MM-DD'. */
+  due_date: string
+  status?: FinanceStatus
+  note?: string | null
 }
 
 export interface DataBackend {
@@ -156,6 +180,22 @@ export interface DataBackend {
 
   // Payments / settlements
   listPayments(limit?: number): Promise<BackendResult<Payment[]>>
+  /**
+   * The Finance ledger — subscriptions, worker payroll and one-off bills, all
+   * carrying a due date. Readable by the admin and by workers the admin
+   * granted `finance.view`; changeable only with `finance.manage`. Workers
+   * without either get an empty list rather than an error, so background syncs
+   * never toast.
+   */
+  listFinanceItems(): Promise<BackendResult<FinanceItem[]>>
+  createFinanceItem(input: CreateFinanceItemInput): Promise<BackendResult<FinanceItem>>
+  /**
+   * Patch a finance line. Marking `status: 'paid'` stamps `paid_at`; moving a
+   * paid line back to unpaid clears it. Advancing a subscription's billing
+   * date is done by patching `due_date` (the backend keeps `updated_at`).
+   */
+  updateFinanceItem(id: string, patch: Partial<Omit<FinanceItem, 'id' | 'created_at' | 'updated_at'>>): Promise<BackendResult<FinanceItem>>
+  deleteFinanceItem(id: string): Promise<BackendResult<null>>
   settleWorker(workerId: string, note?: string): Promise<BackendResult<Payment>>
   /**
    * Change a payment's status. When marking it `paid`, `paymentMethod` records

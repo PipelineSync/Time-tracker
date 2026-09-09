@@ -19,18 +19,23 @@ import type {
   ClientColor,
   ClientStatus,
   Permission,
+  FinanceItem,
+  FinanceKind,
+  FinanceStatus,
+  BillingCycle,
 } from './types'
 import {
   CLIENT_COLORS,
   DEFAULT_CLIENT_COLOR,
   DEFAULT_SLACK_SETTINGS,
+  FINANCE_KINDS,
   PERMISSIONS,
   TEAM_VIEW_PERMISSIONS,
   normalizePermissions,
   TASK_STATUSES,
   UNASSIGNED_CLIENT_NAME,
 } from './types'
-import type { BackendResult, DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput } from './backend'
+import type { BackendResult, DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, CreateFinanceItemInput } from './backend'
 import { ACCOUNT_DEACTIVATED_MESSAGE } from './backend'
 import { buildDemoSeed } from './demoSeed'
 import { uid, computeEarnings, computeTotalMinutes, formatMinutes, formatDate } from './utils'
@@ -62,6 +67,8 @@ interface UserData {
   tasks: Task[]
   /** Client master list (admin-managed, see the Tasks page → Clients). */
   clients: Client[]
+  /** Finance ledger: subscriptions, payroll runs and bills (see the Finance page). */
+  financeItems: FinanceItem[]
 }
 
 const USERS_KEY = 'wt_users'
@@ -92,7 +99,7 @@ function writeUsers(users: StoredUser[]) {
 }
 
 function emptyData(): UserData {
-  return { workers: [], entries: [], activeTimers: [], settings: null, comments: [], notifications: [], payments: [], tasks: [], clients: [] }
+  return { workers: [], entries: [], activeTimers: [], settings: null, comments: [], notifications: [], payments: [], tasks: [], clients: [], financeItems: [] }
 }
 
 /** The method the admin paid a settlement with, or null when unknown/invalid. */
@@ -204,6 +211,62 @@ function clientName(d: UserData, clientId: string | null | undefined): string | 
   return d.clients.find((c) => c.id === clientId)?.name ?? null
 }
 
+// ---- Finance ledger ---------------------------------------------------------
+// One list of due-dated lines (subscription / payroll / bill). Rows are owned
+// by the admin workspace like everything else; `finance.view` opens the read,
+// `finance.manage` the writes — both admin-only until the admin grants them.
+
+function normalizeFinanceKind(kind: unknown): FinanceKind | null {
+  return FINANCE_KINDS.includes(kind as FinanceKind) ? (kind as FinanceKind) : null
+}
+
+function normalizeFinanceCycle(cycle: unknown): BillingCycle {
+  return cycle === 'yearly' ? 'yearly' : 'monthly'
+}
+
+/** A status that fits the row's kind; anything else falls back to the default. */
+function normalizeFinanceStatus(kind: FinanceKind, status: unknown): FinanceStatus {
+  if (kind === 'subscription') return status === 'paused' ? 'paused' : 'active'
+  return status === 'paid' ? 'paid' : 'unpaid'
+}
+
+/** 'YYYY-MM-DD' calendar date, or null when unparseable. */
+function normalizeFinanceDate(value: unknown): string | null {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null
+  return value
+}
+
+/** 'YYYY-MM' month bucket, or null. */
+function normalizeFinanceMonth(value: unknown): string | null {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}$/.test(value)) return null
+  return value
+}
+
+/** Normalize a finance row loaded from storage to the current shape. */
+function normalizeFinanceItem(f: FinanceItem): FinanceItem {
+  const kind = normalizeFinanceKind(f.kind) ?? 'bill'
+  const status = normalizeFinanceStatus(kind, f.status)
+  return {
+    ...f,
+    kind,
+    name: typeof f.name === 'string' && f.name.trim() ? f.name.trim() : null,
+    worker_id: kind === 'payroll' ? f.worker_id : null,
+    amount: Number.isFinite(f.amount) ? Math.max(0, Math.round(f.amount * 100) / 100) : 0,
+    cycle: kind === 'subscription' ? normalizeFinanceCycle(f.cycle) : null,
+    period_month: kind === 'payroll' ? (normalizeFinanceMonth(f.period_month) ?? null) : null,
+    due_date: normalizeFinanceDate(f.due_date) ?? new Date().toISOString().slice(0, 10),
+    status,
+    // The paid stamp only describes a completed payment.
+    paid_at: status === 'paid' ? (f.paid_at ?? f.updated_at ?? new Date().toISOString()) : null,
+    note: typeof f.note === 'string' && f.note.trim() ? f.note.trim() : null,
+  }
+}
+
+/** Oldest due dates first — the order of the ledger's agenda; tabs re-sort. */
+function sortFinanceItems(rows: FinanceItem[]): FinanceItem[] {
+  return [...rows].sort((a, b) => a.due_date.localeCompare(b.due_date) || b.created_at.localeCompare(a.created_at))
+}
+
 /** Keep a client reference only when it actually points at a known client. */
 function resolveClientId(d: UserData, clientId: string | null | undefined): string | null {
   if (!clientId) return null
@@ -254,6 +317,8 @@ function readData(userId: string): UserData {
   d.payments = d.payments || []
   d.tasks = (d.tasks || []).map(normalizeTask)
   d.clients = (d.clients || []).map(normalizeClient)
+  // Workspaces saved before the Finance section simply load an empty ledger.
+  d.financeItems = (d.financeItems || []).map(normalizeFinanceItem)
   d.entries = d.entries.map((e) => ({ ...e, client_id: e.client_id ?? null }))
   // Workspaces saved before clients existed get their work attached to the
   // "Unassigned" client the first time they are read.
@@ -426,6 +491,11 @@ function maybeAutoSeed(data: UserData) {
       ...t,
       worker_id: idMap.get(t.worker_id) || t.worker_id,
       client_id: t.client_id ? clientMap.get(t.client_id) ?? null : null,
+      id: uid(),
+    }))
+    data.financeItems = seed.financeItems.map((f) => ({
+      ...f,
+      worker_id: f.worker_id ? idMap.get(f.worker_id) ?? null : null,
       id: uid(),
     }))
     data.settings = seed.settings
@@ -655,6 +725,8 @@ export const localBackend: DataBackend = {
     c.data.entries = c.data.entries.filter((e) => e.worker_id !== id)
     c.data.activeTimers = c.data.activeTimers.filter((t) => t.worker_id !== id)
     c.data.tasks = c.data.tasks.filter((t) => t.worker_id !== id)
+    // Payroll lines die with the worker (mirrors the Supabase FK cascade).
+    c.data.financeItems = c.data.financeItems.filter((f) => !(f.kind === 'payroll' && f.worker_id === id))
     const entryIds = new Set(c.data.entries.map((e) => e.id))
     c.data.comments = c.data.comments.filter((cm) => entryIds.has(cm.entry_id))
     // Delete the worker's login account.
@@ -1157,6 +1229,117 @@ export const localBackend: DataBackend = {
     return { data: null, error: null }
   },
 
+  // ---- Finance (subscriptions, payroll, bills) ------------------------------
+  // The ledger belongs to the whole workspace, so a worker without
+  // `finance.view` simply gets an empty list (never an error — the store
+  // fetches it on every sync). `finance.manage` gates the writes.
+
+  async listFinanceItems() {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (!can(c, 'finance.view')) return { data: [] as FinanceItem[], error: null }
+    return { data: sortFinanceItems(c.data.financeItems), error: null }
+  },
+
+  async createFinanceItem(input: CreateFinanceItemInput) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (!can(c, 'finance.manage')) return denied('add finance lines')
+    const kind = normalizeFinanceKind(input.kind)
+    if (!kind) return { data: null, error: 'Choose what kind of finance line this is.' }
+    const amount = Number(input.amount)
+    if (!Number.isFinite(amount) || amount < 0) return { data: null, error: 'Enter an amount of 0 or more.' }
+    const dueDate = normalizeFinanceDate(input.due_date)
+    if (!dueDate) return { data: null, error: 'Pick a due date.' }
+    const name = input.name?.trim() || null
+    const workerId = input.worker_id || null
+    const periodMonth = normalizeFinanceMonth(input.period_month)
+    if (kind === 'subscription' || kind === 'bill') {
+      if (!name) return { data: null, error: kind === 'subscription' ? 'Give the subscription a name.' : 'Give the bill a label.' }
+      if (name.length > 80) return { data: null, error: 'Names are limited to 80 characters.' }
+    }
+    if (kind === 'payroll') {
+      if (!workerId) return { data: null, error: 'Choose the worker being paid.' }
+      if (!c.data.workers.some((w) => w.id === workerId)) return { data: null, error: 'Worker not found.' }
+      if (!periodMonth) return { data: null, error: 'Choose the month this pay covers.' }
+      // One run per worker per month — settle it, or edit the existing line.
+      const dupe = c.data.financeItems.some(
+        (f) => f.kind === 'payroll' && f.worker_id === workerId && f.period_month === periodMonth
+      )
+      if (dupe) return { data: null, error: 'That worker already has a payroll line for this month — edit it instead.' }
+    }
+    const now = new Date().toISOString()
+    const status = normalizeFinanceStatus(kind, input.status)
+    const item: FinanceItem = normalizeFinanceItem({
+      id: uid(),
+      kind,
+      name: kind === 'payroll' ? null : name,
+      worker_id: workerId,
+      amount,
+      cycle: input.cycle ?? null,
+      period_month: periodMonth,
+      due_date: dueDate,
+      status,
+      paid_at: status === 'paid' ? now : null,
+      note: input.note ?? null,
+      created_at: now,
+      updated_at: now,
+    })
+    c.data.financeItems.push(item)
+    save(c.data)
+    return { data: item, error: null }
+  },
+
+  async updateFinanceItem(id, patch) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (!can(c, 'finance.manage')) return denied('edit finance lines')
+    const idx = c.data.financeItems.findIndex((f) => f.id === id)
+    if (idx === -1) return { data: null, error: 'Finance line not found.' }
+    const current = c.data.financeItems[idx]
+    if (patch.worker_id && !c.data.workers.some((w) => w.id === patch.worker_id)) {
+      return { data: null, error: 'Worker not found.' }
+    }
+    if (patch.due_date !== undefined && !normalizeFinanceDate(patch.due_date)) {
+      return { data: null, error: 'Pick a due date.' }
+    }
+    if (patch.amount !== undefined && (!Number.isFinite(Number(patch.amount)) || Number(patch.amount) < 0)) {
+      return { data: null, error: 'Enter an amount of 0 or more.' }
+    }
+    if (patch.period_month !== undefined && current.kind === 'payroll') {
+      const pm = normalizeFinanceMonth(patch.period_month)
+      const dupe = pm && c.data.financeItems.some(
+        (f) => f.id !== id && f.kind === 'payroll' && f.worker_id === (patch.worker_id ?? current.worker_id) && f.period_month === pm
+      )
+      if (dupe) return { data: null, error: 'That worker already has a payroll line for this month — edit it instead.' }
+    }
+    const at = new Date().toISOString()
+    // Marking paid stamps the time (keeping an existing stamp); moving back
+    // to unpaid clears it. normalizeFinanceItem enforces the same invariant.
+    const next = normalizeFinanceItem({
+      ...current,
+      ...patch,
+      // The kind is fixed once created — it decides the row's shape.
+      kind: current.kind,
+      id: current.id,
+      created_at: current.created_at,
+      updated_at: at,
+      paid_at: patch.status === 'paid' ? (current.paid_at ?? at) : patch.status ? null : current.paid_at,
+    })
+    c.data.financeItems[idx] = next
+    save(c.data)
+    return { data: next, error: null }
+  },
+
+  async deleteFinanceItem(id) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (!can(c, 'finance.manage')) return denied('delete finance lines')
+    c.data.financeItems = c.data.financeItems.filter((f) => f.id !== id)
+    save(c.data)
+    return { data: null, error: null }
+  },
+
   // ---- Clients (master list) ----------------------------------------------
   // Both roles read the list (a worker needs the name/colour of the clients on
   // their own board and in their filters); only the admin may change it.
@@ -1396,6 +1579,11 @@ export const localBackend: DataBackend = {
       payments: [],
       tasks: [],
       clients: seedClients,
+      financeItems: seed.financeItems.map((f) => ({
+        ...f,
+        worker_id: f.worker_id ? idMap.get(f.worker_id) ?? null : null,
+        id: uid(),
+      })),
     }
     save(next)
     return { data: null, error: null }

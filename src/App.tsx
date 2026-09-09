@@ -17,7 +17,7 @@ const WorkersPage = lazy(() => import('@/pages/WorkersPage').then((m) => ({ defa
 const ReportsPage = lazy(() => import('@/pages/ReportsPage').then((m) => ({ default: m.ReportsPage })))
 const SettingsPage = lazy(() => import('@/pages/SettingsPage').then((m) => ({ default: m.SettingsPage })))
 const TasksPage = lazy(() => import('@/pages/TasksPage').then((m) => ({ default: m.TasksPage })))
-const PaymentsPage = lazy(() => import('@/pages/PaymentsPage').then((m) => ({ default: m.PaymentsPage })))
+const FinancePage = lazy(() => import('@/pages/FinancePage').then((m) => ({ default: m.FinancePage })))
 
 export function App() {
   const { user, authLoading, isAdmin, can } = useStore()
@@ -55,14 +55,21 @@ export function App() {
           <Route path="/entries" element={<EntriesPage />} />
           {/* Kanban board — workers see their own tasks, the admin sees all. */}
           <Route path="/tasks" element={<TasksPage />} />
-          <Route path="/payments" element={<PaymentsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
+
+          {/* The standalone Payments section now lives inside Finance → Payroll;
+              old links and PWA shortcuts follow it there. */}
+          <Route path="/payments" element={<Navigate to="/finance?tab=payroll" replace />} />
 
           {/* Admin screens — also open to workers the admin granted them to.
               Anything not granted simply has no route, so a typed-in URL falls
               through to the redirect below (and the backend refuses too). */}
           {can('dashboard.view') && <Route path="/" element={<DashboardPage />} />}
           {can('workers.view') && <Route path="/workers" element={<WorkersPage />} />}
+          {/* Everyone can open Finance — a worker without `finance.view` simply
+              lands on the Payroll tab and sees only their own payments there;
+              the ledger tabs, the summary and every write follow the grants. */}
+          <Route path="/finance" element={<FinancePage />} />
           {can('reports.view') && <Route path="/reports" element={<ReportsPage />} />}
 
           {/* Redirects */}

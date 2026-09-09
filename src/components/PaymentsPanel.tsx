@@ -1,6 +1,5 @@
 import { useMemo } from 'react'
 import { useStore } from '@/lib/store'
-import { PageHeader } from '@/components/PageHeader'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -41,10 +40,17 @@ function MethodBadge({ method, className }: { method: PaymentMethod; className?:
   )
 }
 
-export function PaymentsPage() {
+/**
+ * Payments & settlements — the former standalone Payments section, now
+ * embedded in the Finance page's Payroll tab (admin: team settlements;
+ * worker: their own payment history and enabled payment methods).
+ * `payments.view_all` widens the list to the whole team; `payments.manage`
+ * unlocks the mark-paid / note / delete controls, exactly as before.
+ */
+export function PaymentsPanel() {
   const { payments, workers, settings, isAdmin, can, dataLoading, updatePaymentStatus, updatePaymentNote, deletePayment } = useStore()
-  // Seeing the team's payments and changing them are separate grants.
-  const canViewAll = can('payments.view_all')
+  // Changing the team's payments needs an explicit grant (the list itself is
+  // already scoped to what this viewer may see).
   const canManage = can('payments.manage')
   const currency = settings?.currency || 'USD'
   const [statusFilter, setStatusFilter] = useState<'all' | PaymentStatus>('all')
@@ -115,11 +121,6 @@ export function PaymentsPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Payments"
-        description={canViewAll ? 'Settlements from worker time, with payment status.' : 'Your payment history.'}
-      />
-
       {/* Workers see the payment methods they have enabled. The admin picks the
           method when marking a payment as paid instead of browsing a list. */}
       {!isAdmin && (

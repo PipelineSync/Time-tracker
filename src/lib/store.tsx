@@ -24,9 +24,10 @@ import type {
   TaskStatus,
   Client,
   Permission,
+  FinanceItem,
 } from './types'
 import { PERMISSIONS, normalizePermissions } from './types'
-import type { DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, BackendResult } from './backend'
+import type { DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, BackendResult, CreateFinanceItemInput } from './backend'
 import { localBackend } from './localDb'
 import { supabaseBackend, isSupabaseConfigured, ACCOUNT_DEACTIVATED_MESSAGE } from './supabaseDb'
 import { toast } from 'sonner'
@@ -114,6 +115,11 @@ interface StoreValue {
   clients: Client[]
   /** Only the clients that may be picked for new work. */
   activeClients: Client[]
+  /**
+   * The Finance ledger (subscriptions, payroll runs, bills), oldest due date
+   * first. Empty for anyone the admin has not granted `finance.view`.
+   */
+  financeItems: FinanceItem[]
   unreadCount: number
   dataLoading: boolean
   /** Fetch the next page of entries older than everything currently loaded
@@ -180,6 +186,18 @@ interface StoreValue {
   updatePaymentStatus: (id: string, status: PaymentStatus, paymentMethod?: PaymentMethod | null) => Promise<Payment | null>
   updatePaymentNote: (id: string, note: string | null) => Promise<Payment | null>
   deletePayment: (id: string) => Promise<boolean>
+
+  // ---- Finance (admin-only until the admin grants `finance.view`) ----
+  // The ledger tracks what must go out and when. Hour-based settlements live
+  // in the same section (Finance → Payroll) but keep their own Payment rows;
+  // marking a finance line paid here does not create one — the two ledgers
+  // describe different things (fixed pay and bills vs. settled tracked time).
+  /** Add a subscription / payroll run / bill to the ledger. finance.manage. */
+  createFinanceItem: (input: CreateFinanceItemInput) => Promise<FinanceItem | null>
+  /** Patch a finance line (status, due date, amounts…). finance.manage. */
+  updateFinanceItem: (id: string, patch: Partial<Omit<FinanceItem, 'id' | 'kind' | 'created_at' | 'updated_at'>>) => Promise<FinanceItem | null>
+  /** Remove a finance line. finance.manage. */
+  deleteFinanceItem: (id: string) => Promise<boolean>
 }
 
 const StoreContext = createContext<StoreValue | null>(null)
@@ -197,6 +215,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [payments, setPayments] = useState<Payment[]>([])
   const [tasks, setTasks] = useState<Task[]>([])
   const [clients, setClients] = useState<Client[]>([])
+  const [financeItems, setFinanceItems] = useState<FinanceItem[]>([])
   const [dataLoading, setDataLoading] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
   const dataVersion = useRef(0)
@@ -273,7 +292,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // Captured BEFORE the query: rows updated after this instant are picked
       // up by the next delta; duplicates are harmless (merged by id).
       const syncTime = new Date().toISOString()
-      const [w, e, s, at, n, p, u, t, cl] = await Promise.all([
+      const [w, e, s, at, n, p, u, t, cl, fi] = await Promise.all([
         light ? skipped<Worker[]>() : backend.listWorkers(),
         useDelta
           ? backend.listEntries({ since, limit: ENTRY_DELTA_LIMIT })
@@ -294,6 +313,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         light ? skipped<Task[]>() : backend.listTasks(),
         // The client master list changes rarely too — same group as tasks.
         light ? skipped<Client[]>() : backend.listClients(),
+        // Same for the finance ledger (due dates move only when the app itself
+        // advances them). An ungranted worker gets an empty list, not an error.
+        light ? skipped<FinanceItem[]>() : backend.listFinanceItems(),
       ])
       if (token !== dataVersion.current) return
       if (w.data) setWorkers(withAvatars(w.data, avatarsRef.current))
@@ -332,6 +354,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (u.data != null) setUnreadCount(u.data)
       if (t.data) setTasks(t.data)
       if (cl.data) setClients(cl.data)
+      if (fi.data) setFinanceItems(fi.data)
     } finally {
       refreshInFlight.current = false
       if (token === dataVersion.current) setDataLoading(false)
@@ -387,7 +410,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       })
     } else {
       avatarsRef.current = new Map()
-      setWorkers([]); setEntries([]); setSettings(null); setActiveTimer(null); setActiveTimers([]); setNotifications([]); setPayments([]); setTasks([])
+      setWorkers([]); setEntries([]); setSettings(null); setActiveTimer(null); setActiveTimers([]); setNotifications([]); setPayments([]); setTasks([]); setFinanceItems([])
     }
   }, [user, refreshData, refreshAvatars])
 
@@ -511,19 +534,27 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const createWorker = useCallback(async (input: CreateWorkerInput) => {
     const res = await backend.createWorker(input)
+    if (res.error) toast.error(res.error)
     if (res.error || !res.data) return null
     rememberAvatar(res.data)
     await refreshData()
     return res.data
-  }, [backend, refreshData, rememberAvatar])
+  }, [backend, refreshData, rememberAvatar, toast])
 
   const updateWorker = useCallback(async (id: string, patch: Partial<Worker> & { newPassword?: string }) => {
     const res = await backend.updateWorker(id, patch)
-    if (res.error || !res.data) return null
+    if (res.error) toast.error(res.error)
+    if (res.error || !res.data) {
+      // Even on a rejected save the database may have applied part of the
+      // patch (e.g. an unmigrated permission allow-list saves everything but
+      // the new access keys), so re-read rather than leave stale rows.
+      await refreshData()
+      return null
+    }
     rememberAvatar(res.data)
     await refreshData()
     return res.data
-  }, [backend, refreshData, rememberAvatar])
+  }, [backend, refreshData, rememberAvatar, toast])
 
   const deleteWorker = useCallback(async (id: string) => {
     const res = await backend.deleteWorker(id)
@@ -864,6 +895,46 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return true
   }, [backend, refreshData])
 
+  // ---- Finance --------------------------------------------------------------
+  // The ledger is small and workspace-wide, so every mutation re-reads it
+  // from the backend (same pattern as Clients) — the backend owns validation
+  // and the paid_at stamping.
+
+  const refreshFinance = useCallback(async () => {
+    const res = await backend.listFinanceItems()
+    if (res.data) setFinanceItems(res.data)
+  }, [backend])
+
+  const createFinanceItem = useCallback(async (input: CreateFinanceItemInput) => {
+    const res = await backend.createFinanceItem(input)
+    if (res.error || !res.data) {
+      toast.error(res.error || 'Could not add the finance line.')
+      return null
+    }
+    await refreshFinance()
+    return res.data
+  }, [backend, refreshFinance])
+
+  const updateFinanceItem = useCallback(async (id: string, patch: Partial<Omit<FinanceItem, 'id' | 'kind' | 'created_at' | 'updated_at'>>) => {
+    const res = await backend.updateFinanceItem(id, patch)
+    if (res.error || !res.data) {
+      toast.error(res.error || 'Could not save the finance line.')
+      return null
+    }
+    await refreshFinance()
+    return res.data
+  }, [backend, refreshFinance])
+
+  const deleteFinanceItem = useCallback(async (id: string) => {
+    const res = await backend.deleteFinanceItem(id)
+    if (res.error) {
+      toast.error(res.error)
+      return false
+    }
+    await refreshFinance()
+    return true
+  }, [backend, refreshFinance])
+
   const value: StoreValue = {
     backend,
     user,
@@ -881,6 +952,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     tasks,
     clients,
     activeClients,
+    financeItems,
     unreadCount,
     dataLoading,
     loadOlderEntries,
@@ -925,6 +997,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     updatePaymentStatus,
     updatePaymentNote,
     deletePayment,
+    createFinanceItem,
+    updateFinanceItem,
+    deleteFinanceItem,
   }
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>
