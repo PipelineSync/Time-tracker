@@ -154,6 +154,15 @@ export interface DataBackend {
   resumeTimer(timerId?: string): Promise<BackendResult<ActiveTimer>>
   stopTimer(timerId: string, note?: string): Promise<BackendResult<TimeEntry>>
   deleteTimer(timerId: string): Promise<BackendResult<null>>
+  /**
+   * Keep a worker's clock running but move it to a different client (the
+   * signed-in worker's own running timer only). The time already worked is
+   * split off into a finished entry for the previous client and a fresh timer
+   * starts for the new one, so each client gets exactly the minutes worked for
+   * it. Returns the new (running) timer. Any break in progress is closed at
+   * the split, exactly as it would be on a clock-out.
+   */
+  switchClient(input: { timerId: string; client_id: string; notes?: string }): Promise<BackendResult<ActiveTimer>>
 
   getSettings(): Promise<BackendResult<Settings>>
   saveSettings(patch: Partial<Settings>): Promise<BackendResult<Settings>>

@@ -19,7 +19,7 @@ import type { SlackEvent } from '../../src/lib/types'
 // POST { type: 'test' } — admin only: sends a sample message to verify setup.
 // ============================================================================
 
-const EVENTS: SlackEvent[] = ['clock_in', 'clock_out', 'break_start', 'break_end', 'payment_paid', 'task_created', 'task_moved']
+const EVENTS: SlackEvent[] = ['clock_in', 'clock_out', 'break_start', 'break_end', 'payment_paid', 'task_created', 'task_moved', 'task_approval_created', 'task_approval_moved']
 
 const FALLBACK_TIMEZONE = 'UTC'
 const WEBHOOK_TIMEOUT_MS = 8_000
@@ -167,6 +167,8 @@ export function buildMessage(event: SlackEvent, ctx: {
     }
     case 'task_created':
     case 'task_moved':
+    case 'task_approval_created':
+    case 'task_approval_moved':
       return { text: 'Task updated', blocks: [section('Task updated')] }
     case 'payment_paid': {
       const amount = ctx.amount != null ? `*${fmtMoney(ctx.amount, ctx.currency)}*` : 'a payment'
@@ -240,7 +242,7 @@ export default async function handler(request: Request) {
     payment_id?: string
     task_id?: string
     previous_status?: string
-    channel?: 'activity' | 'tasks'
+    channel?: 'activity' | 'tasks' | 'approval'
   }
   const type = body.type === 'test' ? 'test' : 'event'
 
@@ -260,19 +262,30 @@ export default async function handler(request: Request) {
 
     // ---- load config: saved webhook first, SLACK_WEBHOOK_URL env as fallback ----
     const { data: cfg } = await sb.from('slack_settings').select('*').eq('user_id', ownerId).maybeSingle()
-    const isTaskEvent = body.channel === 'tasks' || body.event === 'task_created' || body.event === 'task_moved'
+    // Which channel a payload belongs to. A test names it explicitly; an event
+    // derives it from the event type (the approval events are the ones that
+    // land on the dedicated Approval webhook).
+    const channel =
+      body.channel === 'tasks' || body.event === 'task_created' || body.event === 'task_moved' ? 'tasks'
+      : body.channel === 'approval' || body.event === 'task_approval_created' || body.event === 'task_approval_moved' ? 'approval'
+      : 'activity'
     // Webhooks are secrets: use the admin-only database setting first, then
     // server-side environment variables. Never ship either URL in browser code.
-    const webhookUrl = isTaskEvent
+    const webhookUrl = channel === 'tasks'
       ? (cfg?.task_webhook_url || '').trim() || (process.env.TASK_SLACK_WEBHOOK_URL || '').trim()
-      : (cfg?.webhook_url || '').trim() || (process.env.SLACK_WEBHOOK_URL || '').trim()
+      : channel === 'approval'
+        ? (cfg?.approval_webhook_url || '').trim() || (process.env.APPROVAL_SLACK_WEBHOOK_URL || '').trim()
+        : (cfg?.webhook_url || '').trim() || (process.env.SLACK_WEBHOOK_URL || '').trim()
     if (!webhookUrl) return json(200, { ok: false, sent: false, reason: 'Slack is not configured yet.' })
 
     if (type === 'test') {
       const ws = await loadWorkspaceContext(sb, ownerId)
-      const taskTest = body.channel === 'tasks'
-      const headline = taskTest ? '🧪 Task Slack automation is working!' : '👋 Slack notifications are working!'
-      const description = taskTest ? `Task creation and stage changes will be posted here · ${ws.businessName}` : `Clock ins, clock outs, breaks and payments will be posted here · ${ws.businessName}`
+      const headline = channel === 'tasks' ? '🧪 Task Slack automation is working!' : channel === 'approval' ? '🧪 Approval Slack automation is working!' : '👋 Slack notifications are working!'
+      const description = channel === 'tasks'
+        ? `Task creation and stage changes will be posted here · ${ws.businessName}`
+        : channel === 'approval'
+          ? `Tasks created in or moved to the Approval stage will be posted here · ${ws.businessName}`
+          : `Clock ins, clock outs, breaks and payments will be posted here · ${ws.businessName}`
       const blocks: SlackBlock[] = [
         { type: 'section', text: { type: 'mrkdwn', text: headline } },
         { type: 'context', elements: [{ type: 'mrkdwn', text: description }] },
@@ -293,6 +306,8 @@ export default async function handler(request: Request) {
       payment_paid: cfg?.notify_payment_paid,
       task_created: cfg?.notify_task_created,
       task_moved: cfg?.notify_task_moved,
+      task_approval_created: cfg?.notify_task_approval_created,
+      task_approval_moved: cfg?.notify_task_approval_moved,
     }
     // No saved row at all => every event defaults to enabled.
     if (cfg && enabled[event] === false) {
@@ -355,7 +370,7 @@ export default async function handler(request: Request) {
         periodEnd: payment.period_end,
         note: payment.note,
       })
-    } else if (event === 'task_created' || event === 'task_moved') {
+    } else if (event === 'task_created' || event === 'task_moved' || event === 'task_approval_created' || event === 'task_approval_moved') {
       const { data: task } = await sb.from('tasks').select('*').eq('id', body.task_id ?? '').maybeSingle()
       if (!task) return json(400, { error: 'Task not found.' })
       const assignedTo = await workerName(sb, task.worker_id)
@@ -363,17 +378,32 @@ export default async function handler(request: Request) {
       const actor = role === 'admin' ? 'Admin' : await workerName(sb, workerId)
       const statusLabel = (value: string | undefined) => (value || 'unknown').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
       const detail = [`Assigned to *${assignedTo}*`, client?.name ? `Client *${client.name}*` : 'No client', `Priority *${statusLabel(task.priority)}*`, task.due_date ? `Due *${task.due_date}*` : 'No due date'].join(' · ')
-      const headline = event === 'task_created'
-        ? `🆕 *${actor}* created task *${task.title}* in *${statusLabel(task.status)}*`
-        : `🔄 *${actor}* moved *${task.title}* from *${statusLabel(body.previous_status)}* to *${statusLabel(task.status)}*`
-      message = {
-        text: event === 'task_created' ? `🆕 ${actor} created task ${task.title}` : `🔄 ${actor} moved ${task.title} from ${statusLabel(body.previous_status)} to ${statusLabel(task.status)}`,
-        blocks: [
-          { type: 'section', text: { type: 'mrkdwn', text: headline } },
-          { type: 'context', elements: [{ type: 'mrkdwn', text: detail }] },
-          { type: 'context', elements: [{ type: 'mrkdwn', text: `${fmtDate(new Date().toISOString(), ws.timezone)} at ${fmtTime(new Date().toISOString(), ws.timezone)} · ${ws.businessName}` }] },
-        ],
+      // The approval events only ever fire when the task sits on the Approval
+      // column, so they get a distinct message that flags it for admin review.
+      const isApproval = event === 'task_approval_created' || event === 'task_approval_moved'
+      const headline = isApproval
+        ? event === 'task_approval_created'
+          ? `🆕 *${actor}* created task *${task.title}* in *Approval*`
+          : `🔄 *${actor}* moved *${task.title}* to *Approval* (from *${statusLabel(body.previous_status)}*)`
+        : event === 'task_created'
+          ? `🆕 *${actor}* created task *${task.title}* in *${statusLabel(task.status)}*`
+          : `🔄 *${actor}* moved *${task.title}* from *${statusLabel(body.previous_status)}* to *${statusLabel(task.status)}*`
+      const plain = isApproval
+        ? event === 'task_approval_created'
+          ? `🆕 ${actor} created task ${task.title} in Approval`
+          : `🔄 ${actor} moved ${task.title} to Approval`
+        : event === 'task_created'
+          ? `🆕 ${actor} created task ${task.title}`
+          : `🔄 ${actor} moved ${task.title} from ${statusLabel(body.previous_status)} to ${statusLabel(task.status)}`
+      const blocks: SlackBlock[] = [
+        { type: 'section', text: { type: 'mrkdwn', text: headline } },
+        { type: 'context', elements: [{ type: 'mrkdwn', text: detail }] },
+      ]
+      if (isApproval) {
+        blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: '⏳ Awaiting admin review in the Approval stage.' }] })
       }
+      blocks.push({ type: 'context', elements: [{ type: 'mrkdwn', text: `${fmtDate(new Date().toISOString(), ws.timezone)} at ${fmtTime(new Date().toISOString(), ws.timezone)} · ${ws.businessName}` }] })
+      message = { text: plain, blocks }
     }
 
     if (!message) return json(400, { error: 'Nothing to send.' })

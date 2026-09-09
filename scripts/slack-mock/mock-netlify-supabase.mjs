@@ -17,9 +17,27 @@ export const state = {
     notify_break_start: true,
     notify_break_end: true,
     notify_payment_paid: true,
+    task_webhook_url: 'https://hooks.slack.com/services/T000/B000/TASK',
+    notify_task_created: true,
+    notify_task_moved: true,
+    approval_webhook_url: 'https://hooks.slack.com/services/T000/B000/APPROVAL',
+    notify_task_approval_created: true,
+    notify_task_approval_moved: true,
   },
   settings: [{ user_id: 'admin-1', business_name: 'Acme Co', currency: 'PHP', timezone: 'Asia/Manila' }],
   workers: [{ id: 'w1', user_id: 'admin-1', name: 'Mike Johnson' }],
+  tasks: [
+    {
+      id: 'tk1',
+      worker_id: 'w1',
+      client_id: null,
+      title: 'Redesign the dashboard header',
+      status: 'approval',
+      priority: 'high',
+      due_date: '2026-01-20',
+    },
+  ],
+  clients: [],
   timers: [
     {
       id: 't1',
@@ -66,6 +84,12 @@ export function resetState() {
   state.slackSettings.notify_break_end = true
   state.slackSettings.notify_payment_paid = true
   state.slackSettings.webhook_url = 'https://hooks.slack.com/services/T000/B000/TEST'
+  state.slackSettings.task_webhook_url = 'https://hooks.slack.com/services/T000/B000/TASK'
+  state.slackSettings.notify_task_created = true
+  state.slackSettings.notify_task_moved = true
+  state.slackSettings.approval_webhook_url = 'https://hooks.slack.com/services/T000/B000/APPROVAL'
+  state.slackSettings.notify_task_approval_created = true
+  state.slackSettings.notify_task_approval_moved = true
 }
 
 export function json(statusCode, body) {
@@ -82,6 +106,8 @@ const TABLES = {
   active_timers: () => state.timers,
   time_entries: () => state.entries,
   payments: () => state.payments,
+  tasks: () => state.tasks,
+  clients: () => state.clients,
   profiles: () => [],
 }
 

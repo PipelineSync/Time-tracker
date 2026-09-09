@@ -156,6 +156,12 @@ interface StoreValue {
   pauseTimer: (timerId?: string) => Promise<BackendResult<ActiveTimer>>
   resumeTimer: (timerId?: string) => Promise<BackendResult<ActiveTimer>>
   stopTimer: (note?: string) => Promise<BackendResult<TimeEntry>>
+  /**
+   * Worker-only: keep the clock running but move it to a different client. The
+   * time already worked is split into a finished entry for the old client and a
+   * fresh timer starts for the new one. Returns the new running timer.
+   */
+  switchClient: (clientId: string, notes?: string) => Promise<BackendResult<ActiveTimer>>
   cancelTimer: () => Promise<void>
 
   saveSettings: (patch: Partial<Settings>) => Promise<Settings | null>
@@ -682,6 +688,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return { data: res.data, error: null }
   }, [backend, activeTimer, refreshData, workers])
 
+  const switchClient = useCallback(async (clientId: string, notes?: string) => {
+    const current = activeTimer
+    if (!current) return { data: null, error: 'No timer is running.' }
+    const res = await backend.switchClient({
+      timerId: current.id,
+      client_id: clientId,
+      notes: notes?.trim() ? notes.trim() : undefined,
+    })
+    if (res.error || !res.data) return { data: null, error: res.error }
+    const nextTimer = res.data
+    // Optimistically show the fresh timer, then let a refresh reconcile the
+    // finished split entry + new running timer with the backend.
+    setActiveTimer(nextTimer)
+    setActiveTimers((prev) => [nextTimer, ...prev.filter((t) => t.id !== current.id)])
+    await refreshData()
+    return { data: nextTimer, error: null }
+  }, [backend, activeTimer, refreshData])
+
   const cancelTimer = useCallback(async () => {
     const current = activeTimer
     if (current) {
@@ -825,6 +849,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const client = clients.find((c) => c.id === task.client_id)?.name || 'No client'
     const actor = isAdmin ? 'Admin' : (myWorker?.name || user?.email || 'A worker')
     notifySlack('task_created', { task_id: task.id, demoText: `🆕 ${actor} created “${task.title}” · Assigned to ${assignee} · ${client} · ${task.priority} priority · Due ${task.due_date || 'none'}.` })
+    // Approval-stage automation: a task created straight onto the Approval
+    // column flags it for the admin to review (task channel post still fires too).
+    if (task.status === 'approval') {
+      notifySlack('task_approval_created', { task_id: task.id, demoText: `🆕 ${actor} created “${task.title}” in Approval · Assigned to ${assignee} · ${client} · ${task.priority} priority · Due ${task.due_date || 'none'} — ready for your review.` })
+    }
     return task
   }, [backend, refreshTasks, workers, clients, isAdmin, myWorker, user])
 
@@ -842,6 +871,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const client = clients.find((c) => c.id === task.client_id)?.name || 'No client'
       const actor = isAdmin ? 'Admin' : (myWorker?.name || user?.email || 'A worker')
       notifySlack('task_moved', { task_id: task.id, previous_status: previous.status, demoText: `🔄 ${actor} moved “${task.title}” from ${previous.status} to ${task.status} · Assigned to ${assignee} · ${client} · ${task.priority} priority · Due ${task.due_date || 'none'}.` })
+      // Approval-stage automation: only when the task lands on Approval.
+      if (task.status === 'approval') {
+        notifySlack('task_approval_moved', { task_id: task.id, previous_status: previous.status, demoText: `🔄 ${actor} moved “${task.title}” to Approval · Assigned to ${assignee} · ${client} · ${task.priority} priority · Due ${task.due_date || 'none'} — ready for your review.` })
+      }
     }
     return res.data
   }, [backend, refreshTasks, tasks, workers, clients, isAdmin, myWorker, user])
@@ -864,6 +897,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const client = clients.find((c) => c.id === task.client_id)?.name || 'No client'
       const actor = isAdmin ? 'Admin' : (myWorker?.name || user?.email || 'A worker')
       notifySlack('task_moved', { task_id: task.id, previous_status: previous.status, demoText: `🔄 ${actor} moved “${task.title}” from ${previous.status} to ${status} · Assigned to ${assignee} · ${client} · ${task.priority} priority · Due ${task.due_date || 'none'}.` })
+      // Approval-stage automation: only when the task lands on Approval.
+      if (status === 'approval') {
+        notifySlack('task_approval_moved', { task_id: task.id, previous_status: previous.status, demoText: `🔄 ${actor} moved “${task.title}” to Approval · Assigned to ${assignee} · ${client} · ${task.priority} priority · Due ${task.due_date || 'none'} — ready for your review.` })
+      }
     }
     return res.data
   }, [backend, refreshTasks, tasks, workers, clients, isAdmin, myWorker, user])
@@ -998,6 +1035,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     pauseTimer,
     resumeTimer,
     stopTimer,
+    switchClient,
     cancelTimer,
     saveSettings,
     getSlackSettings,

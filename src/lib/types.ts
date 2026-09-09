@@ -398,6 +398,11 @@ export type SlackEvent =
   | 'payment_paid'
   | 'task_created'
   | 'task_moved'
+  // Approval-stage automation (posted to the dedicated Approval webhook): a
+  // task that lands on the Approval column, whether it was created there or
+  // moved onto it — a heads-up for the admin to review, whoever triggered it.
+  | 'task_approval_created'
+  | 'task_approval_moved'
 
 /** Human label for each Slack event (used by demo-mode fallback texts). */
 export const SlackEventNames: Record<SlackEvent, string> = {
@@ -408,6 +413,8 @@ export const SlackEventNames: Record<SlackEvent, string> = {
   payment_paid: 'Payment paid',
   task_created: 'Task created',
   task_moved: 'Task stage changed',
+  task_approval_created: 'Task created in Approval',
+  task_approval_moved: 'Task moved to Approval',
 }
 
 /**
@@ -428,6 +435,10 @@ export interface SlackSettings {
   task_webhook_url: string | null
   notify_task_created: boolean
   notify_task_moved: boolean
+  /** Dedicated channel for tasks that land on the Approval stage. */
+  approval_webhook_url: string | null
+  notify_task_approval_created: boolean
+  notify_task_approval_moved: boolean
 }
 
 /** Defaults used whenever no Slack settings row exists yet. */
@@ -441,6 +452,9 @@ export const DEFAULT_SLACK_SETTINGS: SlackSettings = {
   task_webhook_url: null,
   notify_task_created: true,
   notify_task_moved: true,
+  approval_webhook_url: null,
+  notify_task_approval_created: true,
+  notify_task_approval_moved: true,
 }
 
 

@@ -127,7 +127,31 @@ async function main() {
   const badEvent = await call({ type: 'event', event: 'hacked' as any, timer_id: 't1' })
   assert(badEvent.status === 400, 'unknown event returns 400')
 
-  // ---- 10) GET is rejected ----
+  // ---- 10) Approval automation → dedicated Approval webhook (worker-triggered) ----
+  resetState()
+  state.caller = { role: 'worker', workerId: 'w1', userId: 'auth-worker-1' }
+  await call({ type: 'event', event: 'task_approval_created', task_id: 'tk1' })
+  await call({ type: 'event', event: 'task_approval_moved', task_id: 'tk1', previous_status: 'in_progress' })
+  assert(slackCalls.length === 9, 'approval events post to Slack' )
+  assert(slackCalls[7].url.includes('/APPROVAL') && slackCalls[8].url.includes('/APPROVAL'), 'approval events go to the dedicated Approval webhook (not the task webhook)' )
+  payload = slackCalls[7]?.body
+  assert(JSON.stringify(payload.blocks).includes('in *Approval*'), 'task_approval_created flags the Approval stage in the headline' )
+  assert(JSON.stringify(payload.blocks).includes('Awaiting admin review'), 'approval messages include an awaiting-review note' )
+  payload = slackCalls[8]?.body
+  assert(JSON.stringify(payload.blocks).includes('to *Approval*'), 'task_approval_moved says it moved to Approval' )
+  assert(payload?.text?.includes('Mike Johnson') === false || JSON.stringify(payload).length > 0, 'task_approval_moved builds a message' )
+
+  // ---- 11) Approval toggle OFF → skipped ----
+  state.slackSettings.notify_task_approval_moved = false
+  const approvalSkipped = await call({ type: 'event', event: 'task_approval_moved', task_id: 'tk1', previous_status: 'waiting' })
+  assert(approvalSkipped.status === 200 && slackCalls.length === 9, 'toggled-off approval event is skipped (HTTP 200, no post)')
+  state.slackSettings.notify_task_approval_moved = true
+
+  // ---- 12) Regular task events still use the task webhook, not approval ----
+  await call({ type: 'event', event: 'task_created', task_id: 'tk1' })
+  assert(slackCalls.length === 10 && slackCalls[9].url.includes('/TASK'), 'task_created keeps routing to the task webhook')
+
+  // ---- 13) GET is rejected ----
   const getRes = await handler(new Request('http://localhost/.netlify/functions/slack-notify', { method: 'GET' }))
   assert(getRes.status === 405, 'GET requests are rejected')
 

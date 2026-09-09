@@ -46,6 +46,9 @@ create table if not exists public.slack_settings (
   task_webhook_url     text,
   notify_task_created  boolean not null default true,
   notify_task_moved    boolean not null default true,
+  approval_webhook_url     text,
+  notify_task_approval_created boolean not null default true,
+  notify_task_approval_moved   boolean not null default true,
   created_at           timestamptz not null default now(),
   updated_at           timestamptz not null default now()
 );
@@ -54,6 +57,9 @@ create table if not exists public.slack_settings (
 alter table public.slack_settings add column if not exists task_webhook_url text;
 alter table public.slack_settings add column if not exists notify_task_created boolean not null default true;
 alter table public.slack_settings add column if not exists notify_task_moved boolean not null default true;
+alter table public.slack_settings add column if not exists approval_webhook_url text;
+alter table public.slack_settings add column if not exists notify_task_approval_created boolean not null default true;
+alter table public.slack_settings add column if not exists notify_task_approval_moved boolean not null default true;
 
 alter table public.slack_settings enable row level security;
 

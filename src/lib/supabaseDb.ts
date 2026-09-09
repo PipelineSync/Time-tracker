@@ -1302,6 +1302,67 @@ export const supabaseBackend: DataBackend = {
     return ok(created)
   },
 
+  async switchClient(input) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (me.data!.role !== 'worker') return fail('Only workers can switch the client they are working for.')
+    if (!me.data!.workerId) return fail('Your account is not linked to a worker profile yet. Please ask your administrator to fix this.')
+    const { data: timer } = await client().from('active_timers').select('*').eq('id', input.timerId).maybeSingle()
+    if (!timer) return fail('No active timer found.')
+    if (timer.worker_id !== me.data!.workerId) return fail('Not your timer.')
+    const { data: targetClient } = await client().from('clients').select('id').eq('id', input.client_id).maybeSingle()
+    if (!targetClient) return fail('Choose a client.')
+    if (timer.client_id === input.client_id) return fail("You're already working for that client.")
+    const now = new Date()
+    // Close the old segment exactly like a clock-out would (an in-progress
+    // break is folded in, so a switch while paused ends the break). The
+    // finished stretch is booked to the client the worker was on before the
+    // switch and carries the shift's original note.
+    const totalPause = (timer.total_pause_ms || 0) + (timer.paused && timer.pause_start ? now.getTime() - new Date(timer.pause_start).getTime() : 0)
+    const workingMs = Math.max(0, now.getTime() - new Date(timer.start_time).getTime() - totalPause)
+    const totalMinutes = Math.max(0, Math.round(workingMs / 60000))
+    const breakMinutes = Math.max(0, Math.round(totalPause / 60000))
+    const splitEntry = {
+      worker_id: timer.worker_id,
+      client_id: timer.client_id ?? null,
+      project: timer.project || null,
+      start_time: timer.start_time,
+      end_time: now.toISOString(),
+      break_minutes: breakMinutes,
+      notes: timer.notes || null,
+      hourly_rate: timer.hourly_rate ?? 0,
+      total_minutes: totalMinutes,
+      earnings: computeEarnings(totalMinutes, timer.hourly_rate ?? 0),
+    }
+    const inserted = await withClientColumn<TimeEntry>((withClient) => {
+      const { client_id, ...rest } = splitEntry
+      const row = withClient ? { ...rest, client_id } : rest
+      return client().from('time_entries').insert(row).select().single() as PromiseLike<{ data: TimeEntry | null; error: { code?: string; message?: string } | null }>
+    })
+    if (inserted.error || !inserted.data) return fail(inserted.error?.message ?? 'Could not save the time before switching.')
+    // Only one running timer per worker, so the old one is replaced (delete
+    // before insert — the worker_id unique index would reject a second row).
+    await client().from('active_timers').delete().eq('id', input.timerId)
+    const notes = typeof input.notes === 'string' && input.notes.trim() ? input.notes.trim() : null
+    const created = await withClientColumn<ActiveTimer>((withClient) => client().from('active_timers').insert({
+      worker_id: timer.worker_id,
+      ...(withClient ? { client_id: input.client_id } : {}),
+      project: null,
+      start_time: now.toISOString(),
+      notes,
+      hourly_rate: timer.hourly_rate ?? 0,
+      paused: false,
+      pause_start: null,
+      total_pause_ms: 0,
+    }).select().single() as PromiseLike<{ data: ActiveTimer | null; error: { code?: string; message?: string } | null }>)
+    if (created.error || !created.data) {
+      // The split entry is saved but the fresh timer did not come up — tell
+      // the worker to clock in again so nothing is lost.
+      return fail(created.error?.message ?? 'The time was saved, but the switch did not complete. Please clock in again.')
+    }
+    return ok(created.data as ActiveTimer)
+  },
+
   async deleteTimer(timerId) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
@@ -1347,6 +1408,8 @@ export const supabaseBackend: DataBackend = {
       return fail(error.message)
     }
     if (!data) return ok({ ...DEFAULT_SLACK_SETTINGS })
+    // A database that has not applied the approval migration simply returns no
+    // approval columns → they default to enabled-without-a-webhook.
     return ok({
       webhook_url: (data.webhook_url as string | null) ?? null,
       notify_clock_in: data.notify_clock_in !== false,
@@ -1357,6 +1420,9 @@ export const supabaseBackend: DataBackend = {
       task_webhook_url: (data.task_webhook_url as string | null) ?? null,
       notify_task_created: data.notify_task_created !== false,
       notify_task_moved: data.notify_task_moved !== false,
+      approval_webhook_url: (data.approval_webhook_url as string | null) ?? null,
+      notify_task_approval_created: data.notify_task_approval_created !== false,
+      notify_task_approval_moved: data.notify_task_approval_moved !== false,
     })
   },
 
@@ -1377,21 +1443,38 @@ export const supabaseBackend: DataBackend = {
       task_webhook_url: next.task_webhook_url?.trim() ? next.task_webhook_url.trim() : null,
       notify_task_created: next.notify_task_created,
       notify_task_moved: next.notify_task_moved,
+      approval_webhook_url: next.approval_webhook_url?.trim() ? next.approval_webhook_url.trim() : null,
+      notify_task_approval_created: next.notify_task_approval_created,
+      notify_task_approval_moved: next.notify_task_approval_moved,
     }
-    // user_id is auto-filled with the workspace owner by the trg_slack_settings_user trigger.
-    const { data, error } = await client().from('slack_settings').upsert(row, { onConflict: 'user_id' }).select().single()
-    if (error) return fail(error.message)
-    return ok({
-      webhook_url: (data.webhook_url as string | null) ?? null,
-      notify_clock_in: data.notify_clock_in !== false,
-      notify_clock_out: data.notify_clock_out !== false,
-      notify_break_start: data.notify_break_start !== false,
-      notify_break_end: data.notify_break_end !== false,
-      notify_payment_paid: data.notify_payment_paid !== false,
-      task_webhook_url: (data.task_webhook_url as string | null) ?? null,
-      notify_task_created: data.notify_task_created !== false,
-      notify_task_moved: data.notify_task_moved !== false,
+    const normalize = (d: Record<string, unknown>): SlackSettings => ({
+      webhook_url: (d.webhook_url as string | null) ?? null,
+      notify_clock_in: d.notify_clock_in !== false,
+      notify_clock_out: d.notify_clock_out !== false,
+      notify_break_start: d.notify_break_start !== false,
+      notify_break_end: d.notify_break_end !== false,
+      notify_payment_paid: d.notify_payment_paid !== false,
+      task_webhook_url: (d.task_webhook_url as string | null) ?? null,
+      notify_task_created: d.notify_task_created !== false,
+      notify_task_moved: d.notify_task_moved !== false,
+      approval_webhook_url: (d.approval_webhook_url as string | null) ?? null,
+      notify_task_approval_created: d.notify_task_approval_created !== false,
+      notify_task_approval_moved: d.notify_task_approval_moved !== false,
     })
+    // user_id is auto-filled with the workspace owner by the trg_slack_settings_user trigger.
+    let result = await client().from('slack_settings').upsert(row, { onConflict: 'user_id' }).select().single()
+    if (result.error && isMissingColumn(result.error as { code?: string; message?: string }, 'approval_webhook_url')) {
+      // Database without supabase/approval-slack.sql: save everything else.
+      console.warn('[work-tracker] the approval Slack columns are missing — run supabase/approval-slack.sql to enable approval notifications.')
+      const { approval_webhook_url: _a, notify_task_approval_created: _b, notify_task_approval_moved: _c, ...legacy } = row
+      result = await client().from('slack_settings').upsert(legacy as Record<string, unknown>, { onConflict: 'user_id' }).select().single()
+      if (!result.error) {
+        // The approval toggle defaults to ON (no webhook) so nothing else breaks.
+        return ok({ ...normalize(result.data as Record<string, unknown>), notify_task_approval_created: true, notify_task_approval_moved: true })
+      }
+    }
+    if (result.error) return fail(result.error.message)
+    return ok(normalize(result.data as Record<string, unknown>))
   },
 
   async listEntryComments(entryId) {
