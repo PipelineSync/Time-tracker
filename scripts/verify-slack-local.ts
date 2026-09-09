@@ -178,6 +178,32 @@ async function main() {
   await slack.notifySlackAsync('clock_in', { demoText: '🟢 from worker' })
   assert(slackCalls.length === 3, 'worker sessions do not post to Slack directly')
 
+  // ---- 7) Approval automation (admin config, demo transport) ----
+  await localBackend.signOut()
+  await localBackend.signIn('admin', 'admin.pipelinesync')
+  await localBackend.saveSlackSettings({
+    approval_webhook_url: 'https://hooks.slack.com/services/T000/B000/APPROVAL',
+    notify_task_approval_created: true,
+    notify_task_approval_moved: true,
+  })
+  await slack.notifySlackAsync('task_approval_created', { demoText: '🆕 Admin created “Wireframes” in Approval — ready for your review.' })
+  assert(slackCalls.length === 4 && slackCalls[3].url.includes('/APPROVAL'), 'a task created in Approval posts to the dedicated Approval webhook')
+
+  // Approval webhook settings round-trip.
+  const approvalCfg = await localBackend.getSlackSettings()
+  assert(!approvalCfg.error && approvalCfg.data?.approval_webhook_url?.includes('/APPROVAL'), 'approval webhook URL round-trips through the local backend')
+  assert(approvalCfg.data?.notify_task_approval_moved === true, 'approval toggles default to enabled')
+
+  // Toggled-off approval events are not sent.
+  await localBackend.saveSlackSettings({ notify_task_approval_moved: false })
+  await slack.notifySlackAsync('task_approval_moved', { demoText: 'should not send' })
+  assert(slackCalls.length === 4, 'approval event with its toggle OFF is not sent')
+  await localBackend.saveSlackSettings({ notify_task_approval_moved: true })
+
+  // Approval channel test message.
+  const approvalTest = await slack.sendSlackTestMessage('approval')
+  assert(approvalTest === null && slackCalls.length === 5 && slackCalls[4].url.includes('/APPROVAL') && slackCalls[4].body?.text?.includes('Approval'), 'approval test message posts to the Approval webhook')
+
   if (failures > 0) {
     console.error(`\n${failures} check(s) failed.`)
     process.exit(1)

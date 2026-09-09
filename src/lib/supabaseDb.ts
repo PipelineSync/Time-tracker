@@ -1408,6 +1408,8 @@ export const supabaseBackend: DataBackend = {
       return fail(error.message)
     }
     if (!data) return ok({ ...DEFAULT_SLACK_SETTINGS })
+    // A database that has not applied the approval migration simply returns no
+    // approval columns → they default to enabled-without-a-webhook.
     return ok({
       webhook_url: (data.webhook_url as string | null) ?? null,
       notify_clock_in: data.notify_clock_in !== false,
@@ -1418,6 +1420,9 @@ export const supabaseBackend: DataBackend = {
       task_webhook_url: (data.task_webhook_url as string | null) ?? null,
       notify_task_created: data.notify_task_created !== false,
       notify_task_moved: data.notify_task_moved !== false,
+      approval_webhook_url: (data.approval_webhook_url as string | null) ?? null,
+      notify_task_approval_created: data.notify_task_approval_created !== false,
+      notify_task_approval_moved: data.notify_task_approval_moved !== false,
     })
   },
 
@@ -1438,21 +1443,38 @@ export const supabaseBackend: DataBackend = {
       task_webhook_url: next.task_webhook_url?.trim() ? next.task_webhook_url.trim() : null,
       notify_task_created: next.notify_task_created,
       notify_task_moved: next.notify_task_moved,
+      approval_webhook_url: next.approval_webhook_url?.trim() ? next.approval_webhook_url.trim() : null,
+      notify_task_approval_created: next.notify_task_approval_created,
+      notify_task_approval_moved: next.notify_task_approval_moved,
     }
-    // user_id is auto-filled with the workspace owner by the trg_slack_settings_user trigger.
-    const { data, error } = await client().from('slack_settings').upsert(row, { onConflict: 'user_id' }).select().single()
-    if (error) return fail(error.message)
-    return ok({
-      webhook_url: (data.webhook_url as string | null) ?? null,
-      notify_clock_in: data.notify_clock_in !== false,
-      notify_clock_out: data.notify_clock_out !== false,
-      notify_break_start: data.notify_break_start !== false,
-      notify_break_end: data.notify_break_end !== false,
-      notify_payment_paid: data.notify_payment_paid !== false,
-      task_webhook_url: (data.task_webhook_url as string | null) ?? null,
-      notify_task_created: data.notify_task_created !== false,
-      notify_task_moved: data.notify_task_moved !== false,
+    const normalize = (d: Record<string, unknown>): SlackSettings => ({
+      webhook_url: (d.webhook_url as string | null) ?? null,
+      notify_clock_in: d.notify_clock_in !== false,
+      notify_clock_out: d.notify_clock_out !== false,
+      notify_break_start: d.notify_break_start !== false,
+      notify_break_end: d.notify_break_end !== false,
+      notify_payment_paid: d.notify_payment_paid !== false,
+      task_webhook_url: (d.task_webhook_url as string | null) ?? null,
+      notify_task_created: d.notify_task_created !== false,
+      notify_task_moved: d.notify_task_moved !== false,
+      approval_webhook_url: (d.approval_webhook_url as string | null) ?? null,
+      notify_task_approval_created: d.notify_task_approval_created !== false,
+      notify_task_approval_moved: d.notify_task_approval_moved !== false,
     })
+    // user_id is auto-filled with the workspace owner by the trg_slack_settings_user trigger.
+    let result = await client().from('slack_settings').upsert(row, { onConflict: 'user_id' }).select().single()
+    if (result.error && isMissingColumn(result.error as { code?: string; message?: string }, 'approval_webhook_url')) {
+      // Database without supabase/approval-slack.sql: save everything else.
+      console.warn('[work-tracker] the approval Slack columns are missing — run supabase/approval-slack.sql to enable approval notifications.')
+      const { approval_webhook_url: _a, notify_task_approval_created: _b, notify_task_approval_moved: _c, ...legacy } = row
+      result = await client().from('slack_settings').upsert(legacy as Record<string, unknown>, { onConflict: 'user_id' }).select().single()
+      if (!result.error) {
+        // The approval toggle defaults to ON (no webhook) so nothing else breaks.
+        return ok({ ...normalize(result.data as Record<string, unknown>), notify_task_approval_created: true, notify_task_approval_moved: true })
+      }
+    }
+    if (result.error) return fail(result.error.message)
+    return ok(normalize(result.data as Record<string, unknown>))
   },
 
   async listEntryComments(entryId) {

@@ -849,6 +849,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const client = clients.find((c) => c.id === task.client_id)?.name || 'No client'
     const actor = isAdmin ? 'Admin' : (myWorker?.name || user?.email || 'A worker')
     notifySlack('task_created', { task_id: task.id, demoText: `🆕 ${actor} created “${task.title}” · Assigned to ${assignee} · ${client} · ${task.priority} priority · Due ${task.due_date || 'none'}.` })
+    // Approval-stage automation: a task created straight onto the Approval
+    // column flags it for the admin to review (task channel post still fires too).
+    if (task.status === 'approval') {
+      notifySlack('task_approval_created', { task_id: task.id, demoText: `🆕 ${actor} created “${task.title}” in Approval · Assigned to ${assignee} · ${client} · ${task.priority} priority · Due ${task.due_date || 'none'} — ready for your review.` })
+    }
     return task
   }, [backend, refreshTasks, workers, clients, isAdmin, myWorker, user])
 
@@ -866,6 +871,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const client = clients.find((c) => c.id === task.client_id)?.name || 'No client'
       const actor = isAdmin ? 'Admin' : (myWorker?.name || user?.email || 'A worker')
       notifySlack('task_moved', { task_id: task.id, previous_status: previous.status, demoText: `🔄 ${actor} moved “${task.title}” from ${previous.status} to ${task.status} · Assigned to ${assignee} · ${client} · ${task.priority} priority · Due ${task.due_date || 'none'}.` })
+      // Approval-stage automation: only when the task lands on Approval.
+      if (task.status === 'approval') {
+        notifySlack('task_approval_moved', { task_id: task.id, previous_status: previous.status, demoText: `🔄 ${actor} moved “${task.title}” to Approval · Assigned to ${assignee} · ${client} · ${task.priority} priority · Due ${task.due_date || 'none'} — ready for your review.` })
+      }
     }
     return res.data
   }, [backend, refreshTasks, tasks, workers, clients, isAdmin, myWorker, user])
@@ -888,6 +897,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const client = clients.find((c) => c.id === task.client_id)?.name || 'No client'
       const actor = isAdmin ? 'Admin' : (myWorker?.name || user?.email || 'A worker')
       notifySlack('task_moved', { task_id: task.id, previous_status: previous.status, demoText: `🔄 ${actor} moved “${task.title}” from ${previous.status} to ${status} · Assigned to ${assignee} · ${client} · ${task.priority} priority · Due ${task.due_date || 'none'}.` })
+      // Approval-stage automation: only when the task lands on Approval.
+      if (status === 'approval') {
+        notifySlack('task_approval_moved', { task_id: task.id, previous_status: previous.status, demoText: `🔄 ${actor} moved “${task.title}” to Approval · Assigned to ${assignee} · ${client} · ${task.priority} priority · Due ${task.due_date || 'none'} — ready for your review.` })
+      }
     }
     return res.data
   }, [backend, refreshTasks, tasks, workers, clients, isAdmin, myWorker, user])

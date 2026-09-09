@@ -1092,7 +1092,9 @@ export const localBackend: DataBackend = {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
     if (!can(c, 'settings.manage')) return denied('view the Slack settings')
-    return { data: read<SlackSettings>(slackKey(c.admin.id), { ...DEFAULT_SLACK_SETTINGS }), error: null }
+    // Merge over the defaults so rows saved before a field existed (e.g. the
+    // approval webhook) still read back with every toggle set.
+    return { data: { ...DEFAULT_SLACK_SETTINGS, ...read<SlackSettings>(slackKey(c.admin.id), { ...DEFAULT_SLACK_SETTINGS }) }, error: null }
   },
 
   async saveSlackSettings(patch) {
@@ -1101,6 +1103,8 @@ export const localBackend: DataBackend = {
     if (!can(c, 'settings.manage')) return denied('change the Slack settings')
     const next: SlackSettings = { ...DEFAULT_SLACK_SETTINGS, ...read<SlackSettings>(slackKey(c.admin.id), { ...DEFAULT_SLACK_SETTINGS }), ...patch }
     next.webhook_url = next.webhook_url?.trim() ? next.webhook_url.trim() : null
+    next.task_webhook_url = next.task_webhook_url?.trim() ? next.task_webhook_url.trim() : null
+    next.approval_webhook_url = next.approval_webhook_url?.trim() ? next.approval_webhook_url.trim() : null
     write(slackKey(c.admin.id), next)
     return { data: next, error: null }
   },
