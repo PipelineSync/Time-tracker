@@ -707,10 +707,16 @@ export interface Payment {
   paid_at: string | null
   note: string | null
   /**
-   * How the admin paid this settlement (chosen from the worker's accepted
-   * methods when marking it paid). Null until the payment is marked paid.
+   * How the admin paid this settlement (chosen when marking it paid — Cash or
+   * QR Code). Null until the payment is marked paid.
    */
   payment_method?: PaymentMethod | null
+  /**
+   * The payment's reference / transaction number (GCash, Maya, bank ref…) that
+   * the admin typed when marking it paid. Optional; null until then, and
+   * cleared when a payment goes back to unpaid or pending.
+   */
+  reference_number?: string | null
 }
 
 // ---- Finance ----------------------------------------------------------------

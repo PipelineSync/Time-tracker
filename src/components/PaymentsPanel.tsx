@@ -15,6 +15,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { Wallet, Trash2, Pencil, Banknote, QrCode, CreditCard, Check } from 'lucide-react'
@@ -60,10 +62,11 @@ export function PaymentsPanel() {
   const [editSaving, setEditSaving] = useState(false)
   // QR code being viewed full-size (worker's own, or from the Mark paid dialog).
   const [qrViewer, setQrViewer] = useState<{ worker: Worker; url: string } | null>(null)
-  // "Mark paid" flow: the admin sees the worker's accepted methods and picks
-  // the one they are paying with before the payment is marked paid.
+  // "Mark paid" flow: the admin picks how they are paying (Cash / QR Code) and
+  // can note the transfer's reference number before the payment is marked paid.
   const [paying, setPaying] = useState<Payment | null>(null)
   const [payMethod, setPayMethod] = useState<PaymentMethod | null>(null)
+  const [payReference, setPayReference] = useState('')
   const [paySaving, setPaySaving] = useState(false)
 
   const workerName = (id: string) => workers.find((w) => w.id === id)?.name || 'Worker'
@@ -99,23 +102,36 @@ export function PaymentsPanel() {
     const methods = workerById(p.worker_id)?.payment_methods ?? []
     // Pre-select when the worker only accepts one method.
     setPayMethod(methods.length === 1 ? methods[0] : null)
+    setPayReference('')
     setPaying(p)
   }
 
   async function confirmMarkPaid() {
     if (!paying) return
-    if (payingMethods.length > 0 && !payMethod) {
+    if (!payMethod) {
       toast.error('Choose the payment method you used.')
       return
     }
     setPaySaving(true)
-    const res = await updatePaymentStatus(paying.id, 'paid', payMethod)
+    const reference = payReference.trim() || null
+    const res = await updatePaymentStatus(paying.id, 'paid', payMethod, reference)
     setPaySaving(false)
     if (!res) {
       toast.error('Failed to mark the payment as paid.')
       return
     }
-    toast.success(payMethod ? `Payment marked paid via ${methodLabel[payMethod]}.` : 'Payment marked paid.')
+    toast.success(`Payment marked paid via ${methodLabel[payMethod]}.`)
+    // A database predating the payment_method migration accepts the status
+    // change but drops the method — say so instead of silently showing "—".
+    if (!res.payment_method) {
+      toast.warning('The method could not be saved on this database.', {
+        description: 'Run supabase/payment-paid-method.sql once so “Paid via” is remembered.',
+      })
+    } else if (reference && !res.reference_number) {
+      toast.warning('The reference number could not be saved on this database.', {
+        description: 'Run supabase/payment-reference-number.sql once so references are remembered.',
+      })
+    }
     setPaying(null)
   }
 
@@ -251,7 +267,14 @@ export function PaymentsPanel() {
                     </td>
                     <td className="px-3 py-3">
                       {p.status === 'paid' && p.payment_method ? (
-                        <MethodBadge method={p.payment_method} />
+                        <div className="space-y-0.5">
+                          <MethodBadge method={p.payment_method} />
+                          {p.reference_number ? (
+                            <p className="text-[11px] text-muted-foreground" title={p.reference_number}>
+                              Ref {p.reference_number}
+                            </p>
+                          ) : null}
+                        </div>
                       ) : (
                         <span className="text-xs italic text-muted-foreground/60">—</span>
                       )}
@@ -359,7 +382,7 @@ export function PaymentsPanel() {
                   <p className="truncate text-sm font-medium">{payingWorker?.name || workerName(paying.worker_id)}</p>
                   <p className="text-xs text-muted-foreground">
                     {payingMethods.length === 0
-                      ? 'Has not set up a payment method yet.'
+                      ? 'Has not set a payment method yet — pick how you paid below.'
                       : `Accepts ${payingMethods.map((m) => methodLabel[m]).join(' and ')}.`}
                   </p>
                 </div>
@@ -368,101 +391,121 @@ export function PaymentsPanel() {
                 </div>
               </div>
 
-              {payingMethods.length === 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  {payingWorker?.name || 'This worker'} hasn’t chosen how they want to be paid (Settings → Payment methods on their account).
-                  You can still mark the payment as paid without a method.
-                </p>
-              ) : (
-                <div className="space-y-2">
-                  <p className="text-sm font-medium">Pay with</p>
-                  <div className={cn('grid gap-2', payingMethods.length > 1 ? 'grid-cols-2' : 'grid-cols-1')}>
+              {/* Both methods are always offered: how the admin actually paid
+                  is what the history has to record, and a worker who never set
+                  a preference must not leave the choice invisible. */}
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Pay with</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setPayMethod('cash')}
+                    aria-pressed={payMethod === 'cash'}
+                    className={cn(
+                      'relative flex flex-col items-center gap-2 rounded-lg border p-4 text-sm transition-colors hover:bg-muted/50',
+                      payMethod === 'cash' && 'border-primary bg-primary/5 ring-1 ring-primary'
+                    )}
+                  >
+                    {payMethod === 'cash' && (
+                      <span className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                        <Check className="h-3 w-3" />
+                      </span>
+                    )}
+                    <span className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
+                      <Banknote className="h-6 w-6" />
+                    </span>
+                    <span className="font-medium">Cash</span>
+                    <span className="text-xs text-muted-foreground">Hand the money over in person</span>
                     {payingMethods.includes('cash') && (
-                      <button
-                        type="button"
-                        onClick={() => setPayMethod('cash')}
-                        aria-pressed={payMethod === 'cash'}
-                        className={cn(
-                          'relative flex flex-col items-center gap-2 rounded-lg border p-4 text-sm transition-colors hover:bg-muted/50',
-                          payMethod === 'cash' && 'border-primary bg-primary/5 ring-1 ring-primary'
-                        )}
-                      >
-                        {payMethod === 'cash' && (
-                          <span className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full bg-primary text-primary-foreground">
-                            <Check className="h-3 w-3" />
-                          </span>
-                        )}
-                        <span className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
-                          <Banknote className="h-6 w-6" />
-                        </span>
-                        <span className="font-medium">Cash</span>
-                        <span className="text-xs text-muted-foreground">Hand the money over in person</span>
-                      </button>
+                      <span className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400">Accepted by {payingWorker?.name || 'this worker'}</span>
                     )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPayMethod('qr')}
+                    aria-pressed={payMethod === 'qr'}
+                    className={cn(
+                      'relative flex flex-col items-center gap-2 rounded-lg border p-4 text-sm transition-colors hover:bg-muted/50',
+                      payMethod === 'qr' && 'border-primary bg-primary/5 ring-1 ring-primary'
+                    )}
+                  >
+                    {payMethod === 'qr' && (
+                      <span className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                        <Check className="h-3 w-3" />
+                      </span>
+                    )}
+                    {payingWorker?.qr_code_url ? (
+                      <span className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-md border bg-white">
+                        <img src={payingWorker.qr_code_url} alt={`${payingWorker.name}'s payment QR code`} className="h-full w-full object-contain" />
+                      </span>
+                    ) : (
+                      <span className="flex h-12 w-12 items-center justify-center rounded-full bg-secondary text-secondary-foreground">
+                        <QrCode className="h-6 w-6" />
+                      </span>
+                    )}
+                    <span className="font-medium">QR Code</span>
+                    <span className="text-xs text-muted-foreground">
+                      {payingWorker?.qr_code_url ? 'Scan with your payment app' : 'No QR image on file'}
+                    </span>
                     {payingMethods.includes('qr') && (
-                      <button
-                        type="button"
-                        onClick={() => setPayMethod('qr')}
-                        aria-pressed={payMethod === 'qr'}
-                        className={cn(
-                          'relative flex flex-col items-center gap-2 rounded-lg border p-4 text-sm transition-colors hover:bg-muted/50',
-                          payMethod === 'qr' && 'border-primary bg-primary/5 ring-1 ring-primary'
-                        )}
-                      >
-                        {payMethod === 'qr' && (
-                          <span className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full bg-primary text-primary-foreground">
-                            <Check className="h-3 w-3" />
-                          </span>
-                        )}
-                        {payingWorker?.qr_code_url ? (
-                          <span className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-md border bg-white">
-                            <img src={payingWorker.qr_code_url} alt={`${payingWorker.name}'s payment QR code`} className="h-full w-full object-contain" />
-                          </span>
-                        ) : (
-                          <span className="flex h-12 w-12 items-center justify-center rounded-full bg-secondary text-secondary-foreground">
-                            <QrCode className="h-6 w-6" />
-                          </span>
-                        )}
-                        <span className="font-medium">QR Code</span>
-                        <span className="text-xs text-muted-foreground">
-                          {payingWorker?.qr_code_url ? 'Scan with your payment app' : 'QR image missing'}
-                        </span>
-                      </button>
+                      <span className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400">Accepted by {payingWorker?.name || 'this worker'}</span>
                     )}
-                  </div>
-
-                  {payMethod === 'qr' && payingWorker?.qr_code_url && (
-                    <div className="flex flex-col items-center gap-2 rounded-lg border bg-white p-3">
-                      <img
-                        src={payingWorker.qr_code_url}
-                        alt={`${payingWorker.name}'s payment QR code`}
-                        className="max-h-[220px] w-auto max-w-full object-contain"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setQrViewer({ worker: payingWorker, url: payingWorker.qr_code_url! })}
-                        className="text-xs font-medium text-primary hover:underline"
-                      >
-                        View full size
-                      </button>
-                    </div>
-                  )}
-                  {payMethod === 'qr' && !payingWorker?.qr_code_url && (
-                    <p className="text-xs text-amber-600 dark:text-amber-400">
-                      QR Code is enabled but the worker hasn’t uploaded their QR image yet — ask them to re-upload it in Settings.
-                    </p>
-                  )}
+                  </button>
                 </div>
-              )}
+
+                {payMethod === 'qr' && payingWorker?.qr_code_url && (
+                  <div className="flex flex-col items-center gap-2 rounded-lg border bg-white p-3">
+                    <img
+                      src={payingWorker.qr_code_url}
+                      alt={`${payingWorker.name}'s payment QR code`}
+                      className="max-h-[220px] w-auto max-w-full object-contain"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setQrViewer({ worker: payingWorker, url: payingWorker.qr_code_url! })}
+                      className="text-xs font-medium text-primary hover:underline"
+                    >
+                      View full size
+                    </button>
+                  </div>
+                )}
+                {payMethod === 'qr' && !payingWorker?.qr_code_url && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400">
+                    {payingWorker?.name || 'This worker'} hasn’t uploaded a QR image yet — ask them to add it in Settings → Payment methods, or pay another way.
+                  </p>
+                )}
+              </div>
+
+              {/* The transfer's reference number (GCash / Maya / bank ref). */}
+              <div className="space-y-1.5">
+                <Label htmlFor="pay-reference" className="text-sm font-medium">
+                  Reference number <span className="font-normal text-muted-foreground">(optional)</span>
+                </Label>
+                <Input
+                  id="pay-reference"
+                  value={payReference}
+                  onChange={(e) => setPayReference(e.target.value.slice(0, 64))}
+                  placeholder={payMethod === 'qr' ? 'GCash / Maya reference number' : payMethod === 'cash' ? 'Receipt or voucher number' : 'Reference number'}
+                  autoComplete="off"
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Saved with the payment and shown under “Paid via” — the worker sees it on their own payslips too.
+                </p>
+              </div>
             </div>
           )}
 
           <DialogFooter className="gap-2">
             <Button variant="outline" onClick={() => setPaying(null)} disabled={paySaving}>Cancel</Button>
-            <Button onClick={confirmMarkPaid} disabled={paySaving || (payingMethods.length > 0 && !payMethod)}>
+            <Button onClick={confirmMarkPaid} disabled={paySaving || !payMethod}>
               {paySaving ? 'Saving…' : payMethod ? `Mark paid via ${methodLabel[payMethod]}` : 'Mark paid'}
             </Button>
           </DialogFooter>
+          {!payMethod && (
+            <p className="text-xs text-muted-foreground sm:text-right">
+              Pick how you paid (Cash or QR Code) to continue.
+            </p>
+          )}
         </DialogContent>
       </Dialog>
 

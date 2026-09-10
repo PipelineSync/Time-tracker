@@ -464,6 +464,25 @@ function denied<T>(what: string): BackendResult<T> {
   return fail<T>(`You do not have permission to ${what}.`)
 }
 
+/**
+ * `payments` column sets, newest first. `payment_method` (how the admin paid)
+ * and `reference_number` (the transfer's reference) each arrived in their own
+ * migration, so an older database is simply missing them — try the fullest set
+ * and fall back instead of breaking the whole page.
+ */
+const PAYMENT_COLUMN_SETS = [
+  'id, worker_id, amount, hours, status, period_start, period_end, created_at, paid_at, note, payment_method, reference_number',
+  'id, worker_id, amount, hours, status, period_start, period_end, created_at, paid_at, note, payment_method',
+  'id, worker_id, amount, hours, status, period_start, period_end, created_at, paid_at, note',
+]
+
+/** Trimmed reference number (GCash / bank ref), or null when blank. */
+function normalizeReferenceNumber(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed ? trimmed.slice(0, 64) : null
+}
+
 async function requireUser(): Promise<BackendResult<AuthUser>> {
   const lookup = await getAuthUser()
   if (lookup.status !== 'authenticated') return fail('Not signed in.')
@@ -1649,13 +1668,24 @@ export const supabaseBackend: DataBackend = {
   async listPayments(limit) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    let q = client().from('payments').select('id, worker_id, amount, hours, status, period_start, period_end, created_at, paid_at, note, payment_method')
-    if (!canDo(me.data!, 'payments.view_all') && me.data!.workerId) q = q.eq('worker_id', me.data!.workerId)
-    q = q.order('created_at', { ascending: false })
-    if (limit) q = q.limit(limit)
-    const { data, error } = await q
-    if (error) return fail(error.message)
-    return ok(data as Payment[])
+    const build = (columns: string) => {
+      let q = client().from('payments').select(columns)
+      if (!canDo(me.data!, 'payments.view_all') && me.data!.workerId) q = q.eq('worker_id', me.data!.workerId)
+      q = q.order('created_at', { ascending: false })
+      if (limit) q = q.limit(limit)
+      return q
+    }
+    // Newest column set first; a database that predates one of the payment
+    // migrations still lists every payment, just without the newer columns
+    // (instead of failing the whole page the way a missing column would).
+    let lastError: { message: string } | null = null
+    for (const columns of PAYMENT_COLUMN_SETS) {
+      const res = await build(columns)
+      if (!res.error) return ok((res.data as unknown as Payment[]) ?? [])
+      lastError = res.error
+      if (!isMissingColumn(res.error, 'payment_method') && !isMissingColumn(res.error, 'reference_number')) break
+    }
+    return fail(lastError?.message ?? 'Could not load payments.')
   },
 
   async settleWorker(workerId, note) {
@@ -1736,7 +1766,7 @@ export const supabaseBackend: DataBackend = {
     return ok(data as Payment)
   },
 
-  async updatePaymentStatus(id, status: PaymentStatus, paymentMethod?: PaymentMethod | null) {
+  async updatePaymentStatus(id, status: PaymentStatus, paymentMethod?: PaymentMethod | null, referenceNumber?: string | null) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
     if (!canDo(me.data!, 'payments.manage')) return denied('update payment status')
@@ -1745,27 +1775,39 @@ export const supabaseBackend: DataBackend = {
     if (status === 'paid' && paymentMethod && !method) {
       return fail('Choose Cash or QR Code as the payment method.')
     }
+    const reference = normalizeReferenceNumber(referenceNumber)
     const sb = client()
     const base = { status, paid_at: status === 'paid' ? new Date().toISOString() : null }
-    // The method only describes a completed payment; other statuses clear it.
-    // `payment_method` needs supabase/payment-paid-method.sql — a database
-    // without the column still gets the status change, just without the method.
-    let res = await sb
-      .from('payments')
-      .update({ ...base, payment_method: status === 'paid' ? method : null })
-      .eq('id', id)
-      .select()
-      .single()
-    if (res.error && isMissingColumn(res.error as { code?: string; message?: string }, 'payment_method')) {
-      console.warn('[payments] payments.payment_method is missing — run supabase/payment-paid-method.sql to record how workers were paid.')
-      res = await sb.from('payments').update(base).eq('id', id).select().single()
+    // The method and the reference only describe a completed payment; other
+    // statuses clear both. Each arrived in its own migration, so a database
+    // missing either column still gets the status change — just without it.
+    const attempts = [
+      { ...base, payment_method: status === 'paid' ? method : null, reference_number: status === 'paid' ? reference : null },
+      { ...base, payment_method: status === 'paid' ? method : null },
+      base,
+    ]
+    type PaymentUpdateResult = { data: Payment | null; error: { code?: string; message?: string } | null }
+    let res: PaymentUpdateResult | null = null
+    for (const payload of attempts) {
+      res = (await sb.from('payments').update(payload).eq('id', id).select().single()) as PaymentUpdateResult
+      if (!res?.error) break
+      if (!isMissingColumn(res.error, 'payment_method') && !isMissingColumn(res.error, 'reference_number')) break
     }
-    if (res.error) return fail(res.error.message)
+    if (!res || res.error) {
+      if (res?.error && isMissingColumn(res.error, 'reference_number')) {
+        console.warn('[payments] payments.reference_number is missing — run supabase/payment-reference-number.sql to store payment references.')
+      }
+      if (res?.error && isMissingColumn(res.error, 'payment_method')) {
+        console.warn('[payments] payments.payment_method is missing — run supabase/payment-paid-method.sql to record how workers were paid.')
+      }
+      return fail(res?.error?.message ?? 'Could not update the payment.')
+    }
     const p = res.data as Payment
     const wid = await getWorkerUserId(p.worker_id)
     if (wid) {
       const via = status === 'paid' && method ? ` (${method === 'cash' ? 'Cash' : 'QR Code'})` : ''
-      await pushNotification(wid, { entry_id: null, type: 'payment', message: `Your payment is now ${status}${via}` })
+      const ref = status === 'paid' && reference ? ` · Ref ${reference}` : ''
+      await pushNotification(wid, { entry_id: null, type: 'payment', message: `Your payment is now ${status}${via}${ref}` })
     }
     return ok(p)
   },

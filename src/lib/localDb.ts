@@ -122,6 +122,18 @@ function paymentMethodLabel(method: PaymentMethod): string {
   return method === 'cash' ? 'Cash' : 'QR Code'
 }
 
+/**
+ * The reference / transaction number the admin typed when paying — trimmed,
+ * capped (a GCash or bank reference is well under this) and null when blank,
+ * so an empty box never saves an empty string.
+ */
+function normalizeReferenceNumber(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  return trimmed.slice(0, 64)
+}
+
 /** Payment methods a worker accepts — normalized for rows saved before this feature. */
 function normalizePaymentMethods(methods: unknown): PaymentMethod[] {
   if (!Array.isArray(methods)) return []
@@ -1361,6 +1373,9 @@ export const localBackend: DataBackend = {
       created_at: now.toISOString(),
       paid_at: null,
       note: note || null,
+      // Filled in when the admin marks the payment as paid.
+      payment_method: null,
+      reference_number: null,
     }
     c.data.payments.push(payment)
     // Mark the paid-for time as settled — the rows themselves are kept.
@@ -1382,7 +1397,7 @@ export const localBackend: DataBackend = {
     return { data: payment, error: null }
   },
 
-  async updatePaymentStatus(id, status, paymentMethod) {
+  async updatePaymentStatus(id, status, paymentMethod, referenceNumber) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
     if (!can(c, 'payments.manage')) return denied('update payment status')
@@ -1392,10 +1407,12 @@ export const localBackend: DataBackend = {
     if (status === 'paid' && paymentMethod && !method) {
       return { data: null, error: 'Choose Cash or QR Code as the payment method.' }
     }
+    const reference = normalizeReferenceNumber(referenceNumber)
     p.status = status
     p.paid_at = status === 'paid' ? new Date().toISOString() : null
-    // The method only describes a completed payment.
+    // The method and reference only describe a completed payment.
     p.payment_method = status === 'paid' ? method : null
+    p.reference_number = status === 'paid' ? reference : null
     // Notify the worker on status change.
     const wid = workerUserId(p.worker_id)
     if (wid) {
@@ -1404,7 +1421,8 @@ export const localBackend: DataBackend = {
         type: 'payment',
         message:
           `Your payment of ${formatMoney(p.amount, c.data.settings?.currency || 'USD')} is now ${status}` +
-          (status === 'paid' && method ? ` (${paymentMethodLabel(method)})` : ''),
+          (status === 'paid' && method ? ` (${paymentMethodLabel(method)})` : '') +
+          (status === 'paid' && reference ? ` · Ref ${reference}` : ''),
       })
     }
     save(c.data)

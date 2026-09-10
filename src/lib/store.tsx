@@ -218,7 +218,12 @@ interface StoreValue {
   deleteTask: (id: string) => Promise<boolean>
 
   settleWorker: (workerId: string, note?: string) => Promise<Payment | null>
-  updatePaymentStatus: (id: string, status: PaymentStatus, paymentMethod?: PaymentMethod | null) => Promise<Payment | null>
+  updatePaymentStatus: (
+    id: string,
+    status: PaymentStatus,
+    paymentMethod?: PaymentMethod | null,
+    referenceNumber?: string | null,
+  ) => Promise<Payment | null>
   updatePaymentNote: (id: string, note: string | null) => Promise<Payment | null>
   deletePayment: (id: string) => Promise<boolean>
 
@@ -1053,17 +1058,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return res.data
   }, [backend, refreshData])
 
-  const updatePaymentStatus = useCallback(async (id: string, status: PaymentStatus, paymentMethod?: PaymentMethod | null) => {
-    const res = await backend.updatePaymentStatus(id, status, paymentMethod)
+  const updatePaymentStatus = useCallback(async (id: string, status: PaymentStatus, paymentMethod?: PaymentMethod | null, referenceNumber?: string | null) => {
+    const res = await backend.updatePaymentStatus(id, status, paymentMethod, referenceNumber)
     if (res.error || !res.data) return null
     // Mirror "marked as paid" into Slack (only that transition, not
     // unpaid/pending changes).
     if (status === 'paid') {
       const payment = res.data
       const workerName = workers.find((w) => w.id === payment.worker_id)?.name || 'Someone'
+      const via = paymentMethod === 'cash' ? ' (cash)' : paymentMethod === 'qr' ? ' (QR code)' : ''
+      const ref = payment.reference_number ? ` · Ref ${payment.reference_number}` : ''
+      // `amount` comes back from the database: never let a bad row break the
+      // notification (and with it the whole mark-paid action).
+      const amount = Number.isFinite(payment.amount) ? payment.amount.toFixed(2) : '0.00'
       notifySlack('payment_paid', {
         payment_id: payment.id,
-        demoText: `💸 ${workerName} was paid ${payment.amount.toFixed(2)}${paymentMethod === 'cash' ? ' (cash)' : paymentMethod === 'qr' ? ' (QR code)' : ''}.`,
+        demoText: `💸 ${workerName} was paid ${amount}${via}${ref}.`,
       })
     }
     await refreshData()
