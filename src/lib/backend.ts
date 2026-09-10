@@ -93,6 +93,12 @@ export interface CreateFinanceItemInput {
   due_date: string
   status?: FinanceStatus
   note?: string | null
+  /**
+   * Subscriptions only: how many times it bills before pausing by itself
+   * (a whole number of 1 or more). Omit or pass null for a subscription that
+   * runs until someone switches it off.
+   */
+  max_occurrences?: number | null
 }
 
 export interface DataBackend {

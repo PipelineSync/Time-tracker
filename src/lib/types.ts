@@ -747,6 +747,18 @@ export interface FinanceItem {
   /** When a payroll run or bill was marked paid (subscriptions never use it). */
   paid_at: string | null
   note: string | null
+  /**
+   * Subscriptions only: how many times the subscription bills before it
+   * pauses by itself — "for a set number of bills". Null means it runs until
+   * someone switches it off (the classic behavior). Other kinds: null.
+   */
+  max_occurrences: number | null
+  /**
+   * Subscriptions only: how many of those bills have happened. Counted by
+   * the backends — every time the next due date is rolled forward, this goes
+   * up by one, and reaching `max_occurrences` pauses the subscription.
+   */
+  billed_count: number
   created_at: string
   updated_at: string
 }

@@ -527,6 +527,12 @@ function normalizeClientRow(c: Client): Client {
 const FINANCE_COLUMNS =
   'id, kind, name, worker_id, amount, cycle, period_month, due_date, status, paid_at, note, created_at, updated_at'
 
+// supabase/finance-subscription-occurrences.sql adds the subscription
+// occurrence limit; databases without it answer "column not found", and the
+// finance queries retry with the legacy list so everything else keeps working.
+const FINANCE_OCCURRENCE_COLUMNS = 'max_occurrences, billed_count'
+const FINANCE_COLUMNS_FULL = `${FINANCE_COLUMNS}, ${FINANCE_OCCURRENCE_COLUMNS}`
+
 /** Subscriptions live in active/paused; payroll and bills in unpaid/paid. */
 function financeStatusFor(kind: FinanceItem['kind'], status: unknown): FinanceItem['status'] {
   if (kind === 'subscription') return status === 'paused' ? 'paused' : 'active'
@@ -548,6 +554,13 @@ function normalizeFinanceRow(f: FinanceItem): FinanceItem {
     status: financeStatusFor(kind, f.status),
     paid_at: financeStatusFor(kind, f.status) === 'paid' ? f.paid_at ?? null : null,
     note: typeof f.note === 'string' && f.note.trim() ? f.note : null,
+    // Rows from a database without the occurrence migration come back with
+    // both fields undefined — they read as "runs until switched off".
+    max_occurrences:
+      kind === 'subscription' && typeof f.max_occurrences === 'number' && Number.isFinite(f.max_occurrences) && f.max_occurrences > 0
+        ? Math.floor(f.max_occurrences)
+        : null,
+    billed_count: typeof f.billed_count === 'number' && Number.isFinite(f.billed_count) && f.billed_count > 0 ? Math.floor(f.billed_count) : 0,
   }
 }
 
@@ -1772,19 +1785,27 @@ export const supabaseBackend: DataBackend = {
     const me = await requireUser()
     if (me.error) return fail(me.error)
     if (!canDo(me.data!, 'finance.view')) return ok([] as FinanceItem[])
-    const { data, error } = await client()
+    let res = await (client()
       .from('finance_items')
-      .select(FINANCE_COLUMNS)
+      .select(FINANCE_COLUMNS_FULL)
       .order('due_date', { ascending: true })
-      .order('created_at', { ascending: false })
-    if (error) {
-      if (isMissingTable(error as { code?: string; message?: string }, 'finance_items')) {
+      .order('created_at', { ascending: false }) as PromiseLike<{ data: unknown; error: { code?: string; message?: string } | null }>)
+    if (res.error && isMissingColumn(res.error as { code?: string; message?: string }, 'max_occurrences')) {
+      // Database without supabase/finance-subscription-occurrences.sql.
+      res = await (client()
+        .from('finance_items')
+        .select(FINANCE_COLUMNS)
+        .order('due_date', { ascending: true })
+        .order('created_at', { ascending: false }) as PromiseLike<{ data: unknown; error: { code?: string; message?: string } | null }>)
+    }
+    if (res.error) {
+      if (isMissingTable(res.error as { code?: string; message?: string }, 'finance_items')) {
         console.warn('[work-tracker] the finance_items table is missing — run supabase/finance.sql to enable the Finance section.')
         return ok([] as FinanceItem[])
       }
-      return fail(error.message)
+      return fail(res.error.message ?? 'Could not load the finance ledger.')
     }
-    return ok(((data as FinanceItem[]) ?? []).map(normalizeFinanceRow))
+    return ok(((res.data as FinanceItem[]) ?? []).map(normalizeFinanceRow))
   },
 
   async createFinanceItem(input: CreateFinanceItemInput) {
@@ -1793,41 +1814,64 @@ export const supabaseBackend: DataBackend = {
     if (!canDo(me.data!, 'finance.manage')) return denied('add finance lines')
     const err = validateFinanceInput(input)
     if (err) return fail(err)
+    if (input.max_occurrences != null && (input.kind !== 'subscription' || !Number.isFinite(input.max_occurrences) || input.max_occurrences < 1 || Math.floor(input.max_occurrences) !== input.max_occurrences)) {
+      return fail('The number of times a subscription bills must be a whole number of 1 or more.')
+    }
     const now = new Date().toISOString()
     const status = financeStatusFor(input.kind, input.status)
-    const { data, error } = await client()
+    const base: Record<string, unknown> = {
+      kind: input.kind,
+      name: input.kind === 'payroll' ? null : input.name?.trim() || null,
+      worker_id: input.kind === 'payroll' ? input.worker_id ?? null : null,
+      amount: Math.round(input.amount * 100) / 100,
+      cycle: input.kind === 'subscription' ? (input.cycle === 'yearly' ? 'yearly' : 'monthly') : null,
+      period_month: input.kind === 'payroll' ? input.period_month ?? null : null,
+      due_date: input.due_date,
+      status,
+      paid_at: status === 'paid' ? now : null,
+      note: input.note?.trim() || null,
+    }
+    // The occurrence limit rides along only when the database has the
+    // columns; older databases get the same subscription without it.
+    let res = await (client()
       .from('finance_items')
       .insert({
-        kind: input.kind,
-        name: input.kind === 'payroll' ? null : input.name?.trim() || null,
-        worker_id: input.kind === 'payroll' ? input.worker_id ?? null : null,
-        amount: Math.round(input.amount * 100) / 100,
-        cycle: input.kind === 'subscription' ? (input.cycle === 'yearly' ? 'yearly' : 'monthly') : null,
-        period_month: input.kind === 'payroll' ? input.period_month ?? null : null,
-        due_date: input.due_date,
-        status,
-        paid_at: status === 'paid' ? now : null,
-        note: input.note?.trim() || null,
+        ...base,
+        max_occurrences: input.kind === 'subscription' ? (input.max_occurrences ?? null) : null,
+        billed_count: 0,
       })
       .select()
-      .single()
-    if (error) return fail(financeWriteError(input, error))
-    return ok(normalizeFinanceRow(data as FinanceItem))
+      .single() as PromiseLike<{ data: unknown; error: { code?: string; message?: string } | null }>)
+    if (res.error && isMissingColumn(res.error as { code?: string; message?: string }, 'max_occurrences')) {
+      // Database without supabase/finance-subscription-occurrences.sql.
+      res = await (client().from('finance_items').insert(base).select().single() as PromiseLike<{ data: unknown; error: { code?: string; message?: string } | null }>)
+    }
+    if (res.error) return fail(financeWriteError(input, res.error))
+    return ok(normalizeFinanceRow(res.data as FinanceItem))
   },
 
   async updateFinanceItem(id, patch) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
     if (!canDo(me.data!, 'finance.manage')) return denied('edit finance lines')
-    const current = await client().from('finance_items').select(FINANCE_COLUMNS).eq('id', id).maybeSingle()
-    if (current.error) return fail(current.error.message)
+    // The occurrence columns exist only after the migration; read with the
+    // full list and fall back so older databases still load the row.
+    let current = await (client().from('finance_items').select(FINANCE_COLUMNS_FULL).eq('id', id).maybeSingle() as PromiseLike<{ data: unknown; error: { code?: string; message?: string } | null }>)
+    if (current.error && isMissingColumn(current.error as { code?: string; message?: string }, 'max_occurrences')) {
+      current = await (client().from('finance_items').select(FINANCE_COLUMNS).eq('id', id).maybeSingle() as PromiseLike<{ data: unknown; error: { code?: string; message?: string } | null }>)
+    }
+    if (current.error) return fail(current.error.message ?? 'Could not load the finance line.')
     if (!current.data) return fail('Finance line not found.')
-    const kind = (current.data as FinanceItem).kind
+    const currentRow = normalizeFinanceRow(current.data as FinanceItem)
+    const kind = currentRow.kind
     if (patch.amount !== undefined && (!Number.isFinite(Number(patch.amount)) || Number(patch.amount) < 0)) {
       return fail('Enter an amount of 0 or more.')
     }
     if (patch.due_date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(String(patch.due_date))) {
       return fail('Pick a due date.')
+    }
+    if (patch.max_occurrences !== undefined && patch.max_occurrences !== null && (kind !== 'subscription' || !Number.isFinite(patch.max_occurrences) || patch.max_occurrences < 1 || Math.floor(patch.max_occurrences) !== patch.max_occurrences)) {
+      return fail('The number of times a subscription bills must be a whole number of 1 or more.')
     }
     const update: Record<string, unknown> = {}
     if (patch.name !== undefined) update.name = kind === 'payroll' ? null : patch.name?.trim() || null
@@ -1839,12 +1883,29 @@ export const supabaseBackend: DataBackend = {
     if (patch.status !== undefined) {
       update.status = financeStatusFor(kind, patch.status)
       // Marking paid stamps the time; moving back to unpaid clears it.
-      update.paid_at = update.status === 'paid' ? ((current.data as FinanceItem).paid_at ?? new Date().toISOString()) : null
+      update.paid_at = update.status === 'paid' ? (currentRow.paid_at ?? new Date().toISOString()) : null
     }
     if (patch.note !== undefined) update.note = patch.note?.trim() || null
-    const { data, error } = await client().from('finance_items').update(update).eq('id', id).select().single()
-    if (error) return fail(error.message)
-    return ok(normalizeFinanceRow(data as FinanceItem))
+    if (patch.max_occurrences !== undefined) update.max_occurrences = kind === 'subscription' ? (patch.max_occurrences ?? null) : null
+    // Rolling a subscription's due date forward is one more billing. When it
+    // reaches the limit the subscription pauses by itself — the last bill on
+    // the counter ends it, no one has to remember to switch it off.
+    if (kind === 'subscription' && patch.due_date !== undefined && String(patch.due_date) > currentRow.due_date) {
+      update.billed_count = currentRow.billed_count + 1
+      const max = patch.max_occurrences !== undefined ? (patch.max_occurrences ?? null) : currentRow.max_occurrences
+      if (max !== null && (update.billed_count as number) >= max && patch.status === undefined) {
+        update.status = 'paused'
+      }
+    }
+    let res = await (client().from('finance_items').update(update).eq('id', id).select().single() as PromiseLike<{ data: unknown; error: { code?: string; message?: string } | null }>)
+    if (res.error && isMissingColumn(res.error as { code?: string; message?: string }, 'max_occurrences')) {
+      // Database without the occurrence columns: save everything else.
+      const { max_occurrences: _max, billed_count: _count, ...legacy } = update
+      void legacy
+      res = await (client().from('finance_items').update(legacy).eq('id', id).select().single() as PromiseLike<{ data: unknown; error: { code?: string; message?: string } | null }>)
+    }
+    if (res.error) return fail(res.error.message ?? 'Could not save the finance line.')
+    return ok(normalizeFinanceRow(res.data as FinanceItem))
   },
 
   async deleteFinanceItem(id) {

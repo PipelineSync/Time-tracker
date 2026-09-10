@@ -321,6 +321,8 @@ function normalizeFinanceMonth(value: unknown): string | null {
 function normalizeFinanceItem(f: FinanceItem): FinanceItem {
   const kind = normalizeFinanceKind(f.kind) ?? 'bill'
   const status = normalizeFinanceStatus(kind, f.status)
+  // Only subscriptions carry an occurrence limit; a whole number of 1+.
+  const max = kind === 'subscription' && Number.isFinite(f.max_occurrences) ? Math.floor(f.max_occurrences!) : null
   return {
     ...f,
     kind,
@@ -334,6 +336,27 @@ function normalizeFinanceItem(f: FinanceItem): FinanceItem {
     // The paid stamp only describes a completed payment.
     paid_at: status === 'paid' ? (f.paid_at ?? f.updated_at ?? new Date().toISOString()) : null,
     note: typeof f.note === 'string' && f.note.trim() ? f.note.trim() : null,
+    max_occurrences: max !== null && max > 0 ? max : null,
+    billed_count: Number.isFinite(f.billed_count) && f.billed_count > 0 ? Math.floor(f.billed_count) : 0,
+  }
+}
+
+/**
+ * A subscription whose due date was rolled forward has been billed once more.
+ * Moving the date back (a correction) never counts, and when the count
+ * reaches the limit the subscription pauses by itself.
+ */
+function applyBillingCount(current: FinanceItem, patch: Partial<FinanceItem>, next: FinanceItem): FinanceItem {
+  if (current.kind !== 'subscription') return next
+  const moved = patch.due_date !== undefined && (normalizeFinanceDate(patch.due_date) ?? '') > current.due_date
+  if (!moved) return next
+  const billedCount = current.billed_count + 1
+  return {
+    ...next,
+    billed_count: billedCount,
+    // The last bill on the counter ends the subscription — no one has to
+    // remember to come back and switch it off.
+    status: next.max_occurrences !== null && billedCount >= next.max_occurrences ? 'paused' : next.status,
   }
 }
 
@@ -1437,6 +1460,9 @@ export const localBackend: DataBackend = {
     }
     const now = new Date().toISOString()
     const status = normalizeFinanceStatus(kind, input.status)
+    if (input.max_occurrences != null && (kind !== 'subscription' || !Number.isFinite(input.max_occurrences) || input.max_occurrences < 1 || Math.floor(input.max_occurrences) !== input.max_occurrences)) {
+      return { data: null, error: 'The number of times a subscription bills must be a whole number of 1 or more.' }
+    }
     const item: FinanceItem = normalizeFinanceItem({
       id: uid(),
       kind,
@@ -1449,6 +1475,8 @@ export const localBackend: DataBackend = {
       status,
       paid_at: status === 'paid' ? now : null,
       note: input.note ?? null,
+      max_occurrences: kind === 'subscription' ? (input.max_occurrences ?? null) : null,
+      billed_count: 0,
       created_at: now,
       updated_at: now,
     })
@@ -1480,10 +1508,15 @@ export const localBackend: DataBackend = {
       )
       if (dupe) return { data: null, error: 'That worker already has a payroll line for this month — edit it instead.' }
     }
+    if (patch.max_occurrences !== undefined && patch.max_occurrences !== null && (current.kind !== 'subscription' || !Number.isFinite(patch.max_occurrences) || patch.max_occurrences < 1 || Math.floor(patch.max_occurrences) !== patch.max_occurrences)) {
+      return { data: null, error: 'The number of times a subscription bills must be a whole number of 1 or more.' }
+    }
     const at = new Date().toISOString()
     // Marking paid stamps the time (keeping an existing stamp); moving back
     // to unpaid clears it. normalizeFinanceItem enforces the same invariant.
-    const next = normalizeFinanceItem({
+    // Rolling a subscription's due date forward is a billing: the counter
+    // goes up and a reached limit pauses the subscription by itself.
+    const next = applyBillingCount(current, patch, normalizeFinanceItem({
       ...current,
       ...patch,
       // The kind is fixed once created — it decides the row's shape.
@@ -1492,7 +1525,7 @@ export const localBackend: DataBackend = {
       created_at: current.created_at,
       updated_at: at,
       paid_at: patch.status === 'paid' ? (current.paid_at ?? at) : patch.status ? null : current.paid_at,
-    })
+    }))
     c.data.financeItems[idx] = next
     save(c.data)
     return { data: next, error: null }

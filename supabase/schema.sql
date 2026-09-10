@@ -1426,6 +1426,11 @@ create table if not exists public.finance_items (
   -- When a payroll run or bill was marked paid (subscriptions never use it).
   paid_at      timestamptz,
   note         text,
+  -- Subscriptions only: how many times the subscription bills before it
+  -- pauses by itself (null = until someone switches it off), and how many
+  -- of those bills have happened. See supabase/finance-subscription-occurrences.sql.
+  max_occurrences integer check (max_occurrences is null or max_occurrences > 0),
+  billed_count    integer not null default 0,
   created_at   timestamptz not null default now(),
   updated_at   timestamptz not null default now(),
   -- Shape rules per kind, so rows written outside the app cannot go rogue.
