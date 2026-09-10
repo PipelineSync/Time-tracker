@@ -21,6 +21,7 @@
 --   entries.view_all    entries.manage
 --   tasks.view_all      tasks.manage_all
 --   priority_board.view
+--   meetings.view
 --   payments.view_all   payments.manage
 --   finance.view        finance.manage
 --   reports.view
@@ -49,6 +50,7 @@ alter table public.workers add constraint workers_permissions_valid check (
     'tasks.view_all',
     'tasks.manage_all',
     'priority_board.view',
+    'meetings.view',
     'payments.view_all',
     'payments.manage',
     'finance.view',

@@ -17,6 +17,7 @@ import type {
   Client,
   ClientPriority,
   ClientPriorityLane,
+  Meeting,
   Permission,
   FinanceItem,
   FinanceKind,
@@ -72,6 +73,14 @@ export interface CreateTaskInput {
  * subscriptions need a `name` + `cycle`, payroll needs a `worker_id` +
  * `period_month`, bills need a `name`. `due_date` is always required.
  */
+/** Fields callers may set when scheduling a meeting. */
+export interface CreateMeetingInput {
+  title: string
+  /** Scheduled start (ISO instant). */
+  start_time: string
+  notes?: string | null
+}
+
 export interface CreateFinanceItemInput {
   kind: FinanceKind
   name?: string | null
@@ -264,6 +273,17 @@ export interface DataBackend {
    * colours, active/inactive — are untouched.
    */
   resetClientPriorities(): Promise<BackendResult<null>>
+
+  /**
+   * The meetings schedule, upcoming and past. The admin and workers granted
+   * `meetings.view` read it; everyone else — and any database without the
+   * meetings migration — gets an empty list so the rest of the app never
+   * notices.
+   */
+  listMeetings(): Promise<BackendResult<Meeting[]>>
+  createMeeting(input: CreateMeetingInput): Promise<BackendResult<Meeting>>
+  updateMeeting(id: string, patch: Partial<Omit<Meeting, 'id' | 'created_at' | 'updated_at'>>): Promise<BackendResult<Meeting>>
+  deleteMeeting(id: string): Promise<BackendResult<null>>
 
   resetAll(): Promise<BackendResult<null>>
   seedDemo(): Promise<BackendResult<null>>

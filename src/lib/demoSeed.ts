@@ -1,4 +1,4 @@
-import type { Worker, TimeEntry, Settings, Client, ClientPriority, Task, FinanceItem } from './types'
+import type { Worker, TimeEntry, Settings, Client, ClientPriority, Meeting, Task, FinanceItem } from './types'
 import { PERMISSION_PRESETS } from './types'
 import { toISODate } from './finance'
 import { uid } from './utils'
@@ -277,7 +277,16 @@ export function buildDemoSeed() {
     { id: 'cp-seed-3', client_id: 'c-seed-3', lane: 'waiting', position: 0, created_at: daysAgo(6).toISOString(), updated_at: daysAgo(6).toISOString() },
   ]
 
-  return { workers, clients, entries, tasks, settings, financeItems, clientPriorities }
+  // A partly-filled schedule so the Meetings page shows both halves: two
+  // upcoming (one later today, one next week) and two past.
+  const meetings: Meeting[] = [
+    { id: 'm-seed-1', title: 'Weekly team stand-up', start_time: at(0, 16, 0).toISOString(), notes: 'Quick round-up: blockers, priorities for the rest of the week.', created_at: daysAgo(3).toISOString(), updated_at: daysAgo(3).toISOString() },
+    { id: 'm-seed-2', title: 'Acme Corp — kick-off call', start_time: at(7, 10, 30).toISOString(), notes: 'Scope the redesign phases. Bring the wireframes.', created_at: daysAgo(2).toISOString(), updated_at: daysAgo(2).toISOString() },
+    { id: 'm-seed-3', title: 'Northwind Traders — monthly review', start_time: at(-6, 14, 0).toISOString(), notes: 'Reviewed the month\u2019s hours. They asked about the report export.', created_at: daysAgo(8).toISOString(), updated_at: daysAgo(5).toISOString() },
+    { id: 'm-seed-4', title: 'Payroll prep', start_time: at(-1, 17, 0).toISOString(), notes: null, created_at: daysAgo(4).toISOString(), updated_at: daysAgo(4).toISOString() },
+  ]
+
+  return { workers, clients, entries, tasks, settings, financeItems, clientPriorities, meetings }
 }
 
 // Re-export uid for convenience

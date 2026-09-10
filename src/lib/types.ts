@@ -134,6 +134,7 @@ export type Permission =
   | 'tasks.view_all'
   | 'tasks.manage_all'
   | 'priority_board.view'
+  | 'meetings.view'
   | 'payments.view_all'
   | 'payments.manage'
   | 'finance.view'
@@ -153,6 +154,7 @@ export const PERMISSIONS: Permission[] = [
   'tasks.view_all',
   'tasks.manage_all',
   'priority_board.view',
+  'meetings.view',
   'payments.view_all',
   'payments.manage',
   'finance.view',
@@ -232,6 +234,14 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
     description: "The admin's board for ranking clients.",
     items: [
       { key: 'priority_board.view', label: 'Use the client priority board', hint: 'See every active client on the priority board and drag them between columns and ranks. The board is admin-only until this is ticked.' },
+    ],
+  },
+  {
+    key: 'meetings',
+    label: 'Meetings',
+    description: "The admin's meeting schedule.",
+    items: [
+      { key: 'meetings.view', label: 'Use the meetings section', hint: 'See every scheduled and past meeting, and add, edit or delete them. The section is admin-only until this is ticked.' },
     ],
   },
   {
@@ -581,6 +591,24 @@ export interface ClientPriority {
   lane: ClientPriorityLane
   /** Manual ordering inside the column (smaller sorts first, 0 = top). */
   position: number
+  created_at: string
+  updated_at: string
+}
+
+// ---- Meetings ---------------------------------------------------------------
+
+/**
+ * A scheduled meeting on the workspace's Meetings page: a title, when it
+ * starts and optional notes. Deliberately basic — no attendees, clients or
+ * video links — the page simply splits the list into upcoming (soonest first)
+ * and past (newest first).
+ */
+export interface Meeting {
+  id: string
+  title: string
+  /** Scheduled start (ISO instant). */
+  start_time: string
+  notes: string | null
   created_at: string
   updated_at: string
 }

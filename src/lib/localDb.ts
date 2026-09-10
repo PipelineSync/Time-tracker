@@ -20,6 +20,7 @@ import type {
   ClientStatus,
   ClientPriority,
   ClientPriorityLane,
+  Meeting,
   Permission,
   FinanceItem,
   FinanceKind,
@@ -38,7 +39,7 @@ import {
   TASK_STATUSES,
   UNASSIGNED_CLIENT_NAME,
 } from './types'
-import type { BackendResult, DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, CreateFinanceItemInput } from './backend'
+import type { BackendResult, DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, CreateFinanceItemInput, CreateMeetingInput } from './backend'
 import { ACCOUNT_DEACTIVATED_MESSAGE } from './backend'
 import { buildDemoSeed } from './demoSeed'
 import { uid, computeEarnings, computeTotalMinutes, formatMinutes, formatDate } from './utils'
@@ -75,6 +76,8 @@ interface UserData {
    * sits in. Clients without a row here are unranked (bottom of Low Priority).
    */
   clientPriorities: ClientPriority[]
+  /** The meetings schedule (see the Meetings page). */
+  meetings: Meeting[]
   /** Finance ledger: subscriptions, payroll runs and bills (see the Finance page). */
   financeItems: FinanceItem[]
 }
@@ -107,7 +110,7 @@ function writeUsers(users: StoredUser[]) {
 }
 
 function emptyData(): UserData {
-  return { workers: [], entries: [], activeTimers: [], settings: null, comments: [], notifications: [], payments: [], tasks: [], clients: [], clientPriorities: [], financeItems: [] }
+  return { workers: [], entries: [], activeTimers: [], settings: null, comments: [], notifications: [], payments: [], tasks: [], clients: [], clientPriorities: [], meetings: [], financeItems: [] }
 }
 
 /** The method the admin paid a settlement with, or null when unknown/invalid. */
@@ -257,6 +260,32 @@ function reindexClientPriorityLane(rows: ClientPriority[], lane: ClientPriorityL
   laneRows.forEach((p, i) => { p.position = i })
 }
 
+// ---- Meetings ---------------------------------------------------------------
+// The schedule is one workspace-wide list. `meetings.view` opens it — the
+// admin holds it by definition, a worker only when the admin ticks it.
+
+/** Normalize a meeting loaded from storage (or the demo seed). */
+function normalizeMeeting(m: Meeting): Meeting {
+  // An invalid/missing start falls back to "now" rather than NaN-ing every
+  // sort; the title is trimmed so blank rows cannot render as empty cards.
+  const start = Number.isFinite(new Date(m.start_time).getTime()) ? m.start_time : new Date().toISOString()
+  return {
+    ...m,
+    title: (m.title ?? '').trim() || 'Meeting',
+    start_time: start,
+    notes: m.notes ?? null,
+  }
+}
+
+/** Upcoming ascending (soonest first); past descending (newest first). */
+function sortMeetings(rows: Meeting[], now: number): Meeting[] {
+  const upcoming = rows.filter((m) => new Date(m.start_time).getTime() >= now)
+  const past = rows.filter((m) => new Date(m.start_time).getTime() < now)
+  upcoming.sort((a, b) => a.start_time.localeCompare(b.start_time))
+  past.sort((a, b) => b.start_time.localeCompare(a.start_time))
+  return [...upcoming, ...past]
+}
+
 // ---- Finance ledger ---------------------------------------------------------
 // One list of due-dated lines (subscription / payroll / bill). Rows are owned
 // by the admin workspace like everything else; `finance.view` opens the read,
@@ -366,6 +395,8 @@ function readData(userId: string): UserData {
   // Workspaces saved before the priority board simply load with no client
   // ranked — everything sits unranked at the bottom of Low Priority.
   d.clientPriorities = (d.clientPriorities || []).map(normalizeClientPriority)
+  // Workspaces saved before the Meetings section simply load an empty schedule.
+  d.meetings = (d.meetings || []).map(normalizeMeeting)
   // A client that was deleted should not keep a phantom place on the board.
   const clientIds = new Set(d.clients.map((c) => c.id))
   const beforePrune = d.clientPriorities.length
@@ -1596,6 +1627,76 @@ export const localBackend: DataBackend = {
     return { data: null, error: null }
   },
 
+  // ---- Meetings -------------------------------------------------------------
+  // One schedule for the whole workspace. The admin runs it by default; a
+  // worker the admin granted `meetings.view` sees and manages the very same
+  // list. No attendees or invites — whoever can open the page can run it.
+
+  async listMeetings() {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (!can(c, 'meetings.view')) return denied('use the meetings section')
+    return { data: sortMeetings(c.data.meetings, Date.now()), error: null }
+  },
+
+  async createMeeting(input: CreateMeetingInput) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (!can(c, 'meetings.view')) return denied('use the meetings section')
+    const title = input.title.trim()
+    if (!title) return { data: null, error: 'Give the meeting a title.' }
+    if (title.length > 200) return { data: null, error: 'Meeting titles are limited to 200 characters.' }
+    const start = new Date(input.start_time)
+    if (!Number.isFinite(start.getTime())) return { data: null, error: 'Pick a valid date and time.' }
+    const now = new Date().toISOString()
+    const meeting: Meeting = {
+      id: uid(),
+      title,
+      start_time: start.toISOString(),
+      notes: input.notes?.trim() || null,
+      created_at: now,
+      updated_at: now,
+    }
+    c.data.meetings.push(meeting)
+    save(c.data)
+    return { data: meeting, error: null }
+  },
+
+  async updateMeeting(id, patch) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (!can(c, 'meetings.view')) return denied('use the meetings section')
+    const idx = c.data.meetings.findIndex((m) => m.id === id)
+    if (idx === -1) return { data: null, error: 'Meeting not found.' }
+    const current = c.data.meetings[idx]
+    const title = patch.title !== undefined ? patch.title.trim() : current.title
+    if (!title) return { data: null, error: 'Give the meeting a title.' }
+    const start = patch.start_time !== undefined ? new Date(patch.start_time) : new Date(current.start_time)
+    if (!Number.isFinite(start.getTime())) return { data: null, error: 'Pick a valid date and time.' }
+    const next: Meeting = normalizeMeeting({
+      ...current,
+      ...patch,
+      title,
+      start_time: start.toISOString(),
+      notes: patch.notes !== undefined ? patch.notes?.trim() || null : current.notes,
+      id: current.id,
+      created_at: current.created_at,
+      updated_at: new Date().toISOString(),
+    })
+    c.data.meetings[idx] = next
+    save(c.data)
+    return { data: next, error: null }
+  },
+
+  async deleteMeeting(id) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (!can(c, 'meetings.view')) return denied('use the meetings section')
+    c.data.meetings = c.data.meetings.filter((m) => m.id !== id)
+    save(c.data)
+    return { data: null, error: null }
+  },
+
   // ---- Tasks (kanban board) ----------------------------------------------
   // A worker only ever sees and touches their own tasks; the admin sees and
   // manages every worker's. Both roles can add tasks — a worker's new task is
@@ -1768,6 +1869,7 @@ export const localBackend: DataBackend = {
         client_id: seedClientMap.get(p.client_id) ?? p.client_id,
         id: uid(),
       })),
+      meetings: (seed.meetings ?? []).map((m) => ({ ...m, id: uid() })),
       financeItems: seed.financeItems.map((f) => ({
         ...f,
         worker_id: f.worker_id ? idMap.get(f.worker_id) ?? null : null,

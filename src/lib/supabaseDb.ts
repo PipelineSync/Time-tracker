@@ -16,11 +16,12 @@ import type {
   Client,
   ClientPriority,
   ClientPriorityLane,
+  Meeting,
   Permission,
   FinanceItem,
 } from './types'
 import { CLIENT_PRIORITY_LANES, DEFAULT_SLACK_SETTINGS, DEFAULT_CLIENT_COLOR, PERMISSIONS, TEAM_VIEW_PERMISSIONS, normalizePermissions } from './types'
-import type { BackendResult, DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, CreateFinanceItemInput } from './backend'
+import type { BackendResult, DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, CreateFinanceItemInput, CreateMeetingInput } from './backend'
 import { ACCOUNT_DEACTIVATED_MESSAGE } from './backend'
 import {
   createClient,
@@ -45,6 +46,10 @@ const FINANCE_PERMISSIONS_MIGRATION_MESSAGE =
 /** Shown when the database's permission allow-list predates the priority board. */
 const PRIORITY_BOARD_PERMISSIONS_MIGRATION_MESSAGE =
   'Priority board access was not saved: run supabase/client-priority-board.sql in the Supabase SQL editor — it widens the allowed permission keys with priority_board.view. Everything else was saved.'
+
+/** Shown when the database's permission allow-list predates the meetings section. */
+const MEETINGS_PERMISSIONS_MIGRATION_MESSAGE =
+  'Meetings access was not saved: run supabase/meetings.sql in the Supabase SQL editor — it widens the allowed permission keys with meetings.view. Everything else was saved.'
 
 /** Postgres raises 23514 when the workers_permissions_valid check rejects a key. */
 function isPermissionsCheckViolation(error: { code?: string; message?: string } | null): boolean {
@@ -940,20 +945,30 @@ export const supabaseBackend: DataBackend = {
     if (!canDo(me.data!, 'workers.manage')) return denied('edit workers')
     const { newPassword, ...rest } = patch as { newPassword?: string } & Partial<Worker>
     if (rest.permissions) rest.permissions = normalizePermissions(rest.permissions)
+    // Old databases reject unknown permission keys one migration at a time.
+    // Each step below saves everything the database accepts so far, drops the
+    // keys it cannot accept yet (accumulating in `dropped` so several stale
+    // migrations degrade together), and reports exactly which SQL file to run.
+    const dropped = new Set<string>()
     let upd = await client().from('workers').update(rest).eq('id', id).select().single()
     if (upd.error && isPermissionsCheckViolation(upd.error) && rest.permissions?.some((p) => p.startsWith('finance.'))) {
       // The database's permission allow-list predates supabase/finance.sql,
-      // which widens it with the finance.* keys. Save everything the old list
-      // accepts and tell the admin exactly what to run.
-      const legacy = normalizePermissions(rest.permissions.filter((p) => !p.startsWith('finance.')))
-      upd = await client().from('workers').update({ ...rest, permissions: legacy }).eq('id', id).select().single()
+      // which widens it with the finance.* keys.
+      for (const p of rest.permissions) if (p.startsWith('finance.')) dropped.add(p)
+      upd = await client().from('workers').update({ ...rest, permissions: normalizePermissions(rest.permissions.filter((p) => !dropped.has(p))) }).eq('id', id).select().single()
       if (!upd.error) return fail(FINANCE_PERMISSIONS_MIGRATION_MESSAGE)
     }
-    if (upd.error && isPermissionsCheckViolation(upd.error) && rest.permissions?.includes('priority_board.view')) {
+    if (upd.error && isPermissionsCheckViolation(upd.error) && rest.permissions?.includes('priority_board.view') && !dropped.has('priority_board.view')) {
       // Same story for the priority board key (supabase/client-priority-board.sql).
-      const legacy = normalizePermissions(rest.permissions.filter((p) => p !== 'priority_board.view'))
-      upd = await client().from('workers').update({ ...rest, permissions: legacy }).eq('id', id).select().single()
+      dropped.add('priority_board.view')
+      upd = await client().from('workers').update({ ...rest, permissions: normalizePermissions(rest.permissions.filter((p) => !dropped.has(p))) }).eq('id', id).select().single()
       if (!upd.error) return fail(PRIORITY_BOARD_PERMISSIONS_MIGRATION_MESSAGE)
+    }
+    if (upd.error && isPermissionsCheckViolation(upd.error) && rest.permissions?.includes('meetings.view') && !dropped.has('meetings.view')) {
+      // Same story for the meetings key (supabase/meetings.sql).
+      dropped.add('meetings.view')
+      upd = await client().from('workers').update({ ...rest, permissions: normalizePermissions(rest.permissions.filter((p) => !dropped.has(p))) }).eq('id', id).select().single()
+      if (!upd.error) return fail(MEETINGS_PERMISSIONS_MIGRATION_MESSAGE)
     }
     if (upd.error && isMissingColumn(upd.error, 'permissions') && rest.permissions) {
       // Database without supabase/worker-permissions.sql: save everything else
@@ -2018,6 +2033,90 @@ export const supabaseBackend: DataBackend = {
     return ok(null)
   },
 
+  // ---- Meetings --------------------------------------------------------------
+  // supabase/meetings.sql owns the real boundary: the admin and workers
+  // granted `meetings.view` may read and change the schedule. A database
+  // that has not run the migration answers "relation does not exist";
+  // listing then reports an empty schedule instead of an error so the rest
+  // of the app degrades, and the writes explain exactly what to run.
+
+  async listMeetings() {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (!canDo(me.data!, 'meetings.view')) return denied('use the meetings section')
+    const { data, error } = await client()
+      .from('meetings')
+      .select('id, title, start_time, notes, created_at, updated_at')
+      .order('start_time', { ascending: true })
+    if (error) {
+      if (isMissingTable(error as { code?: string; message?: string }, 'meetings')) {
+        console.warn('[work-tracker] the meetings table is missing — run supabase/meetings.sql to enable the meetings section.')
+        return ok([] as Meeting[])
+      }
+      return fail(error.message)
+    }
+    // The page splits upcoming/past itself (its "now" is the viewer's clock).
+    return ok((data as Meeting[]) ?? [])
+  },
+
+  async createMeeting(input: CreateMeetingInput) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (!canDo(me.data!, 'meetings.view')) return denied('use the meetings section')
+    const title = input.title.trim()
+    if (!title) return fail('Give the meeting a title.')
+    if (title.length > 200) return fail('Meeting titles are limited to 200 characters.')
+    const start = new Date(input.start_time)
+    if (!Number.isFinite(start.getTime())) return fail('Pick a valid date and time.')
+    const { data, error } = await client()
+      .from('meetings')
+      .insert({ title, start_time: start.toISOString(), notes: input.notes?.trim() || null })
+      .select()
+      .single()
+    if (error) {
+      if (isMissingTable(error as { code?: string; message?: string }, 'meetings')) {
+        return fail('Meetings are not set up on this database yet. Run supabase/meetings.sql in the Supabase SQL editor.')
+      }
+      return fail(error.message)
+    }
+    return ok(data as Meeting)
+  },
+
+  async updateMeeting(id, patch) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (!canDo(me.data!, 'meetings.view')) return denied('use the meetings section')
+    const update: Record<string, unknown> = {}
+    if (patch.title !== undefined) {
+      const title = patch.title.trim()
+      if (!title) return fail('Give the meeting a title.')
+      update.title = title
+    }
+    if (patch.start_time !== undefined) {
+      const start = new Date(patch.start_time)
+      if (!Number.isFinite(start.getTime())) return fail('Pick a valid date and time.')
+      update.start_time = start.toISOString()
+    }
+    if (patch.notes !== undefined) update.notes = patch.notes?.trim() || null
+    const { data, error } = await client().from('meetings').update(update).eq('id', id).select().single()
+    if (error) {
+      if (isMissingTable(error as { code?: string; message?: string }, 'meetings')) {
+        return fail('Meetings are not set up on this database yet. Run supabase/meetings.sql in the Supabase SQL editor.')
+      }
+      return fail(error.message)
+    }
+    return ok(data as Meeting)
+  },
+
+  async deleteMeeting(id) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (!canDo(me.data!, 'meetings.view')) return denied('use the meetings section')
+    const { error } = await client().from('meetings').delete().eq('id', id)
+    if (error) return fail(error.message)
+    return ok(null)
+  },
+
   // ---- Tasks (kanban board) ----------------------------------------------
   // RLS (supabase/tasks.sql) is the real boundary: a worker can only select /
   // insert / update / delete rows whose worker_id is their own, the admin owns
@@ -2215,7 +2314,7 @@ export const supabaseBackend: DataBackend = {
     if (me.error) return fail(me.error)
     if (me.data!.role !== 'admin') return fail('Only the admin can load sample data.')
     const sb = client()
-    const { workers, clients, entries, settings, financeItems, clientPriorities } = (await import('./demoSeed')).buildDemoSeed()
+    const { workers, clients, entries, settings, financeItems, clientPriorities, meetings } = (await import('./demoSeed')).buildDemoSeed()
     const realIdBySeedId = new Map<string, string>()
     // Sample clients first, so the seeded entries can point at them.
     const clientIdBySeedId = new Map<string, string>()
@@ -2266,6 +2365,10 @@ export const supabaseBackend: DataBackend = {
       const seededClientId = clientIdBySeedId.get(p.client_id)
       if (!seededClientId) continue
       await sb.from('client_priorities').insert({ client_id: seededClientId, lane: p.lane, position: p.position })
+    }
+    // Sample meetings — best effort, same deal (supabase/meetings.sql).
+    for (const m of meetings ?? []) {
+      await sb.from('meetings').insert({ title: m.title, start_time: m.start_time, notes: m.notes })
     }
     return ok(null)
   },

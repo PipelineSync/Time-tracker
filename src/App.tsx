@@ -18,6 +18,7 @@ const ReportsPage = lazy(() => import('@/pages/ReportsPage').then((m) => ({ defa
 const SettingsPage = lazy(() => import('@/pages/SettingsPage').then((m) => ({ default: m.SettingsPage })))
 const TasksPage = lazy(() => import('@/pages/TasksPage').then((m) => ({ default: m.TasksPage })))
 const ClientPriorityBoardPage = lazy(() => import('@/pages/ClientPriorityBoardPage').then((m) => ({ default: m.ClientPriorityBoardPage })))
+const MeetingsPage = lazy(() => import('@/pages/MeetingsPage').then((m) => ({ default: m.MeetingsPage })))
 const FinancePage = lazy(() => import('@/pages/FinancePage').then((m) => ({ default: m.FinancePage })))
 const PersonalFinancePage = lazy(() => import('@/pages/PersonalFinancePage').then((m) => ({ default: m.PersonalFinancePage })))
 
@@ -62,6 +63,8 @@ export function App() {
           {/* The client priority board — admin-only until the admin grants
               `priority_board.view` to a worker, exactly like the screens above. */}
           {can('priority_board.view') && <Route path="/priority-board" element={<ClientPriorityBoardPage />} />}
+          {/* The meetings schedule — same grant pattern (`meetings.view`). */}
+          {can('meetings.view') && <Route path="/meetings" element={<MeetingsPage />} />}
           <Route path="/settings" element={<SettingsPage />} />
 
           {/* The standalone Payments section now lives inside Finance → Payroll;
