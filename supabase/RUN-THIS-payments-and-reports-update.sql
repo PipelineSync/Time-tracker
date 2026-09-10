@@ -166,11 +166,24 @@ end
 $$;
 
 -- Reports now implies the team-wide time read: keep the stored grants in step
--- with what the app implies when the admin ticks Reports.
-update public.workers
-   set permissions = array_append(permissions, 'entries.view_all')
- where 'reports.view' = any(permissions)
-   and not ('entries.view_all' = any(permissions));
+-- with what the app implies when the admin ticks Reports. (Skipped, with a
+-- notice, on a database without the per-worker permissions column.)
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+     where table_schema = 'public' and table_name = 'workers' and column_name = 'permissions'
+  ) then
+    update public.workers
+       set permissions = array_append(permissions, 'entries.view_all')
+     where 'reports.view' = any(permissions)
+       and not ('entries.view_all' = any(permissions));
+    raise notice 'Backfilled entries.view_all onto every worker holding reports.view.';
+  else
+    raise notice 'Skipped the grants backfill: workers.permissions does not exist yet — run supabase/worker-permissions.sql first.';
+  end if;
+end
+$$;
 
 
 -- Refresh PostgREST's schema cache so the new columns are usable right away.
@@ -206,6 +219,19 @@ where schemaname = 'public' and tablename = 'time_entries'
 order by policyname;
 
 -- workers holding Reports (they should all carry entries.view_all too)
-select id, name, permissions
-from public.workers
-where 'reports.view' = any(permissions);
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+     where table_schema = 'public' and table_name = 'workers' and column_name = 'permissions'
+  ) then
+    raise notice 'Workers granted Reports: %',
+      (select count(*) from public.workers where 'reports.view' = any(permissions));
+    raise notice '…of which also hold entries.view_all: %',
+      (select count(*) from public.workers
+        where 'reports.view' = any(permissions) and 'entries.view_all' = any(permissions));
+  else
+    raise notice 'workers.permissions is not installed — run supabase/worker-permissions.sql to enable per-worker access.';
+  end if;
+end
+$$;
