@@ -29,7 +29,7 @@ import type {
   Permission,
   FinanceItem,
 } from './types'
-import { PERMISSIONS, normalizePermissions } from './types'
+import { PERMISSIONS, normalizePermissions, canViewAllEntries } from './types'
 import type { DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, BackendResult, CreateFinanceItemInput, CreateMeetingInput } from './backend'
 import { localBackend } from './localDb'
 import { supabaseBackend, isSupabaseConfigured, ACCOUNT_DEACTIVATED_MESSAGE } from './supabaseDb'
@@ -218,7 +218,12 @@ interface StoreValue {
   deleteTask: (id: string) => Promise<boolean>
 
   settleWorker: (workerId: string, note?: string) => Promise<Payment | null>
-  updatePaymentStatus: (id: string, status: PaymentStatus, paymentMethod?: PaymentMethod | null) => Promise<Payment | null>
+  updatePaymentStatus: (
+    id: string,
+    status: PaymentStatus,
+    paymentMethod?: PaymentMethod | null,
+    referenceNumber?: string | null,
+  ) => Promise<Payment | null>
   updatePaymentNote: (id: string, note: string | null) => Promise<Payment | null>
   deletePayment: (id: string) => Promise<boolean>
 
@@ -289,6 +294,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     (permission: Permission) => isAdmin || permissions.includes(permission),
     [isAdmin, permissions],
   )
+  // Read inside refreshData: the entry window depends on the grants, but the
+  // grants must not become a dependency of refreshData itself (the worker
+  // list it refetches feeds them, which would refresh forever).
+  const permissionsRef = useRef(permissions)
+  useEffect(() => { permissionsRef.current = permissions }, [permissions])
 
   // Only active clients may be picked for new work; inactive ones stay in
   // `clients` so existing tasks, entries and reports keep their label.
@@ -325,7 +335,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const token = ++dataVersion.current
     setDataLoading(true)
     try {
-      const windowSize = userRef.current?.role === 'worker' ? ENTRIES_WINDOW_WORKER : ENTRIES_WINDOW_ADMIN
+      // A worker who can read the whole team's time — outright
+      // (`entries.view_all`) or through Reports (`reports.view`) — needs the
+      // bigger window too: their reports and entries cover everyone, and the
+      // small "just my own last few months" window would silently truncate
+      // the team's numbers.
+      const seesAllEntries = userRef.current?.role === 'admin' || canViewAllEntries(permissionsRef.current)
+      const windowSize = !seesAllEntries && userRef.current?.role === 'worker' ? ENTRIES_WINDOW_WORKER : ENTRIES_WINDOW_ADMIN
       // Captured BEFORE the query: rows updated after this instant are picked
       // up by the next delta; duplicates are harmless (merged by id).
       const syncTime = new Date().toISOString()
@@ -1042,17 +1058,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return res.data
   }, [backend, refreshData])
 
-  const updatePaymentStatus = useCallback(async (id: string, status: PaymentStatus, paymentMethod?: PaymentMethod | null) => {
-    const res = await backend.updatePaymentStatus(id, status, paymentMethod)
+  const updatePaymentStatus = useCallback(async (id: string, status: PaymentStatus, paymentMethod?: PaymentMethod | null, referenceNumber?: string | null) => {
+    const res = await backend.updatePaymentStatus(id, status, paymentMethod, referenceNumber)
     if (res.error || !res.data) return null
     // Mirror "marked as paid" into Slack (only that transition, not
     // unpaid/pending changes).
     if (status === 'paid') {
       const payment = res.data
       const workerName = workers.find((w) => w.id === payment.worker_id)?.name || 'Someone'
+      const via = paymentMethod === 'cash' ? ' (cash)' : paymentMethod === 'qr' ? ' (QR code)' : ''
+      const ref = payment.reference_number ? ` · Ref ${payment.reference_number}` : ''
+      // `amount` comes back from the database: never let a bad row break the
+      // notification (and with it the whole mark-paid action).
+      const amount = Number.isFinite(payment.amount) ? payment.amount.toFixed(2) : '0.00'
       notifySlack('payment_paid', {
         payment_id: payment.id,
-        demoText: `💸 ${workerName} was paid ${payment.amount.toFixed(2)}${paymentMethod === 'cash' ? ' (cash)' : paymentMethod === 'qr' ? ' (QR code)' : ''}.`,
+        demoText: `💸 ${workerName} was paid ${amount}${via}${ref}.`,
       })
     }
     await refreshData()

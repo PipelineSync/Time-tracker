@@ -158,14 +158,19 @@ create table if not exists public.payments (
   period_end   timestamptz not null default now(),
   paid_at      timestamptz,
   note         text,
-  -- How the admin paid (cash / qr), chosen from the worker's accepted methods
-  -- when the payment is marked paid. Null until then.
+  -- How the admin paid (cash / qr), picked when the payment is marked paid.
+  -- Null until then.
   payment_method text check (payment_method is null or payment_method in ('cash','qr')),
+  -- The transfer's reference number (GCash / Maya / bank ref), typed by the
+  -- admin when marking the payment paid. Optional; null until then.
+  reference_number text,
   created_at   timestamptz not null default now()
 );
 -- Databases created before payment_method existed.
 alter table public.payments add column if not exists payment_method text
   check (payment_method is null or payment_method in ('cash','qr'));
+-- Same for the reference number (added later).
+alter table public.payments add column if not exists reference_number text;
 
 create index if not exists payments_user_idx on public.payments (user_id);
 create index if not exists payments_worker_idx on public.payments (worker_id);
@@ -1220,7 +1225,12 @@ create policy "time_entries_select" on public.time_entries
   for select using (
     (select auth.uid()) = user_id
     or worker_id = (select public.current_worker_id())
-    or (user_id = (select public.workspace_owner_id()) and (select public.has_permission('entries.view_all')))
+    -- The team-wide time read: granted outright (`entries.view_all`) or
+    -- through Reports (`reports.view`) — a report is built out of everyone's
+    -- entries, so reporting on the team needs the team's rows.
+    or (user_id = (select public.workspace_owner_id())
+        and ((select public.has_permission('entries.view_all'))
+             or (select public.has_permission('reports.view'))))
   );
 
 drop policy if exists "time_entries_insert" on public.time_entries;

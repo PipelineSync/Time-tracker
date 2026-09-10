@@ -32,11 +32,21 @@ const QR = 'data:image/png;base64,AAAAFAKEQRIMAGE'
 async function main() {
   const { localBackend } = await import('../src/lib/localDb')
 
+  // The worker list itself leaves out the image columns (avatar + QR data URLs
+  // are the heaviest fields on the row); the app merges the separate
+  // listWorkerAvatars() snapshot back in, so the check does the same.
+  async function adminWorkers() {
+    const rows = (await localBackend.listWorkers()).data || []
+    const avatars = (await localBackend.listWorkerAvatars()).data || []
+    const byId = new Map(avatars.map((a) => [a.id, a]))
+    return rows.map((w) => ({ ...w, ...(byId.get(w.id) ?? {}) }))
+  }
+
   // 1) Admin signs in — the demo workspace is seeded. Sarah's seed has cash+qr.
   const admin = await localBackend.signIn('admin', 'admin.pipelinesync')
   assert(!admin.error && admin.data?.role === 'admin', 'admin can sign in')
 
-  let workers = (await localBackend.listWorkers()).data || []
+  let workers = await adminWorkers()
   const sarah = workers.find((w) => w.email === 'sarah@example.com')!
   const john = workers.find((w) => w.email === 'john@example.com')!
   assert(Boolean(sarah), 'sarah@example.com exists in the seed')
@@ -92,14 +102,54 @@ async function main() {
   // 3) The admin sees exactly what the worker saved.
   await localBackend.signOut()
   await localBackend.signIn('admin', 'admin.pipelinesync')
-  workers = (await localBackend.listWorkers()).data || []
+  workers = await adminWorkers()
   const johnNow = workers.find((w) => w.id === john.id)!
   assert(
     johnNow.payment_methods.includes('cash') && johnNow.payment_methods.includes('qr') && johnNow.qr_code_url === QR,
     'the admin sees the worker’s enabled methods and QR image'
   )
 
-  // 4) Backwards compatibility: an old worker row without the new fields
+  // 4) Marking a payment paid records how it was paid and the reference
+  //    number, for a worker with methods set up or not.
+  const casual = (await localBackend.createWorker({
+    name: 'Casual Casey',
+    hourly_rate: 10,
+    accountEmail: 'casey@example.com',
+    accountPassword: 'worker123',
+  })).data!
+  assert(
+    (casual.payment_methods ?? []).length === 0,
+    'a brand-new worker starts with no payment method set'
+  )
+  await localBackend.createEntry({
+    worker_id: casual.id,
+    client_id: null,
+    start_time: new Date(Date.now() - 3600_000).toISOString(),
+    end_time: new Date().toISOString(),
+    break_minutes: 0,
+    notes: null,
+    hourly_rate: casual.hourly_rate,
+    total_minutes: 60,
+    earnings: 10,
+  })
+  const settlement = (await localBackend.settleWorker(casual.id)).data!
+  assert(settlement.status === 'unpaid' && settlement.payment_method === null, 'a fresh settlement is unpaid and methodless')
+
+  const paidCash = await localBackend.updatePaymentStatus(settlement.id, 'paid', 'cash', 'REF-123')
+  assert(paidCash.data?.payment_method === 'cash', 'marking paid records Cash')
+  assert(paidCash.data?.reference_number === 'REF-123', 'the reference number is stored with the payment')
+
+  const paidBlankRef = await localBackend.updatePaymentStatus(settlement.id, 'paid', 'qr', '   ')
+  assert(paidBlankRef.data?.payment_method === 'qr', 'marking paid records QR Code')
+  assert(paidBlankRef.data?.reference_number === null, 'a blank reference number is stored as none')
+
+  const unpay = await localBackend.updatePaymentStatus(settlement.id, 'unpaid')
+  assert(
+    unpay.data?.payment_method === null && unpay.data?.reference_number === null,
+    'taking a payment back to unpaid clears the method and the reference'
+  )
+
+  // 5) Backwards compatibility: an old worker row without the new fields
   //    normalizes to "no methods" rather than crashing.
   const { normalizeCheck } = { normalizeCheck: true }
   assert(normalizeCheck, 'payment-method verification completed')

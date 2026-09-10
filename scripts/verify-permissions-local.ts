@@ -177,6 +177,30 @@ async function main() {
     'entries.view_all alone still resolves the team names'
   )
 
+  // Reports is a report of the TEAM, not a self-report: the numbers are drawn
+  // from everyone's time entries, so granting `reports.view` opens the same
+  // team-wide read — and the Access form implies it when the admin ticks it.
+  assert(
+    normalizePermissions(['reports.view']).includes('entries.view_all'),
+    'ticking Reports also grants the team-wide time read'
+  )
+  await localBackend.signIn('admin', 'admin.pipelinesync')
+  const reporter = (await localBackend.updateWorker(lead.id, { permissions: ['reports.view'] })).data!
+  assert(
+    reporter.permissions.includes('reports.view') && reporter.permissions.includes('entries.view_all'),
+    'the saved worker row keeps both keys'
+  )
+  await localBackend.signIn('lena@example.com', 'worker123')
+  const reportEntries = (await localBackend.listEntries()).data || []
+  assert(
+    reportEntries.some((e) => e.worker_id === other.id),
+    "a worker granted Reports sees everyone's time — a team report, not a self-report"
+  )
+  assert(
+    ((await localBackend.listWorkers()).data || []).length === allWorkers.length,
+    'Reports alone still resolves the team names'
+  )
+
   // ---- 5. granting more, then taking it away -----------------------------
   await localBackend.signIn('admin', 'admin.pipelinesync')
   const promoted = (await localBackend.updateWorker(lead.id, {
