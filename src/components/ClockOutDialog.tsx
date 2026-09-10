@@ -1,3 +1,4 @@
+import { BRAND_ACTION_BUTTON } from '@/lib/brand'
 import { useEffect, useState } from 'react'
 import {
   Dialog,
@@ -80,7 +81,7 @@ export function ClockOutDialog({
           <Button
             onClick={handleConfirm}
             disabled={loading}
-            className="gap-2 bg-[#06245B] hover:bg-[#0a306e] dark:bg-white dark:text-[#06245B] dark:hover:bg-white/90"
+            className={`gap-2 ${BRAND_ACTION_BUTTON}`}
           >
             <Square className="h-4 w-4" />
             {loading ? 'Saving…' : 'Clock Out'}
