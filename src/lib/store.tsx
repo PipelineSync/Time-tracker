@@ -23,11 +23,14 @@ import type {
   Task,
   TaskStatus,
   Client,
+  ClientPriority,
+  ClientPriorityLane,
+  Meeting,
   Permission,
   FinanceItem,
 } from './types'
 import { PERMISSIONS, normalizePermissions } from './types'
-import type { DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, BackendResult, CreateFinanceItemInput } from './backend'
+import type { DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, BackendResult, CreateFinanceItemInput, CreateMeetingInput } from './backend'
 import { localBackend } from './localDb'
 import { supabaseBackend, isSupabaseConfigured, ACCOUNT_DEACTIVATED_MESSAGE } from './supabaseDb'
 import { toast } from 'sonner'
@@ -116,6 +119,17 @@ interface StoreValue {
   /** Only the clients that may be picked for new work. */
   activeClients: Client[]
   /**
+   * The client priority board's rows — which column + rank each ranked client
+   * sits in. Empty for anyone without `priority_board.view` (admin included,
+   * it is implied). Clients without a row are unranked: bottom of Low Priority.
+   */
+  clientPriorities: ClientPriority[]
+  /**
+   * The meetings schedule (upcoming + past). Empty for anyone the admin has
+   * not granted `meetings.view`.
+   */
+  meetings: Meeting[]
+  /**
    * The Finance ledger (subscriptions, payroll runs, bills), oldest due date
    * first. Empty for anyone the admin has not granted `finance.view`.
    */
@@ -183,6 +197,20 @@ interface StoreValue {
   /** Admin only: remove an unused client (in-use ones must be deactivated). */
   deleteClient: (id: string) => Promise<boolean>
 
+  // ---- Client priority board (admin + granted workers) ----
+  /** Drag & drop: drop a client into `lane` at index `position`. */
+  moveClientPriority: (clientId: string, lane: ClientPriorityLane, position: number) => Promise<ClientPriority | null>
+  /** Put every client back to unranked (bottom of Low Priority, A→Z). */
+  resetClientPriorities: () => Promise<boolean>
+
+  // ---- Meetings (admin + granted workers) ----
+  /** Schedule a meeting. meetings.view. */
+  createMeeting: (input: CreateMeetingInput) => Promise<Meeting | null>
+  /** Reschedule / retitle / re-note a meeting. meetings.view. */
+  updateMeeting: (id: string, patch: Partial<Omit<Meeting, 'id' | 'created_at' | 'updated_at'>>) => Promise<Meeting | null>
+  /** Remove a meeting from the schedule. meetings.view. */
+  deleteMeeting: (id: string) => Promise<boolean>
+
   createTask: (input: CreateTaskInput) => Promise<Task | null>
   updateTask: (id: string, patch: Partial<Omit<Task, 'id' | 'created_at' | 'updated_at'>>) => Promise<Task | null>
   /** Drag & drop: drop a task into `status` at index `position`. */
@@ -222,6 +250,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [payments, setPayments] = useState<Payment[]>([])
   const [tasks, setTasks] = useState<Task[]>([])
   const [clients, setClients] = useState<Client[]>([])
+  const [clientPriorities, setClientPriorities] = useState<ClientPriority[]>([])
+  const [meetings, setMeetings] = useState<Meeting[]>([])
   const [financeItems, setFinanceItems] = useState<FinanceItem[]>([])
   const [dataLoading, setDataLoading] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
@@ -299,7 +329,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // Captured BEFORE the query: rows updated after this instant are picked
       // up by the next delta; duplicates are harmless (merged by id).
       const syncTime = new Date().toISOString()
-      const [w, e, s, at, n, p, u, t, cl, fi] = await Promise.all([
+      const [w, e, s, at, n, p, u, t, cl, cp, mt, fi] = await Promise.all([
         light ? skipped<Worker[]>() : backend.listWorkers(),
         useDelta
           ? backend.listEntries({ since, limit: ENTRY_DELTA_LIMIT })
@@ -320,6 +350,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         light ? skipped<Task[]>() : backend.listTasks(),
         // The client master list changes rarely too — same group as tasks.
         light ? skipped<Client[]>() : backend.listClients(),
+        // The priority board's rows ride along with the clients (both change
+        // only when someone drags a card). An ungranted worker gets an empty
+        // list, not an error.
+        light ? skipped<ClientPriority[]>() : backend.listClientPriorities(),
+        // Same for the meetings schedule — it only changes when someone on
+        // the section edits it.
+        light ? skipped<Meeting[]>() : backend.listMeetings(),
         // Same for the finance ledger (due dates move only when the app itself
         // advances them). An ungranted worker gets an empty list, not an error.
         light ? skipped<FinanceItem[]>() : backend.listFinanceItems(),
@@ -361,6 +398,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (u.data != null) setUnreadCount(u.data)
       if (t.data) setTasks(t.data)
       if (cl.data) setClients(cl.data)
+      if (cp.data) setClientPriorities(cp.data)
+      if (mt.data) setMeetings(mt.data)
       if (fi.data) setFinanceItems(fi.data)
     } finally {
       refreshInFlight.current = false
@@ -417,7 +456,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       })
     } else {
       avatarsRef.current = new Map()
-      setWorkers([]); setEntries([]); setSettings(null); setActiveTimer(null); setActiveTimers([]); setNotifications([]); setPayments([]); setTasks([]); setFinanceItems([])
+      setWorkers([]); setEntries([]); setSettings(null); setActiveTimer(null); setActiveTimers([]); setNotifications([]); setPayments([]); setTasks([]); setClients([]); setClientPriorities([]); setMeetings([]); setFinanceItems([])
     }
   }, [user, refreshData, refreshAvatars])
 
@@ -829,6 +868,86 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return true
   }, [backend, refreshClients])
 
+  // ---- Client priority board ----------------------------------------------
+  // The rows change only when someone drags a card, so each mutation re-reads
+  // them (same pattern as Tasks). The optimistic update keeps the card glued
+  // to the pointer until the backend's authoritative ordering arrives.
+
+  const refreshClientPriorities = useCallback(async () => {
+    const res = await backend.listClientPriorities()
+    if (res.data) setClientPriorities(res.data)
+  }, [backend])
+
+  const moveClientPriority = useCallback(async (clientId: string, lane: ClientPriorityLane, position: number) => {
+    // Optimistic: the card follows the drop immediately.
+    setClientPriorities((prev) => {
+      const others = prev.filter((p) => p.client_id !== clientId)
+      const moved = prev.find((p) => p.client_id === clientId)
+      const row: ClientPriority = moved
+        ? { ...moved, lane, position }
+        : { id: `optimistic-${clientId}`, client_id: clientId, lane, position, created_at: '', updated_at: '' }
+      return [...others, row]
+    })
+    const res = await backend.moveClientPriority(clientId, lane, position)
+    if (res.error || !res.data) {
+      toast.error(res.error || 'Could not move the client.')
+      await refreshClientPriorities()
+      return null
+    }
+    await refreshClientPriorities()
+    return res.data
+  }, [backend, refreshClientPriorities])
+
+  const resetClientPriorities = useCallback(async () => {
+    const res = await backend.resetClientPriorities()
+    if (res.error) {
+      toast.error(res.error)
+      await refreshClientPriorities()
+      return false
+    }
+    await refreshClientPriorities()
+    return true
+  }, [backend, refreshClientPriorities])
+
+  // ---- Meetings -------------------------------------------------------------
+  // The schedule is small and changes only when someone edits it, so every
+  // mutation re-reads it from the backend (same pattern as Clients).
+
+  const refreshMeetings = useCallback(async () => {
+    const res = await backend.listMeetings()
+    if (res.data) setMeetings(res.data)
+  }, [backend])
+
+  const createMeeting = useCallback(async (input: CreateMeetingInput) => {
+    const res = await backend.createMeeting(input)
+    if (res.error || !res.data) {
+      toast.error(res.error || 'Could not schedule the meeting.')
+      return null
+    }
+    await refreshMeetings()
+    return res.data
+  }, [backend, refreshMeetings])
+
+  const updateMeeting = useCallback(async (id: string, patch: Partial<Omit<Meeting, 'id' | 'created_at' | 'updated_at'>>) => {
+    const res = await backend.updateMeeting(id, patch)
+    if (res.error || !res.data) {
+      toast.error(res.error || 'Could not save the meeting.')
+      return null
+    }
+    await refreshMeetings()
+    return res.data
+  }, [backend, refreshMeetings])
+
+  const deleteMeeting = useCallback(async (id: string) => {
+    const res = await backend.deleteMeeting(id)
+    if (res.error) {
+      toast.error(res.error)
+      return false
+    }
+    await refreshMeetings()
+    return true
+  }, [backend, refreshMeetings])
+
   // ---- Tasks --------------------------------------------------------------
   // Each mutation refreshes the board from the backend so the positions the
   // backend assigned (and anything another device changed) win.
@@ -1011,6 +1130,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     tasks,
     clients,
     activeClients,
+    clientPriorities,
+    meetings,
     financeItems,
     unreadCount,
     dataLoading,
@@ -1049,6 +1170,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     createClient,
     updateClient,
     deleteClient,
+    moveClientPriority,
+    resetClientPriorities,
+    createMeeting,
+    updateMeeting,
+    deleteMeeting,
     createTask,
     updateTask,
     moveTask,

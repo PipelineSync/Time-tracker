@@ -1111,6 +1111,8 @@ alter table public.workers add constraint workers_permissions_valid check (
     'entries.manage',
     'tasks.view_all',
     'tasks.manage_all',
+    'priority_board.view',
+    'meetings.view',
     'payments.view_all',
     'payments.manage',
     'finance.view',
@@ -1424,6 +1426,11 @@ create table if not exists public.finance_items (
   -- When a payroll run or bill was marked paid (subscriptions never use it).
   paid_at      timestamptz,
   note         text,
+  -- Subscriptions only: how many times the subscription bills before it
+  -- pauses by itself (null = until someone switches it off), and how many
+  -- of those bills have happened. See supabase/finance-subscription-occurrences.sql.
+  max_occurrences integer check (max_occurrences is null or max_occurrences > 0),
+  billed_count    integer not null default 0,
   created_at   timestamptz not null default now(),
   updated_at   timestamptz not null default now(),
   -- Shape rules per kind, so rows written outside the app cannot go rogue.
@@ -1497,4 +1504,144 @@ create trigger trg_finance_items_user before insert on public.finance_items
 
 drop trigger if exists trg_finance_items_updated on public.finance_items;
 create trigger trg_finance_items_updated before update on public.finance_items
+  for each row execute function public.set_updated_at();
+
+-- ============================================================
+-- Client priority board
+-- One row per ranked client: which column ("lane") and its rank inside it.
+-- Clients without a row are unranked (the app shows them at the bottom of
+-- Low Priority), so "Reset board" deletes rows and nothing else. The admin
+-- runs the board; a worker reaches it only with `priority_board.view`.
+-- See supabase/client-priority-board.sql for existing databases.
+-- ============================================================
+
+create table if not exists public.client_priorities (
+  id         uuid primary key default gen_random_uuid(),
+  -- Workspace owner (the admin). Set automatically by trg_client_priorities_user.
+  user_id    uuid not null references auth.users (id) on delete cascade,
+  -- The ranked client. Deleting the client removes its place on the board.
+  client_id  uuid not null references public.clients (id) on delete cascade,
+  -- Which column of the board the client sits in.
+  lane       text not null default 'low' check (lane in ('me','delegated','waiting','low')),
+  -- Manual ordering inside the column (smaller sorts first, 0 = top).
+  position   integer not null default 0,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- One row per client per workspace.
+create unique index if not exists client_priorities_user_client_key
+  on public.client_priorities (user_id, client_id);
+-- The board's exact query: one lane, in rank order.
+create index if not exists client_priorities_user_lane_position_idx
+  on public.client_priorities (user_id, lane, position);
+
+alter table public.client_priorities enable row level security;
+
+-- The admin and granted workers share one board (same pattern as finance).
+drop policy if exists "client_priorities_select" on public.client_priorities;
+create policy "client_priorities_select" on public.client_priorities
+  for select using (
+    ((select auth.uid()) = user_id and (select public.is_admin()))
+    or (user_id = (select public.workspace_owner_id()) and (select public.has_permission('priority_board.view')))
+  );
+
+drop policy if exists "client_priorities_insert" on public.client_priorities;
+create policy "client_priorities_insert" on public.client_priorities
+  for insert with check (
+    ((select auth.uid()) = user_id and (select public.is_admin()))
+    or (user_id = (select public.workspace_owner_id()) and (select public.has_permission('priority_board.view')))
+  );
+
+drop policy if exists "client_priorities_update" on public.client_priorities;
+create policy "client_priorities_update" on public.client_priorities
+  for update using (
+    ((select auth.uid()) = user_id and (select public.is_admin()))
+    or (user_id = (select public.workspace_owner_id()) and (select public.has_permission('priority_board.view')))
+  )
+  with check (
+    ((select auth.uid()) = user_id and (select public.is_admin()))
+    or (user_id = (select public.workspace_owner_id()) and (select public.has_permission('priority_board.view')))
+  );
+
+drop policy if exists "client_priorities_delete" on public.client_priorities;
+create policy "client_priorities_delete" on public.client_priorities
+  for delete using (
+    ((select auth.uid()) = user_id and (select public.is_admin()))
+    or (user_id = (select public.workspace_owner_id()) and (select public.has_permission('priority_board.view')))
+  );
+
+drop trigger if exists trg_client_priorities_user on public.client_priorities;
+create trigger trg_client_priorities_user before insert on public.client_priorities
+  for each row execute function public.set_user_id();
+
+drop trigger if exists trg_client_priorities_updated on public.client_priorities;
+create trigger trg_client_priorities_updated before update on public.client_priorities
+  for each row execute function public.set_updated_at();
+
+-- ============================================================
+-- Meetings
+-- The workspace's meeting schedule (title, start, notes). The admin runs
+-- the section; a worker reaches it only with `meetings.view`. There are no
+-- attendees or invites — whoever can open the page sees the whole schedule.
+-- See supabase/meetings.sql for existing databases.
+-- ============================================================
+
+create table if not exists public.meetings (
+  id         uuid primary key default gen_random_uuid(),
+  -- Workspace owner (the admin). Set automatically by trg_meetings_user.
+  user_id    uuid not null references auth.users (id) on delete cascade,
+  title      text not null check (length(btrim(title)) between 1 and 200),
+  -- Scheduled start.
+  start_time timestamptz not null,
+  notes      text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- The agenda's exact query: one workspace, start order.
+create index if not exists meetings_user_start_idx on public.meetings (user_id, start_time);
+
+alter table public.meetings enable row level security;
+
+-- The admin and granted workers share one schedule (same pattern as the
+-- priority board).
+drop policy if exists "meetings_select" on public.meetings;
+create policy "meetings_select" on public.meetings
+  for select using (
+    ((select auth.uid()) = user_id and (select public.is_admin()))
+    or (user_id = (select public.workspace_owner_id()) and (select public.has_permission('meetings.view')))
+  );
+
+drop policy if exists "meetings_insert" on public.meetings;
+create policy "meetings_insert" on public.meetings
+  for insert with check (
+    ((select auth.uid()) = user_id and (select public.is_admin()))
+    or (user_id = (select public.workspace_owner_id()) and (select public.has_permission('meetings.view')))
+  );
+
+drop policy if exists "meetings_update" on public.meetings;
+create policy "meetings_update" on public.meetings
+  for update using (
+    ((select auth.uid()) = user_id and (select public.is_admin()))
+    or (user_id = (select public.workspace_owner_id()) and (select public.has_permission('meetings.view')))
+  )
+  with check (
+    ((select auth.uid()) = user_id and (select public.is_admin()))
+    or (user_id = (select public.workspace_owner_id()) and (select public.has_permission('meetings.view')))
+  );
+
+drop policy if exists "meetings_delete" on public.meetings;
+create policy "meetings_delete" on public.meetings
+  for delete using (
+    ((select auth.uid()) = user_id and (select public.is_admin()))
+    or (user_id = (select public.workspace_owner_id()) and (select public.has_permission('meetings.view')))
+  );
+
+drop trigger if exists trg_meetings_user on public.meetings;
+create trigger trg_meetings_user before insert on public.meetings
+  for each row execute function public.set_user_id();
+
+drop trigger if exists trg_meetings_updated on public.meetings;
+create trigger trg_meetings_updated before update on public.meetings
   for each row execute function public.set_updated_at();

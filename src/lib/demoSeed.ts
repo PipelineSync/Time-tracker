@@ -1,4 +1,4 @@
-import type { Worker, TimeEntry, Settings, Client, Task, FinanceItem } from './types'
+import type { Worker, TimeEntry, Settings, Client, ClientPriority, Meeting, Task, FinanceItem } from './types'
 import { PERMISSION_PRESETS } from './types'
 import { toISODate } from './finance'
 import { uid } from './utils'
@@ -210,65 +210,95 @@ export function buildDemoSeed() {
       id: 'f-seed-1', kind: 'subscription', name: 'Adobe Creative Cloud', worker_id: null,
       amount: 59.99, cycle: 'monthly', period_month: null, due_date: dateOffset(3),
       status: 'active', paid_at: null, note: 'Design tools, 3 seats',
+      max_occurrences: null, billed_count: 0,
       created_at: daysAgo(120).toISOString(), updated_at: daysAgo(24).toISOString(),
     },
     {
       id: 'f-seed-2', kind: 'subscription', name: 'QuickBooks', worker_id: null,
       amount: 38, cycle: 'monthly', period_month: null, due_date: dateOffset(-2),
       status: 'active', paid_at: null, note: null,
+      max_occurrences: null, billed_count: 0,
       created_at: daysAgo(300).toISOString(), updated_at: daysAgo(32).toISOString(),
     },
     {
       id: 'f-seed-3', kind: 'subscription', name: 'Microsoft 365', worker_id: null,
       amount: 149.99, cycle: 'yearly', period_month: null, due_date: dateOffset(46),
       status: 'active', paid_at: null, note: 'Annual licence',
+      // A set number of bills on purpose: the demo shows the "3/12 billed"
+      // chip and what a subscription that ends by itself looks like.
+      max_occurrences: 12, billed_count: 3,
       created_at: daysAgo(320).toISOString(), updated_at: daysAgo(320).toISOString(),
     },
     {
       id: 'f-seed-4', kind: 'payroll', name: null, worker_id: 'w-seed-1',
       amount: 1180, cycle: null, period_month: lastMonth.ym, due_date: lastMonth.label,
       status: 'paid', paid_at: lastMonth.label + 'T09:00:00.000Z', note: 'Cash, settled in person',
+      max_occurrences: null, billed_count: 0,
       created_at: lastMonth.ym + '-27T09:00:00.000Z', updated_at: lastMonth.label + 'T09:00:00.000Z',
     },
     {
       id: 'f-seed-5', kind: 'payroll', name: null, worker_id: 'w-seed-2',
       amount: 1450, cycle: null, period_month: lastMonth.ym, due_date: lastMonth.label,
       status: 'paid', paid_at: lastMonth.label + 'T09:00:00.000Z', note: null,
+      max_occurrences: null, billed_count: 0,
       created_at: lastMonth.ym + '-27T09:00:00.000Z', updated_at: lastMonth.label + 'T09:00:00.000Z',
     },
     {
       id: 'f-seed-6', kind: 'payroll', name: null, worker_id: 'w-seed-1',
       amount: 1240, cycle: null, period_month: thisMonth.ym, due_date: dateOffset(9),
       status: 'unpaid', paid_at: null, note: 'Payday on the 25th',
+      max_occurrences: null, billed_count: 0,
       created_at: thisMonth.ym + '-01T09:00:00.000Z', updated_at: thisMonth.ym + '-01T09:00:00.000Z',
     },
     {
       id: 'f-seed-7', kind: 'payroll', name: null, worker_id: 'w-seed-2',
       amount: 1520, cycle: null, period_month: thisMonth.ym, due_date: dateOffset(-1),
       status: 'unpaid', paid_at: null, note: null,
+      max_occurrences: null, billed_count: 0,
       created_at: thisMonth.ym + '-01T09:00:00.000Z', updated_at: thisMonth.ym + '-01T09:00:00.000Z',
     },
     {
       id: 'f-seed-8', kind: 'bill', name: 'Office rent', worker_id: null,
       amount: 900, cycle: null, period_month: null, due_date: dateOffset(12),
       status: 'unpaid', paid_at: null, note: 'Ground floor unit',
+      max_occurrences: null, billed_count: 0,
       created_at: daysAgo(20).toISOString(), updated_at: daysAgo(20).toISOString(),
     },
     {
       id: 'f-seed-9', kind: 'bill', name: 'Electricity', worker_id: null,
       amount: 118.4, cycle: null, period_month: null, due_date: dateOffset(5),
       status: 'unpaid', paid_at: null, note: null,
+      max_occurrences: null, billed_count: 0,
       created_at: daysAgo(6).toISOString(), updated_at: daysAgo(6).toISOString(),
     },
     {
       id: 'f-seed-10', kind: 'bill', name: 'Public liability insurance', worker_id: null,
       amount: 320, cycle: null, period_month: null, due_date: dateOffset(-40),
       status: 'paid', paid_at: daysAgo(41).toISOString(), note: 'Renewed for 12 months',
+      max_occurrences: null, billed_count: 0,
       created_at: daysAgo(45).toISOString(), updated_at: daysAgo(41).toISOString(),
     },
   ]
 
-  return { workers, clients, entries, tasks, settings, financeItems }
+  // A starting ranking so the Client priority board is populated in demo
+  // mode. Only some clients are ranked on purpose: Internal stays unranked at
+  // the bottom of Low Priority, the way a real board looks mid-week.
+  const clientPriorities: ClientPriority[] = [
+    { id: 'cp-seed-1', client_id: 'c-seed-1', lane: 'me', position: 0, created_at: daysAgo(9).toISOString(), updated_at: daysAgo(9).toISOString() },
+    { id: 'cp-seed-2', client_id: 'c-seed-2', lane: 'delegated', position: 0, created_at: daysAgo(9).toISOString(), updated_at: daysAgo(7).toISOString() },
+    { id: 'cp-seed-3', client_id: 'c-seed-3', lane: 'waiting', position: 0, created_at: daysAgo(6).toISOString(), updated_at: daysAgo(6).toISOString() },
+  ]
+
+  // A partly-filled schedule so the Meetings page shows both halves: two
+  // upcoming (one later today, one next week) and two past.
+  const meetings: Meeting[] = [
+    { id: 'm-seed-1', title: 'Weekly team stand-up', start_time: at(0, 16, 0).toISOString(), notes: 'Quick round-up: blockers, priorities for the rest of the week.', created_at: daysAgo(3).toISOString(), updated_at: daysAgo(3).toISOString() },
+    { id: 'm-seed-2', title: 'Acme Corp — kick-off call', start_time: at(7, 10, 30).toISOString(), notes: 'Scope the redesign phases. Bring the wireframes.', created_at: daysAgo(2).toISOString(), updated_at: daysAgo(2).toISOString() },
+    { id: 'm-seed-3', title: 'Northwind Traders — monthly review', start_time: at(-6, 14, 0).toISOString(), notes: 'Reviewed the month\u2019s hours. They asked about the report export.', created_at: daysAgo(8).toISOString(), updated_at: daysAgo(5).toISOString() },
+    { id: 'm-seed-4', title: 'Payroll prep', start_time: at(-1, 17, 0).toISOString(), notes: null, created_at: daysAgo(4).toISOString(), updated_at: daysAgo(4).toISOString() },
+  ]
+
+  return { workers, clients, entries, tasks, settings, financeItems, clientPriorities, meetings }
 }
 
 // Re-export uid for convenience

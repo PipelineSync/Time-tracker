@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { PERMISSION_GROUPS, PERMISSION_PRESETS, normalizePermissions, presetFor } from '@/lib/types'
 import type { Permission } from '@/lib/types'
+import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
-import { ChevronDown, ShieldCheck } from 'lucide-react'
+import { ChevronDown, Search, ShieldCheck, X } from 'lucide-react'
 
 /**
  * The "Access" section of the add/edit worker form: which of the admin's
@@ -27,6 +28,25 @@ export function WorkerPermissionsField({
   const active = normalizePermissions(value)
   const preset = presetFor(active)
   const [open, setOpen] = useState(false)
+  // The Access list is long once every area exists, so a search narrows it
+  // to the toggles whose area, label or hint matches — a matched area name
+  // shows the whole group, otherwise only the matching toggles.
+  const [query, setQuery] = useState('')
+  const q = query.trim().toLowerCase()
+
+  const visibleGroups = useMemo(() => {
+    if (!q) return PERMISSION_GROUPS
+    return PERMISSION_GROUPS.map((group) => {
+      const groupMatches = group.label.toLowerCase().includes(q)
+      const items = groupMatches
+        ? group.items
+        : group.items.filter(
+            (item) =>
+              item.label.toLowerCase().includes(q) || item.hint.toLowerCase().includes(q),
+          )
+      return { ...group, items }
+    }).filter((group) => group.items.length > 0)
+  }, [q])
 
   // Open on its own when the worker being edited already has access granted,
   // so it is never hidden away. (The parent seeds the form after mount, hence
@@ -92,40 +112,68 @@ export function WorkerPermissionsField({
 
       {open && (
         <div className="space-y-3 border-t p-3">
-          <div className="space-y-2">
-            {PERMISSION_GROUPS.map((group) => (
-              <div key={group.key} className="rounded-lg border p-2.5">
-                <p className="text-sm font-medium leading-none">{group.label}</p>
-                <div className="mt-2 space-y-1.5">
-                  {group.items.map((item) => {
-                    const blocked = Boolean(item.requires && !active.includes(item.requires))
-                    const id = `perm-${item.key.replace('.', '-')}`
-                    return (
-                      <div
-                        key={item.key}
-                        className={cn('flex items-center justify-between gap-3', item.requires && 'pl-4')}
-                      >
-                        <Label
-                          htmlFor={id}
-                          title={item.hint}
-                          className={cn('text-[13px] font-normal leading-snug', blocked && 'text-muted-foreground')}
-                        >
-                          {item.label}
-                        </Label>
-                        <Switch
-                          id={id}
-                          className="shrink-0"
-                          checked={active.includes(item.key)}
-                          disabled={disabled || blocked}
-                          onCheckedChange={(on) => toggle(item.key, on)}
-                        />
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-            ))}
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search access — e.g. board, time, finance…"
+              aria-label="Search access"
+              className="pl-8 pr-8"
+            />
+            {query && (
+              <button
+                type="button"
+                aria-label="Clear search"
+                onClick={() => setQuery('')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
           </div>
+
+          {q && visibleGroups.length === 0 ? (
+            <p className="rounded-lg border border-dashed p-3 text-center text-xs text-muted-foreground">
+              Nothing in Access matches “{query.trim()}”.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {visibleGroups.map((group) => (
+                <div key={group.key} className="rounded-lg border p-2.5">
+                  <p className="text-sm font-medium leading-none">{group.label}</p>
+                  <div className="mt-2 space-y-1.5">
+                    {group.items.map((item) => {
+                      const blocked = Boolean(item.requires && !active.includes(item.requires))
+                      const id = `perm-${item.key.replace('.', '-')}`
+                      return (
+                        <div
+                          key={item.key}
+                          className={cn('flex items-center justify-between gap-3', item.requires && 'pl-4')}
+                        >
+                          <Label
+                            htmlFor={id}
+                            title={item.hint}
+                            className={cn('text-[13px] font-normal leading-snug', blocked && 'text-muted-foreground')}
+                          >
+                            {item.label}
+                          </Label>
+                          <Switch
+                            id={id}
+                            className="shrink-0"
+                            checked={active.includes(item.key)}
+                            disabled={disabled || blocked}
+                            onCheckedChange={(on) => toggle(item.key, on)}
+                          />
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

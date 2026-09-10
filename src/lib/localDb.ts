@@ -18,6 +18,9 @@ import type {
   Client,
   ClientColor,
   ClientStatus,
+  ClientPriority,
+  ClientPriorityLane,
+  Meeting,
   Permission,
   FinanceItem,
   FinanceKind,
@@ -26,6 +29,7 @@ import type {
 } from './types'
 import {
   CLIENT_COLORS,
+  CLIENT_PRIORITY_LANES,
   DEFAULT_CLIENT_COLOR,
   DEFAULT_SLACK_SETTINGS,
   FINANCE_KINDS,
@@ -35,7 +39,7 @@ import {
   TASK_STATUSES,
   UNASSIGNED_CLIENT_NAME,
 } from './types'
-import type { BackendResult, DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, CreateFinanceItemInput } from './backend'
+import type { BackendResult, DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, CreateFinanceItemInput, CreateMeetingInput } from './backend'
 import { ACCOUNT_DEACTIVATED_MESSAGE } from './backend'
 import { buildDemoSeed } from './demoSeed'
 import { uid, computeEarnings, computeTotalMinutes, formatMinutes, formatDate } from './utils'
@@ -67,6 +71,13 @@ interface UserData {
   tasks: Task[]
   /** Client master list (admin-managed, see the Tasks page → Clients). */
   clients: Client[]
+  /**
+   * The client priority board's rows — which column + rank each ranked client
+   * sits in. Clients without a row here are unranked (bottom of Low Priority).
+   */
+  clientPriorities: ClientPriority[]
+  /** The meetings schedule (see the Meetings page). */
+  meetings: Meeting[]
   /** Finance ledger: subscriptions, payroll runs and bills (see the Finance page). */
   financeItems: FinanceItem[]
 }
@@ -99,7 +110,7 @@ function writeUsers(users: StoredUser[]) {
 }
 
 function emptyData(): UserData {
-  return { workers: [], entries: [], activeTimers: [], settings: null, comments: [], notifications: [], payments: [], tasks: [], clients: [], financeItems: [] }
+  return { workers: [], entries: [], activeTimers: [], settings: null, comments: [], notifications: [], payments: [], tasks: [], clients: [], clientPriorities: [], meetings: [], financeItems: [] }
 }
 
 /** The method the admin paid a settlement with, or null when unknown/invalid. */
@@ -211,6 +222,70 @@ function clientName(d: UserData, clientId: string | null | undefined): string | 
   return d.clients.find((c) => c.id === clientId)?.name ?? null
 }
 
+// ---- Client priority board --------------------------------------------------
+// One row per ranked client: which column (`lane`) and how high (`position`,
+// smaller = higher). Clients without a row are unranked — the UI shows them at
+// the bottom of Low Priority — so "reset the board" is just "delete every
+// row", and brand-new clients appear on the board automatically.
+
+/** Valid board column, defaulting anything unknown/legacy to Low Priority. */
+function normalizeClientPriorityLane(lane: unknown): ClientPriorityLane {
+  return CLIENT_PRIORITY_LANES.includes(lane as ClientPriorityLane) ? (lane as ClientPriorityLane) : 'low'
+}
+
+/** Normalize a priority row loaded from storage (or the demo seed). */
+function normalizeClientPriority(p: ClientPriority): ClientPriority {
+  return {
+    ...p,
+    lane: normalizeClientPriorityLane(p.lane),
+    position: Number.isFinite(p.position) ? p.position : 0,
+  }
+}
+
+/** Board order within a lane: by position, then newest first as a tiebreaker. */
+function sortClientPriorities(rows: ClientPriority[]): ClientPriority[] {
+  return [...rows].sort((a, b) => a.position - b.position || b.updated_at.localeCompare(a.updated_at))
+}
+
+/**
+ * Re-number one lane so `clientId` sits at `index` and every other ranked
+ * client keeps its relative order with a gap-free position.
+ */
+function reindexClientPriorityLane(rows: ClientPriority[], lane: ClientPriorityLane, clientId: string, index: number) {
+  const laneRows = sortClientPriorities(rows.filter((p) => p.lane === lane && p.client_id !== clientId))
+  const moved = rows.find((p) => p.client_id === clientId)
+  if (!moved) return
+  const at = Math.max(0, Math.min(index, laneRows.length))
+  laneRows.splice(at, 0, moved)
+  laneRows.forEach((p, i) => { p.position = i })
+}
+
+// ---- Meetings ---------------------------------------------------------------
+// The schedule is one workspace-wide list. `meetings.view` opens it — the
+// admin holds it by definition, a worker only when the admin ticks it.
+
+/** Normalize a meeting loaded from storage (or the demo seed). */
+function normalizeMeeting(m: Meeting): Meeting {
+  // An invalid/missing start falls back to "now" rather than NaN-ing every
+  // sort; the title is trimmed so blank rows cannot render as empty cards.
+  const start = Number.isFinite(new Date(m.start_time).getTime()) ? m.start_time : new Date().toISOString()
+  return {
+    ...m,
+    title: (m.title ?? '').trim() || 'Meeting',
+    start_time: start,
+    notes: m.notes ?? null,
+  }
+}
+
+/** Upcoming ascending (soonest first); past descending (newest first). */
+function sortMeetings(rows: Meeting[], now: number): Meeting[] {
+  const upcoming = rows.filter((m) => new Date(m.start_time).getTime() >= now)
+  const past = rows.filter((m) => new Date(m.start_time).getTime() < now)
+  upcoming.sort((a, b) => a.start_time.localeCompare(b.start_time))
+  past.sort((a, b) => b.start_time.localeCompare(a.start_time))
+  return [...upcoming, ...past]
+}
+
 // ---- Finance ledger ---------------------------------------------------------
 // One list of due-dated lines (subscription / payroll / bill). Rows are owned
 // by the admin workspace like everything else; `finance.view` opens the read,
@@ -246,6 +321,8 @@ function normalizeFinanceMonth(value: unknown): string | null {
 function normalizeFinanceItem(f: FinanceItem): FinanceItem {
   const kind = normalizeFinanceKind(f.kind) ?? 'bill'
   const status = normalizeFinanceStatus(kind, f.status)
+  // Only subscriptions carry an occurrence limit; a whole number of 1+.
+  const max = kind === 'subscription' && Number.isFinite(f.max_occurrences) ? Math.floor(f.max_occurrences!) : null
   return {
     ...f,
     kind,
@@ -259,6 +336,27 @@ function normalizeFinanceItem(f: FinanceItem): FinanceItem {
     // The paid stamp only describes a completed payment.
     paid_at: status === 'paid' ? (f.paid_at ?? f.updated_at ?? new Date().toISOString()) : null,
     note: typeof f.note === 'string' && f.note.trim() ? f.note.trim() : null,
+    max_occurrences: max !== null && max > 0 ? max : null,
+    billed_count: Number.isFinite(f.billed_count) && f.billed_count > 0 ? Math.floor(f.billed_count) : 0,
+  }
+}
+
+/**
+ * A subscription whose due date was rolled forward has been billed once more.
+ * Moving the date back (a correction) never counts, and when the count
+ * reaches the limit the subscription pauses by itself.
+ */
+function applyBillingCount(current: FinanceItem, patch: Partial<FinanceItem>, next: FinanceItem): FinanceItem {
+  if (current.kind !== 'subscription') return next
+  const moved = patch.due_date !== undefined && (normalizeFinanceDate(patch.due_date) ?? '') > current.due_date
+  if (!moved) return next
+  const billedCount = current.billed_count + 1
+  return {
+    ...next,
+    billed_count: billedCount,
+    // The last bill on the counter ends the subscription — no one has to
+    // remember to come back and switch it off.
+    status: next.max_occurrences !== null && billedCount >= next.max_occurrences ? 'paused' : next.status,
   }
 }
 
@@ -317,6 +415,16 @@ function readData(userId: string): UserData {
   d.payments = d.payments || []
   d.tasks = (d.tasks || []).map(normalizeTask)
   d.clients = (d.clients || []).map(normalizeClient)
+  // Workspaces saved before the priority board simply load with no client
+  // ranked — everything sits unranked at the bottom of Low Priority.
+  d.clientPriorities = (d.clientPriorities || []).map(normalizeClientPriority)
+  // Workspaces saved before the Meetings section simply load an empty schedule.
+  d.meetings = (d.meetings || []).map(normalizeMeeting)
+  // A client that was deleted should not keep a phantom place on the board.
+  const clientIds = new Set(d.clients.map((c) => c.id))
+  const beforePrune = d.clientPriorities.length
+  d.clientPriorities = d.clientPriorities.filter((p) => clientIds.has(p.client_id))
+  if (d.clientPriorities.length !== beforePrune) d.clientPriorities = d.clientPriorities.map((p) => ({ ...p }))
   // Workspaces saved before the Finance section simply load an empty ledger.
   d.financeItems = (d.financeItems || []).map(normalizeFinanceItem)
   d.entries = d.entries.map((e) => ({ ...e, client_id: e.client_id ?? null }))
@@ -1352,6 +1460,9 @@ export const localBackend: DataBackend = {
     }
     const now = new Date().toISOString()
     const status = normalizeFinanceStatus(kind, input.status)
+    if (input.max_occurrences != null && (kind !== 'subscription' || !Number.isFinite(input.max_occurrences) || input.max_occurrences < 1 || Math.floor(input.max_occurrences) !== input.max_occurrences)) {
+      return { data: null, error: 'The number of times a subscription bills must be a whole number of 1 or more.' }
+    }
     const item: FinanceItem = normalizeFinanceItem({
       id: uid(),
       kind,
@@ -1364,6 +1475,8 @@ export const localBackend: DataBackend = {
       status,
       paid_at: status === 'paid' ? now : null,
       note: input.note ?? null,
+      max_occurrences: kind === 'subscription' ? (input.max_occurrences ?? null) : null,
+      billed_count: 0,
       created_at: now,
       updated_at: now,
     })
@@ -1395,10 +1508,15 @@ export const localBackend: DataBackend = {
       )
       if (dupe) return { data: null, error: 'That worker already has a payroll line for this month — edit it instead.' }
     }
+    if (patch.max_occurrences !== undefined && patch.max_occurrences !== null && (current.kind !== 'subscription' || !Number.isFinite(patch.max_occurrences) || patch.max_occurrences < 1 || Math.floor(patch.max_occurrences) !== patch.max_occurrences)) {
+      return { data: null, error: 'The number of times a subscription bills must be a whole number of 1 or more.' }
+    }
     const at = new Date().toISOString()
     // Marking paid stamps the time (keeping an existing stamp); moving back
     // to unpaid clears it. normalizeFinanceItem enforces the same invariant.
-    const next = normalizeFinanceItem({
+    // Rolling a subscription's due date forward is a billing: the counter
+    // goes up and a reached limit pauses the subscription by itself.
+    const next = applyBillingCount(current, patch, normalizeFinanceItem({
       ...current,
       ...patch,
       // The kind is fixed once created — it decides the row's shape.
@@ -1407,7 +1525,7 @@ export const localBackend: DataBackend = {
       created_at: current.created_at,
       updated_at: at,
       paid_at: patch.status === 'paid' ? (current.paid_at ?? at) : patch.status ? null : current.paid_at,
-    })
+    }))
     c.data.financeItems[idx] = next
     save(c.data)
     return { data: next, error: null }
@@ -1495,6 +1613,119 @@ export const localBackend: DataBackend = {
       return { data: null, error: 'This client is used by existing tasks or time entries. Mark it inactive instead.' }
     }
     c.data.clients = c.data.clients.filter((x) => x.id !== id)
+    // The board is derived from the master list — a deleted client loses its place.
+    c.data.clientPriorities = c.data.clientPriorities.filter((p) => p.client_id !== id)
+    save(c.data)
+    return { data: null, error: null }
+  },
+
+  // ---- Client priority board ----------------------------------------------
+  // One board for the whole workspace. The admin runs it by default; a worker
+  // the admin granted `priority_board.view` sees and drags the very same
+  // board. Clients without a row are unranked (bottom of Low Priority), so
+  // new clients land on the board by themselves and reset = delete all rows.
+
+  async listClientPriorities() {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (!can(c, 'priority_board.view')) return denied('use the client priority board')
+    return { data: sortClientPriorities(c.data.clientPriorities), error: null }
+  },
+
+  async moveClientPriority(clientId, lane, position) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (!can(c, 'priority_board.view')) return denied('use the client priority board')
+    if (!c.data.clients.some((x) => x.id === clientId)) return { data: null, error: 'Client not found.' }
+    const target = normalizeClientPriorityLane(lane)
+    const now = new Date().toISOString()
+    let row = c.data.clientPriorities.find((p) => p.client_id === clientId)
+    if (!row) {
+      row = { id: uid(), client_id: clientId, lane: target, position: 0, created_at: now, updated_at: now }
+      c.data.clientPriorities.push(row)
+    }
+    row.lane = target
+    row.updated_at = now
+    reindexClientPriorityLane(c.data.clientPriorities, target, clientId, position)
+    save(c.data)
+    return { data: row, error: null }
+  },
+
+  async resetClientPriorities() {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (!can(c, 'priority_board.view')) return denied('use the client priority board')
+    c.data.clientPriorities = []
+    save(c.data)
+    return { data: null, error: null }
+  },
+
+  // ---- Meetings -------------------------------------------------------------
+  // One schedule for the whole workspace. The admin runs it by default; a
+  // worker the admin granted `meetings.view` sees and manages the very same
+  // list. No attendees or invites — whoever can open the page can run it.
+
+  async listMeetings() {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (!can(c, 'meetings.view')) return denied('use the meetings section')
+    return { data: sortMeetings(c.data.meetings, Date.now()), error: null }
+  },
+
+  async createMeeting(input: CreateMeetingInput) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (!can(c, 'meetings.view')) return denied('use the meetings section')
+    const title = input.title.trim()
+    if (!title) return { data: null, error: 'Give the meeting a title.' }
+    if (title.length > 200) return { data: null, error: 'Meeting titles are limited to 200 characters.' }
+    const start = new Date(input.start_time)
+    if (!Number.isFinite(start.getTime())) return { data: null, error: 'Pick a valid date and time.' }
+    const now = new Date().toISOString()
+    const meeting: Meeting = {
+      id: uid(),
+      title,
+      start_time: start.toISOString(),
+      notes: input.notes?.trim() || null,
+      created_at: now,
+      updated_at: now,
+    }
+    c.data.meetings.push(meeting)
+    save(c.data)
+    return { data: meeting, error: null }
+  },
+
+  async updateMeeting(id, patch) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (!can(c, 'meetings.view')) return denied('use the meetings section')
+    const idx = c.data.meetings.findIndex((m) => m.id === id)
+    if (idx === -1) return { data: null, error: 'Meeting not found.' }
+    const current = c.data.meetings[idx]
+    const title = patch.title !== undefined ? patch.title.trim() : current.title
+    if (!title) return { data: null, error: 'Give the meeting a title.' }
+    const start = patch.start_time !== undefined ? new Date(patch.start_time) : new Date(current.start_time)
+    if (!Number.isFinite(start.getTime())) return { data: null, error: 'Pick a valid date and time.' }
+    const next: Meeting = normalizeMeeting({
+      ...current,
+      ...patch,
+      title,
+      start_time: start.toISOString(),
+      notes: patch.notes !== undefined ? patch.notes?.trim() || null : current.notes,
+      id: current.id,
+      created_at: current.created_at,
+      updated_at: new Date().toISOString(),
+    })
+    c.data.meetings[idx] = next
+    save(c.data)
+    return { data: next, error: null }
+  },
+
+  async deleteMeeting(id) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (!can(c, 'meetings.view')) return denied('use the meetings section')
+    c.data.meetings = c.data.meetings.filter((m) => m.id !== id)
     save(c.data)
     return { data: null, error: null }
   },
@@ -1666,6 +1897,12 @@ export const localBackend: DataBackend = {
       payments: [],
       tasks: [],
       clients: seedClients,
+      clientPriorities: (seed.clientPriorities ?? []).map((p) => ({
+        ...p,
+        client_id: seedClientMap.get(p.client_id) ?? p.client_id,
+        id: uid(),
+      })),
+      meetings: (seed.meetings ?? []).map((m) => ({ ...m, id: uid() })),
       financeItems: seed.financeItems.map((f) => ({
         ...f,
         worker_id: f.worker_id ? idMap.get(f.worker_id) ?? null : null,

@@ -15,6 +15,9 @@ import type {
   Task,
   TaskStatus,
   Client,
+  ClientPriority,
+  ClientPriorityLane,
+  Meeting,
   Permission,
   FinanceItem,
   FinanceKind,
@@ -70,6 +73,14 @@ export interface CreateTaskInput {
  * subscriptions need a `name` + `cycle`, payroll needs a `worker_id` +
  * `period_month`, bills need a `name`. `due_date` is always required.
  */
+/** Fields callers may set when scheduling a meeting. */
+export interface CreateMeetingInput {
+  title: string
+  /** Scheduled start (ISO instant). */
+  start_time: string
+  notes?: string | null
+}
+
 export interface CreateFinanceItemInput {
   kind: FinanceKind
   name?: string | null
@@ -82,6 +93,12 @@ export interface CreateFinanceItemInput {
   due_date: string
   status?: FinanceStatus
   note?: string | null
+  /**
+   * Subscriptions only: how many times it bills before pausing by itself
+   * (a whole number of 1 or more). Omit or pass null for a subscription that
+   * runs until someone switches it off.
+   */
+  max_occurrences?: number | null
 }
 
 export interface DataBackend {
@@ -240,6 +257,39 @@ export interface DataBackend {
    */
   moveTask(id: string, status: TaskStatus, position: number): Promise<BackendResult<Task>>
   deleteTask(id: string): Promise<BackendResult<null>>
+
+  /**
+   * The client priority board's rows (which column + rank each ranked client
+   * sits in). The admin and workers granted `priority_board.view` read it;
+   * everyone else — and any database without the client-priority-board
+   * migration — gets an empty list so the rest of the app never notices.
+   * Clients without a row are unranked: the UI shows them at the bottom of
+   * the Low Priority column.
+   */
+  listClientPriorities(): Promise<BackendResult<ClientPriority[]>>
+  /**
+   * Drag & drop on the priority board: put `clientId` into `lane` at index
+   * `position` of that lane's ranked cards. The backend owns the re-indexing
+   * and stamps updated_at. Allowed for the admin and granted workers only.
+   */
+  moveClientPriority(clientId: string, lane: ClientPriorityLane, position: number): Promise<BackendResult<ClientPriority>>
+  /**
+   * Reset the board: delete every priority row so every client goes back to
+   * unranked (bottom of Low Priority, A→Z). The clients themselves — names,
+   * colours, active/inactive — are untouched.
+   */
+  resetClientPriorities(): Promise<BackendResult<null>>
+
+  /**
+   * The meetings schedule, upcoming and past. The admin and workers granted
+   * `meetings.view` read it; everyone else — and any database without the
+   * meetings migration — gets an empty list so the rest of the app never
+   * notices.
+   */
+  listMeetings(): Promise<BackendResult<Meeting[]>>
+  createMeeting(input: CreateMeetingInput): Promise<BackendResult<Meeting>>
+  updateMeeting(id: string, patch: Partial<Omit<Meeting, 'id' | 'created_at' | 'updated_at'>>): Promise<BackendResult<Meeting>>
+  deleteMeeting(id: string): Promise<BackendResult<null>>
 
   resetAll(): Promise<BackendResult<null>>
   seedDemo(): Promise<BackendResult<null>>

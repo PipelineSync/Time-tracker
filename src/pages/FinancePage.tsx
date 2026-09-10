@@ -83,6 +83,16 @@ function FinanceStatusLabel({ item }: { item: FinanceItem }) {
   )
 }
 
+/** "3/6 billed" chip for subscriptions that run for a set number of bills. */
+function OccurrencesChip({ item }: { item: FinanceItem }) {
+  if (item.kind !== 'subscription' || item.max_occurrences == null) return null
+  return (
+    <Badge variant="muted" className="whitespace-nowrap text-[10px]">
+      {Math.min(item.billed_count, item.max_occurrences)}/{item.max_occurrences} billed
+    </Badge>
+  )
+}
+
 /**
  * The Finance section — subscriptions, worker payroll and bill due dates,
  * plus the former standalone Payments section, now under the Payroll tab.
@@ -164,7 +174,13 @@ export function FinancePage() {
   async function recordBilling(item: FinanceItem) {
     const next = advanceCycle(item.due_date, item.cycle ?? 'monthly')
     const res = await updateFinanceItem(item.id, { due_date: next })
-    if (res) toast.success(`Billed ${money(item.amount, currency)} — next due ${formatDate(next)}.`)
+    if (!res) return
+    // The backend counts the billing; when it was the last one on the
+    // subscription's limit, it has paused itself — say so instead of
+    // pointing at a next due date that will never bill.
+    const final = item.max_occurrences != null && item.billed_count + 1 >= item.max_occurrences
+    if (final) toast.success(`Final bill (${item.billed_count + 1} of ${item.max_occurrences}) — "${labelFor(item)}" is now paused.`)
+    else toast.success(`Billed ${money(item.amount, currency)} — next due ${formatDate(next)}.`)
   }
 
   const loading = dataLoading && financeItems.length === 0
@@ -320,7 +336,10 @@ export function FinancePage() {
                           <DueChip dueDate={item.due_date} />
                         </td>
                         <td className="px-3 py-3 align-top">
-                          <p className="font-medium">{labelFor(item)}</p>
+                          <div className="flex items-center gap-1.5">
+                            <p className="font-medium">{labelFor(item)}</p>
+                            <OccurrencesChip item={item} />
+                          </div>
                           {item.note && <p className="max-w-[240px] truncate text-xs text-muted-foreground" title={item.note}>{item.note}</p>}
                         </td>
                         <td className="px-3 py-3 align-top"><KindBadge kind={item.kind} /></td>
@@ -383,7 +402,10 @@ export function FinancePage() {
                     {[...subscriptions].sort((a, b) => a.due_date.localeCompare(b.due_date)).map((item) => (
                       <tr key={item.id} className={cn('hover:bg-muted/40', item.status === 'active' && daysUntil(item.due_date) < 0 && 'bg-destructive/5')}>
                         <td className="px-3 py-3">
-                          <p className="font-medium">{item.name}</p>
+                          <div className="flex items-center gap-1.5">
+                            <p className="font-medium">{item.name}</p>
+                            <OccurrencesChip item={item} />
+                          </div>
                           {item.note && <p className="max-w-[240px] truncate text-xs text-muted-foreground" title={item.note}>{item.note}</p>}
                         </td>
                         <td className="px-3 py-3 whitespace-nowrap">

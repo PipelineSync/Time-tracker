@@ -14,11 +14,14 @@ import type {
   Task,
   TaskStatus,
   Client,
+  ClientPriority,
+  ClientPriorityLane,
+  Meeting,
   Permission,
   FinanceItem,
 } from './types'
-import { DEFAULT_SLACK_SETTINGS, DEFAULT_CLIENT_COLOR, PERMISSIONS, TEAM_VIEW_PERMISSIONS, normalizePermissions } from './types'
-import type { BackendResult, DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, CreateFinanceItemInput } from './backend'
+import { CLIENT_PRIORITY_LANES, DEFAULT_SLACK_SETTINGS, DEFAULT_CLIENT_COLOR, PERMISSIONS, TEAM_VIEW_PERMISSIONS, normalizePermissions } from './types'
+import type { BackendResult, DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, CreateFinanceItemInput, CreateMeetingInput } from './backend'
 import { ACCOUNT_DEACTIVATED_MESSAGE } from './backend'
 import {
   createClient,
@@ -39,6 +42,14 @@ const PERMISSIONS_MIGRATION_MESSAGE =
 /** Shown when the database's permission allow-list predates supabase/finance.sql. */
 const FINANCE_PERMISSIONS_MIGRATION_MESSAGE =
   'Finance access was not saved: run supabase/finance.sql in the Supabase SQL editor — it widens the allowed permission keys with the finance.* access. Everything else was saved.'
+
+/** Shown when the database's permission allow-list predates the priority board. */
+const PRIORITY_BOARD_PERMISSIONS_MIGRATION_MESSAGE =
+  'Priority board access was not saved: run supabase/client-priority-board.sql in the Supabase SQL editor — it widens the allowed permission keys with priority_board.view. Everything else was saved.'
+
+/** Shown when the database's permission allow-list predates the meetings section. */
+const MEETINGS_PERMISSIONS_MIGRATION_MESSAGE =
+  'Meetings access was not saved: run supabase/meetings.sql in the Supabase SQL editor — it widens the allowed permission keys with meetings.view. Everything else was saved.'
 
 /** Postgres raises 23514 when the workers_permissions_valid check rejects a key. */
 function isPermissionsCheckViolation(error: { code?: string; message?: string } | null): boolean {
@@ -516,6 +527,12 @@ function normalizeClientRow(c: Client): Client {
 const FINANCE_COLUMNS =
   'id, kind, name, worker_id, amount, cycle, period_month, due_date, status, paid_at, note, created_at, updated_at'
 
+// supabase/finance-subscription-occurrences.sql adds the subscription
+// occurrence limit; databases without it answer "column not found", and the
+// finance queries retry with the legacy list so everything else keeps working.
+const FINANCE_OCCURRENCE_COLUMNS = 'max_occurrences, billed_count'
+const FINANCE_COLUMNS_FULL = `${FINANCE_COLUMNS}, ${FINANCE_OCCURRENCE_COLUMNS}`
+
 /** Subscriptions live in active/paused; payroll and bills in unpaid/paid. */
 function financeStatusFor(kind: FinanceItem['kind'], status: unknown): FinanceItem['status'] {
   if (kind === 'subscription') return status === 'paused' ? 'paused' : 'active'
@@ -537,6 +554,13 @@ function normalizeFinanceRow(f: FinanceItem): FinanceItem {
     status: financeStatusFor(kind, f.status),
     paid_at: financeStatusFor(kind, f.status) === 'paid' ? f.paid_at ?? null : null,
     note: typeof f.note === 'string' && f.note.trim() ? f.note : null,
+    // Rows from a database without the occurrence migration come back with
+    // both fields undefined — they read as "runs until switched off".
+    max_occurrences:
+      kind === 'subscription' && typeof f.max_occurrences === 'number' && Number.isFinite(f.max_occurrences) && f.max_occurrences > 0
+        ? Math.floor(f.max_occurrences)
+        : null,
+    billed_count: typeof f.billed_count === 'number' && Number.isFinite(f.billed_count) && f.billed_count > 0 ? Math.floor(f.billed_count) : 0,
   }
 }
 
@@ -934,14 +958,30 @@ export const supabaseBackend: DataBackend = {
     if (!canDo(me.data!, 'workers.manage')) return denied('edit workers')
     const { newPassword, ...rest } = patch as { newPassword?: string } & Partial<Worker>
     if (rest.permissions) rest.permissions = normalizePermissions(rest.permissions)
+    // Old databases reject unknown permission keys one migration at a time.
+    // Each step below saves everything the database accepts so far, drops the
+    // keys it cannot accept yet (accumulating in `dropped` so several stale
+    // migrations degrade together), and reports exactly which SQL file to run.
+    const dropped = new Set<string>()
     let upd = await client().from('workers').update(rest).eq('id', id).select().single()
     if (upd.error && isPermissionsCheckViolation(upd.error) && rest.permissions?.some((p) => p.startsWith('finance.'))) {
       // The database's permission allow-list predates supabase/finance.sql,
-      // which widens it with the finance.* keys. Save everything the old list
-      // accepts and tell the admin exactly what to run.
-      const legacy = normalizePermissions(rest.permissions.filter((p) => !p.startsWith('finance.')))
-      upd = await client().from('workers').update({ ...rest, permissions: legacy }).eq('id', id).select().single()
+      // which widens it with the finance.* keys.
+      for (const p of rest.permissions) if (p.startsWith('finance.')) dropped.add(p)
+      upd = await client().from('workers').update({ ...rest, permissions: normalizePermissions(rest.permissions.filter((p) => !dropped.has(p))) }).eq('id', id).select().single()
       if (!upd.error) return fail(FINANCE_PERMISSIONS_MIGRATION_MESSAGE)
+    }
+    if (upd.error && isPermissionsCheckViolation(upd.error) && rest.permissions?.includes('priority_board.view') && !dropped.has('priority_board.view')) {
+      // Same story for the priority board key (supabase/client-priority-board.sql).
+      dropped.add('priority_board.view')
+      upd = await client().from('workers').update({ ...rest, permissions: normalizePermissions(rest.permissions.filter((p) => !dropped.has(p))) }).eq('id', id).select().single()
+      if (!upd.error) return fail(PRIORITY_BOARD_PERMISSIONS_MIGRATION_MESSAGE)
+    }
+    if (upd.error && isPermissionsCheckViolation(upd.error) && rest.permissions?.includes('meetings.view') && !dropped.has('meetings.view')) {
+      // Same story for the meetings key (supabase/meetings.sql).
+      dropped.add('meetings.view')
+      upd = await client().from('workers').update({ ...rest, permissions: normalizePermissions(rest.permissions.filter((p) => !dropped.has(p))) }).eq('id', id).select().single()
+      if (!upd.error) return fail(MEETINGS_PERMISSIONS_MIGRATION_MESSAGE)
     }
     if (upd.error && isMissingColumn(upd.error, 'permissions') && rest.permissions) {
       // Database without supabase/worker-permissions.sql: save everything else
@@ -1745,19 +1785,27 @@ export const supabaseBackend: DataBackend = {
     const me = await requireUser()
     if (me.error) return fail(me.error)
     if (!canDo(me.data!, 'finance.view')) return ok([] as FinanceItem[])
-    const { data, error } = await client()
+    let res = await (client()
       .from('finance_items')
-      .select(FINANCE_COLUMNS)
+      .select(FINANCE_COLUMNS_FULL)
       .order('due_date', { ascending: true })
-      .order('created_at', { ascending: false })
-    if (error) {
-      if (isMissingTable(error as { code?: string; message?: string }, 'finance_items')) {
+      .order('created_at', { ascending: false }) as PromiseLike<{ data: unknown; error: { code?: string; message?: string } | null }>)
+    if (res.error && isMissingColumn(res.error as { code?: string; message?: string }, 'max_occurrences')) {
+      // Database without supabase/finance-subscription-occurrences.sql.
+      res = await (client()
+        .from('finance_items')
+        .select(FINANCE_COLUMNS)
+        .order('due_date', { ascending: true })
+        .order('created_at', { ascending: false }) as PromiseLike<{ data: unknown; error: { code?: string; message?: string } | null }>)
+    }
+    if (res.error) {
+      if (isMissingTable(res.error as { code?: string; message?: string }, 'finance_items')) {
         console.warn('[work-tracker] the finance_items table is missing — run supabase/finance.sql to enable the Finance section.')
         return ok([] as FinanceItem[])
       }
-      return fail(error.message)
+      return fail(res.error.message ?? 'Could not load the finance ledger.')
     }
-    return ok(((data as FinanceItem[]) ?? []).map(normalizeFinanceRow))
+    return ok(((res.data as FinanceItem[]) ?? []).map(normalizeFinanceRow))
   },
 
   async createFinanceItem(input: CreateFinanceItemInput) {
@@ -1766,41 +1814,64 @@ export const supabaseBackend: DataBackend = {
     if (!canDo(me.data!, 'finance.manage')) return denied('add finance lines')
     const err = validateFinanceInput(input)
     if (err) return fail(err)
+    if (input.max_occurrences != null && (input.kind !== 'subscription' || !Number.isFinite(input.max_occurrences) || input.max_occurrences < 1 || Math.floor(input.max_occurrences) !== input.max_occurrences)) {
+      return fail('The number of times a subscription bills must be a whole number of 1 or more.')
+    }
     const now = new Date().toISOString()
     const status = financeStatusFor(input.kind, input.status)
-    const { data, error } = await client()
+    const base: Record<string, unknown> = {
+      kind: input.kind,
+      name: input.kind === 'payroll' ? null : input.name?.trim() || null,
+      worker_id: input.kind === 'payroll' ? input.worker_id ?? null : null,
+      amount: Math.round(input.amount * 100) / 100,
+      cycle: input.kind === 'subscription' ? (input.cycle === 'yearly' ? 'yearly' : 'monthly') : null,
+      period_month: input.kind === 'payroll' ? input.period_month ?? null : null,
+      due_date: input.due_date,
+      status,
+      paid_at: status === 'paid' ? now : null,
+      note: input.note?.trim() || null,
+    }
+    // The occurrence limit rides along only when the database has the
+    // columns; older databases get the same subscription without it.
+    let res = await (client()
       .from('finance_items')
       .insert({
-        kind: input.kind,
-        name: input.kind === 'payroll' ? null : input.name?.trim() || null,
-        worker_id: input.kind === 'payroll' ? input.worker_id ?? null : null,
-        amount: Math.round(input.amount * 100) / 100,
-        cycle: input.kind === 'subscription' ? (input.cycle === 'yearly' ? 'yearly' : 'monthly') : null,
-        period_month: input.kind === 'payroll' ? input.period_month ?? null : null,
-        due_date: input.due_date,
-        status,
-        paid_at: status === 'paid' ? now : null,
-        note: input.note?.trim() || null,
+        ...base,
+        max_occurrences: input.kind === 'subscription' ? (input.max_occurrences ?? null) : null,
+        billed_count: 0,
       })
       .select()
-      .single()
-    if (error) return fail(financeWriteError(input, error))
-    return ok(normalizeFinanceRow(data as FinanceItem))
+      .single() as PromiseLike<{ data: unknown; error: { code?: string; message?: string } | null }>)
+    if (res.error && isMissingColumn(res.error as { code?: string; message?: string }, 'max_occurrences')) {
+      // Database without supabase/finance-subscription-occurrences.sql.
+      res = await (client().from('finance_items').insert(base).select().single() as PromiseLike<{ data: unknown; error: { code?: string; message?: string } | null }>)
+    }
+    if (res.error) return fail(financeWriteError(input, res.error))
+    return ok(normalizeFinanceRow(res.data as FinanceItem))
   },
 
   async updateFinanceItem(id, patch) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
     if (!canDo(me.data!, 'finance.manage')) return denied('edit finance lines')
-    const current = await client().from('finance_items').select(FINANCE_COLUMNS).eq('id', id).maybeSingle()
-    if (current.error) return fail(current.error.message)
+    // The occurrence columns exist only after the migration; read with the
+    // full list and fall back so older databases still load the row.
+    let current = await (client().from('finance_items').select(FINANCE_COLUMNS_FULL).eq('id', id).maybeSingle() as PromiseLike<{ data: unknown; error: { code?: string; message?: string } | null }>)
+    if (current.error && isMissingColumn(current.error as { code?: string; message?: string }, 'max_occurrences')) {
+      current = await (client().from('finance_items').select(FINANCE_COLUMNS).eq('id', id).maybeSingle() as PromiseLike<{ data: unknown; error: { code?: string; message?: string } | null }>)
+    }
+    if (current.error) return fail(current.error.message ?? 'Could not load the finance line.')
     if (!current.data) return fail('Finance line not found.')
-    const kind = (current.data as FinanceItem).kind
+    const currentRow = normalizeFinanceRow(current.data as FinanceItem)
+    const kind = currentRow.kind
     if (patch.amount !== undefined && (!Number.isFinite(Number(patch.amount)) || Number(patch.amount) < 0)) {
       return fail('Enter an amount of 0 or more.')
     }
     if (patch.due_date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(String(patch.due_date))) {
       return fail('Pick a due date.')
+    }
+    if (patch.max_occurrences !== undefined && patch.max_occurrences !== null && (kind !== 'subscription' || !Number.isFinite(patch.max_occurrences) || patch.max_occurrences < 1 || Math.floor(patch.max_occurrences) !== patch.max_occurrences)) {
+      return fail('The number of times a subscription bills must be a whole number of 1 or more.')
     }
     const update: Record<string, unknown> = {}
     if (patch.name !== undefined) update.name = kind === 'payroll' ? null : patch.name?.trim() || null
@@ -1812,12 +1883,29 @@ export const supabaseBackend: DataBackend = {
     if (patch.status !== undefined) {
       update.status = financeStatusFor(kind, patch.status)
       // Marking paid stamps the time; moving back to unpaid clears it.
-      update.paid_at = update.status === 'paid' ? ((current.data as FinanceItem).paid_at ?? new Date().toISOString()) : null
+      update.paid_at = update.status === 'paid' ? (currentRow.paid_at ?? new Date().toISOString()) : null
     }
     if (patch.note !== undefined) update.note = patch.note?.trim() || null
-    const { data, error } = await client().from('finance_items').update(update).eq('id', id).select().single()
-    if (error) return fail(error.message)
-    return ok(normalizeFinanceRow(data as FinanceItem))
+    if (patch.max_occurrences !== undefined) update.max_occurrences = kind === 'subscription' ? (patch.max_occurrences ?? null) : null
+    // Rolling a subscription's due date forward is one more billing. When it
+    // reaches the limit the subscription pauses by itself — the last bill on
+    // the counter ends it, no one has to remember to switch it off.
+    if (kind === 'subscription' && patch.due_date !== undefined && String(patch.due_date) > currentRow.due_date) {
+      update.billed_count = currentRow.billed_count + 1
+      const max = patch.max_occurrences !== undefined ? (patch.max_occurrences ?? null) : currentRow.max_occurrences
+      if (max !== null && (update.billed_count as number) >= max && patch.status === undefined) {
+        update.status = 'paused'
+      }
+    }
+    let res = await (client().from('finance_items').update(update).eq('id', id).select().single() as PromiseLike<{ data: unknown; error: { code?: string; message?: string } | null }>)
+    if (res.error && isMissingColumn(res.error as { code?: string; message?: string }, 'max_occurrences')) {
+      // Database without the occurrence columns: save everything else.
+      const { max_occurrences: _max, billed_count: _count, ...legacy } = update
+      void legacy
+      res = await (client().from('finance_items').update(legacy).eq('id', id).select().single() as PromiseLike<{ data: unknown; error: { code?: string; message?: string } | null }>)
+    }
+    if (res.error) return fail(res.error.message ?? 'Could not save the finance line.')
+    return ok(normalizeFinanceRow(res.data as FinanceItem))
   },
 
   async deleteFinanceItem(id) {
@@ -1910,6 +1998,182 @@ export const supabaseBackend: DataBackend = {
       return fail('This client is used by existing tasks or time entries. Mark it inactive instead.')
     }
     const { error } = await sb.from('clients').delete().eq('id', id)
+    if (error) return fail(error.message)
+    return ok(null)
+  },
+
+  // ---- Client priority board ------------------------------------------------
+  // supabase/client-priority-board.sql owns the real boundary: the admin and
+  // workers granted `priority_board.view` may read and change the rows. A
+  // database that has not run the migration answers "relation does not
+  // exist"; listing then reports an empty board instead of an error so the
+  // rest of the app degrades, and the writes explain exactly what to run.
+
+  async listClientPriorities() {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (!canDo(me.data!, 'priority_board.view')) return denied('use the client priority board')
+    const { data, error } = await client()
+      .from('client_priorities')
+      .select('id, client_id, lane, position, created_at, updated_at')
+      .order('position', { ascending: true })
+    if (error) {
+      if (isMissingTable(error as { code?: string; message?: string }, 'client_priorities')) {
+        console.warn('[work-tracker] the client_priorities table is missing — run supabase/client-priority-board.sql to enable the priority board.')
+        return ok([] as ClientPriority[])
+      }
+      return fail(error.message)
+    }
+    // Anything unknown (e.g. a hand-edited row) falls back to Low Priority.
+    return ok(
+      ((data as ClientPriority[]) ?? []).map((p) => ({
+        ...p,
+        lane: (CLIENT_PRIORITY_LANES.includes(p.lane) ? p.lane : 'low') as ClientPriorityLane,
+        position: Number.isFinite(p.position) ? p.position : 0,
+      })),
+    )
+  },
+
+  async moveClientPriority(clientId, lane, position) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (!canDo(me.data!, 'priority_board.view')) return denied('use the client priority board')
+    const target = CLIENT_PRIORITY_LANES.includes(lane) ? lane : 'low'
+    const sb = client()
+    // The client's current row, if it has one (one row per client).
+    const { data: current, error: readErr } = await sb
+      .from('client_priorities')
+      .select('id')
+      .eq('client_id', clientId)
+      .maybeSingle()
+    if (readErr && !isMissingTable(readErr as { code?: string; message?: string }, 'client_priorities')) return fail(readErr.message)
+    if (readErr) return fail('The priority board is not set up on this database yet. Run supabase/client-priority-board.sql in the Supabase SQL editor.')
+    const existing = (current as { id: string } | null) ?? null
+
+    // Re-number the destination lane so the card lands exactly where it was
+    // dropped and the others keep their relative order.
+    const { data: laneRows, error: laneErr } = await sb
+      .from('client_priorities')
+      .select('id, client_id, position')
+      .eq('lane', target)
+      .order('position', { ascending: true })
+    if (laneErr) return fail(laneErr.message)
+    const others = ((laneRows as Array<{ id: string; client_id: string }> | null) ?? []).filter((r) => r.client_id !== clientId)
+    const at = Math.max(0, Math.min(position, others.length))
+    const ordered = [...others.slice(0, at).map((r) => r.id), existing?.id ?? 'new', ...others.slice(at).map((r) => r.id)]
+
+    const payload = { client_id: clientId, lane: target, position: ordered.indexOf(existing?.id ?? 'new') }
+    const { data, error } = existing
+      ? await sb.from('client_priorities').update(payload).eq('id', existing.id).select().single()
+      : await sb.from('client_priorities').insert(payload).select().single()
+    if (error) {
+      if (isMissingTable(error as { code?: string; message?: string }, 'client_priorities')) {
+        return fail('The priority board is not set up on this database yet. Run supabase/client-priority-board.sql in the Supabase SQL editor.')
+      }
+      return fail(error.message)
+    }
+
+    // Best-effort re-index of the neighbours; a failure only affects ordering.
+    await Promise.all(
+      ordered
+        .filter((rowId) => rowId !== (existing?.id ?? 'new'))
+        .map((rowId, i) => sb.from('client_priorities').update({ position: i }).eq('id', rowId)),
+    )
+    return ok(data as ClientPriority)
+  },
+
+  async resetClientPriorities() {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (!canDo(me.data!, 'priority_board.view')) return denied('use the client priority board')
+    const { error } = await client().from('client_priorities').delete().neq('id', '00000000-0000-0000-0000-000000000000')
+    if (error) {
+      if (isMissingTable(error as { code?: string; message?: string }, 'client_priorities')) return ok(null)
+      return fail(error.message)
+    }
+    return ok(null)
+  },
+
+  // ---- Meetings --------------------------------------------------------------
+  // supabase/meetings.sql owns the real boundary: the admin and workers
+  // granted `meetings.view` may read and change the schedule. A database
+  // that has not run the migration answers "relation does not exist";
+  // listing then reports an empty schedule instead of an error so the rest
+  // of the app degrades, and the writes explain exactly what to run.
+
+  async listMeetings() {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (!canDo(me.data!, 'meetings.view')) return denied('use the meetings section')
+    const { data, error } = await client()
+      .from('meetings')
+      .select('id, title, start_time, notes, created_at, updated_at')
+      .order('start_time', { ascending: true })
+    if (error) {
+      if (isMissingTable(error as { code?: string; message?: string }, 'meetings')) {
+        console.warn('[work-tracker] the meetings table is missing — run supabase/meetings.sql to enable the meetings section.')
+        return ok([] as Meeting[])
+      }
+      return fail(error.message)
+    }
+    // The page splits upcoming/past itself (its "now" is the viewer's clock).
+    return ok((data as Meeting[]) ?? [])
+  },
+
+  async createMeeting(input: CreateMeetingInput) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (!canDo(me.data!, 'meetings.view')) return denied('use the meetings section')
+    const title = input.title.trim()
+    if (!title) return fail('Give the meeting a title.')
+    if (title.length > 200) return fail('Meeting titles are limited to 200 characters.')
+    const start = new Date(input.start_time)
+    if (!Number.isFinite(start.getTime())) return fail('Pick a valid date and time.')
+    const { data, error } = await client()
+      .from('meetings')
+      .insert({ title, start_time: start.toISOString(), notes: input.notes?.trim() || null })
+      .select()
+      .single()
+    if (error) {
+      if (isMissingTable(error as { code?: string; message?: string }, 'meetings')) {
+        return fail('Meetings are not set up on this database yet. Run supabase/meetings.sql in the Supabase SQL editor.')
+      }
+      return fail(error.message)
+    }
+    return ok(data as Meeting)
+  },
+
+  async updateMeeting(id, patch) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (!canDo(me.data!, 'meetings.view')) return denied('use the meetings section')
+    const update: Record<string, unknown> = {}
+    if (patch.title !== undefined) {
+      const title = patch.title.trim()
+      if (!title) return fail('Give the meeting a title.')
+      update.title = title
+    }
+    if (patch.start_time !== undefined) {
+      const start = new Date(patch.start_time)
+      if (!Number.isFinite(start.getTime())) return fail('Pick a valid date and time.')
+      update.start_time = start.toISOString()
+    }
+    if (patch.notes !== undefined) update.notes = patch.notes?.trim() || null
+    const { data, error } = await client().from('meetings').update(update).eq('id', id).select().single()
+    if (error) {
+      if (isMissingTable(error as { code?: string; message?: string }, 'meetings')) {
+        return fail('Meetings are not set up on this database yet. Run supabase/meetings.sql in the Supabase SQL editor.')
+      }
+      return fail(error.message)
+    }
+    return ok(data as Meeting)
+  },
+
+  async deleteMeeting(id) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (!canDo(me.data!, 'meetings.view')) return denied('use the meetings section')
+    const { error } = await client().from('meetings').delete().eq('id', id)
     if (error) return fail(error.message)
     return ok(null)
   },
@@ -2111,7 +2375,7 @@ export const supabaseBackend: DataBackend = {
     if (me.error) return fail(me.error)
     if (me.data!.role !== 'admin') return fail('Only the admin can load sample data.')
     const sb = client()
-    const { workers, clients, entries, settings, financeItems } = (await import('./demoSeed')).buildDemoSeed()
+    const { workers, clients, entries, settings, financeItems, clientPriorities, meetings } = (await import('./demoSeed')).buildDemoSeed()
     const realIdBySeedId = new Map<string, string>()
     // Sample clients first, so the seeded entries can point at them.
     const clientIdBySeedId = new Map<string, string>()
@@ -2155,6 +2419,17 @@ export const supabaseBackend: DataBackend = {
         paid_at: f.paid_at,
         note: f.note,
       })
+    }
+    // Sample priority board — best effort: a database without the
+    // supabase/client-priority-board.sql migration simply keeps its board empty.
+    for (const p of clientPriorities ?? []) {
+      const seededClientId = clientIdBySeedId.get(p.client_id)
+      if (!seededClientId) continue
+      await sb.from('client_priorities').insert({ client_id: seededClientId, lane: p.lane, position: p.position })
+    }
+    // Sample meetings — best effort, same deal (supabase/meetings.sql).
+    for (const m of meetings ?? []) {
+      await sb.from('meetings').insert({ title: m.title, start_time: m.start_time, notes: m.notes })
     }
     return ok(null)
   },

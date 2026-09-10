@@ -68,6 +68,10 @@ export function SubscriptionFormDialog({
   const [cycle, setCycle] = useState<BillingCycle>('monthly')
   const [dueDate, setDueDate] = useState('')
   const [note, setNote] = useState('')
+  // Every subscription runs either until someone switches it off, or for a
+  // set number of bills — the choice is required, not implied.
+  const [limitMode, setLimitMode] = useState<'off' | 'count'>('off')
+  const [occurrences, setOccurrences] = useState('12')
   const [saving, setSaving] = useState(false)
   const amount = useAmountField(item?.amount ?? 0)
 
@@ -77,7 +81,16 @@ export function SubscriptionFormDialog({
     setCycle(item?.cycle ?? 'monthly')
     setDueDate(item?.due_date ?? '')
     setNote(item?.note ?? '')
+    setLimitMode(item?.max_occurrences != null ? 'count' : 'off')
+    setOccurrences(item?.max_occurrences != null ? String(item.max_occurrences) : '12')
   }, [open, item])
+
+  /** The parsed occurrence count, or null when the chosen limit is invalid. */
+  const occurrenceValue = (() => {
+    if (limitMode !== 'count') return null
+    const n = Number(occurrences)
+    return Number.isFinite(n) && n >= 1 && Math.floor(n) === n ? Math.floor(n) : null
+  })()
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -85,11 +98,22 @@ export function SubscriptionFormDialog({
     if (!label) return toast.error('Give the subscription a name.')
     if (amount.value === null) return toast.error('Enter the amount it bills.')
     if (!dueDate) return toast.error('Pick the next due date.')
+    if (limitMode === 'count' && occurrenceValue === null) {
+      return toast.error('Enter how many times it bills — a whole number of 1 or more.')
+    }
     setSaving(true)
     try {
+      const shared = {
+        name: label,
+        amount: amount.value,
+        cycle,
+        due_date: dueDate,
+        note: note.trim() || null,
+        max_occurrences: occurrenceValue,
+      }
       const res = item
-        ? await updateFinanceItem(item.id, { name: label, amount: amount.value, cycle, due_date: dueDate, note: note.trim() || null })
-        : await createFinanceItem({ kind: 'subscription', name: label, amount: amount.value, cycle, due_date: dueDate, note: note.trim() || null })
+        ? await updateFinanceItem(item.id, shared)
+        : await createFinanceItem({ kind: 'subscription', ...shared })
       if (!res) return
       toast.success(item ? 'Subscription updated.' : 'Subscription added.')
       onOpenChange(false)
@@ -130,6 +154,38 @@ export function SubscriptionFormDialog({
             <div className="grid gap-2">
               <Label htmlFor="sub-due">Next due</Label>
               <Input id="sub-due" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="sub-limit">Runs</Label>
+              <Select value={limitMode} onValueChange={(v) => setLimitMode(v as 'off' | 'count')}>
+                <SelectTrigger id="sub-limit"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="off">Until switched off</SelectItem>
+                  <SelectItem value="count">For a set number of bills</SelectItem>
+                </SelectContent>
+              </Select>
+              {limitMode === 'count' ? (
+                <div className="flex items-center gap-2">
+                  <Input
+                    id="sub-occurrences"
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={occurrences}
+                    onChange={(e) => setOccurrences(e.target.value)}
+                    className="w-24"
+                    aria-label="How many times it bills"
+                  />
+                  <span className="text-xs text-muted-foreground">
+                    {occurrenceValue === 1 ? 'time, then it pauses itself' : 'times, then it pauses itself'}
+                    {item && item.billed_count > 0 ? ` — billed ${item.billed_count} so far` : ''}
+                  </span>
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  It keeps billing on its cycle until you pause it.
+                </p>
+              )}
             </div>
             <div className="grid gap-2">
               <Label htmlFor="sub-note">Note (optional)</Label>
