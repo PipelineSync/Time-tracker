@@ -34,6 +34,7 @@ import {
   FINANCE_KINDS,
   PERMISSIONS,
   TEAM_VIEW_PERMISSIONS,
+  ALL_ENTRIES_VIEW_PERMISSIONS,
   normalizePermissions,
   TASK_STATUSES,
   UNASSIGNED_CLIENT_NAME,
@@ -516,6 +517,15 @@ function canSeeTeam(c: { user: AuthUser }): boolean {
   return TEAM_VIEW_PERMISSIONS.some((p) => can(c, p))
 }
 
+/**
+ * Can this account read every worker's time entries? `reports.view` counts as
+ * well as `entries.view_all`: a report is drawn from the team's entries, so
+ * handing someone Reports means handing them the team's time (read-only).
+ */
+function canSeeAllEntries(c: { user: AuthUser }): boolean {
+  return ALL_ENTRIES_VIEW_PERMISSIONS.some((p) => can(c, p))
+}
+
 /** Standard refusal, phrased for a worker who was not granted the capability. */
 function denied(what: string) {
   return { data: null, error: `You do not have permission to ${what}.` }
@@ -846,7 +856,10 @@ export const localBackend: DataBackend = {
   async listEntries(opts) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
-    let rows = !can(c, 'entries.view_all')
+    // Scoped to the worker's own rows unless they read the whole team's time
+    // — either outright (`entries.view_all`) or because they were granted
+    // Reports, which is built out of everyone's entries (`reports.view`).
+    let rows = !canSeeAllEntries(c)
       ? c.data.entries.filter((e) => e.worker_id === c.user.workerId)
       : c.data.entries
     // Incremental sync: rows created or updated since the last sync.
@@ -863,7 +876,7 @@ export const localBackend: DataBackend = {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
     let rows = c.data.entries.filter((e) => e.start_time <= before)
-    if (!can(c, 'entries.view_all')) rows = rows.filter((e) => e.worker_id === c.user.workerId)
+    if (!canSeeAllEntries(c)) rows = rows.filter((e) => e.worker_id === c.user.workerId)
     rows = [...rows].sort((a, b) => b.start_time.localeCompare(a.start_time))
     return { data: rows.slice(0, limit), error: null }
   },

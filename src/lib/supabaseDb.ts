@@ -20,7 +20,7 @@ import type {
   Permission,
   FinanceItem,
 } from './types'
-import { CLIENT_PRIORITY_LANES, DEFAULT_SLACK_SETTINGS, DEFAULT_CLIENT_COLOR, PERMISSIONS, TEAM_VIEW_PERMISSIONS, normalizePermissions } from './types'
+import { CLIENT_PRIORITY_LANES, DEFAULT_SLACK_SETTINGS, DEFAULT_CLIENT_COLOR, PERMISSIONS, TEAM_VIEW_PERMISSIONS, ALL_ENTRIES_VIEW_PERMISSIONS, normalizePermissions } from './types'
 import type { BackendResult, DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, CreateFinanceItemInput, CreateMeetingInput } from './backend'
 import { ACCOUNT_DEACTIVATED_MESSAGE } from './backend'
 import {
@@ -447,6 +447,16 @@ function canDo(user: AuthUser, permission: Permission): boolean {
 /** Anyone who sees team-wide data also needs the names behind it. */
 function canSeeTeam(user: AuthUser): boolean {
   return TEAM_VIEW_PERMISSIONS.some((p) => canDo(user, p))
+}
+
+/**
+ * Can this account read every worker's time entries? `reports.view` counts as
+ * well as `entries.view_all`: a report is drawn from the team's entries, so
+ * handing someone Reports means handing them the team's time (read-only).
+ * The `time_entries` RLS policy allows the same two keys.
+ */
+function canSeeAllEntries(user: AuthUser): boolean {
+  return ALL_ENTRIES_VIEW_PERMISSIONS.some((p) => canDo(user, p))
 }
 
 /** Standard refusal for a worker who was not granted the capability. */
@@ -1075,11 +1085,12 @@ export const supabaseBackend: DataBackend = {
   async listEntries(opts) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    // Scoped to the worker's own rows unless they hold entries.view_all
-    // (the admin, and anyone the admin granted the team-wide read).
+    // Scoped to the worker's own rows unless they hold the team-wide read
+    // (the admin, anyone granted `entries.view_all`, and anyone granted
+    // `reports.view` — a report is built out of everyone's entries).
     const build = (columns: string) => {
       let q = client().from('time_entries').select(columns)
-      if (!canDo(me.data!, 'entries.view_all') && me.data!.workerId) q = q.eq('worker_id', me.data!.workerId)
+      if (!canSeeAllEntries(me.data!) && me.data!.workerId) q = q.eq('worker_id', me.data!.workerId)
       // Incremental sync: only rows created or updated since the last sync.
       // (updated_at is kept current by the set_updated_at trigger.)
       if (opts?.since) q = q.or(`created_at.gte.${opts.since},updated_at.gte.${opts.since}`)
@@ -1095,7 +1106,7 @@ export const supabaseBackend: DataBackend = {
     if (me.error) return fail(me.error)
     const build = (columns: string) => {
       let q = client().from('time_entries').select(columns).lte('start_time', before)
-      if (!canDo(me.data!, 'entries.view_all') && me.data!.workerId) q = q.eq('worker_id', me.data!.workerId)
+      if (!canSeeAllEntries(me.data!) && me.data!.workerId) q = q.eq('worker_id', me.data!.workerId)
       return q.order('start_time', { ascending: false }).limit(limit)
     }
     return selectEntries(build)

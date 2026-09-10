@@ -62,11 +62,13 @@ The individual capabilities are **View** / **Manage** pairs per area:
 | Payments & settlements *(inside Finance → Payroll)* | `payments.view_all` — the team's payments | `payments.manage` — settle, mark paid, delete |
 | Finance | `finance.view` — the subscriptions / payroll / due-dates ledger | `finance.manage` — add, edit, mark paid, delete finance lines |
 | Finance (granular) | `finance.subscription` — read access, the app shows only the **Subscriptions** tab · `finance.payroll` — read access, only the **Payroll** tab *(mutually exclusive in the Access form)* | — |
-| Reports | `reports.view` — charts + CSV export | — |
+| Reports | `reports.view` — charts + CSV export *(also grants `entries.view_all`: the team's time is what the report is computed from)* | — |
 | Clients | — | `clients.manage` — add, rename, retire clients |
 | Settings | — | `settings.manage` — business details, currency, default rate, Slack |
 
 Granting **any** team-wide view (dashboard, time, tasks, payments, finance or reports) also lets that worker read the **worker list** — rows about other people are meaningless without the names — while the **Workers page** itself only appears with `workers.view`.
+
+Granting **Reports** is a grant to report on the **whole team**, not on yourself: reports are computed from `time_entries`, so ticking *View reports and export CSV* also ticks *View the whole team's time* (`entries.view_all`) — and unticking the time read takes Reports with it. (Both backends and the `time_entries` RLS policy treat the two keys the same way, so a worker whose Reports grant predates this still gets the full report. Run `supabase/RUN-THIS-reports-view-sees-all-entries.sql` on an existing database to widen the policy there.)
 
 The **Access** list is **searchable** — type in its search box (e.g. "board", "time", "finance") to narrow hundreds of toggles' worth of areas down to the one you mean.
 
@@ -83,7 +85,7 @@ It is enforced in three places, not just the UI: the **app** hides what you cann
 - **Manual entry** *(admin)* — date, start/end time, break, project, notes, auto-calculated hours & earnings (this is how the admin adds time to workers)
 - **Time Entries** — table on desktop / cards on mobile, filters (**client**, worker, date range, **settled / unsettled**), sorting; each row shows the **client** it was booked to (entries logged before clients existed keep their old free-text scope); admin can edit/delete/duplicate, workers see their own. Entries that a settlement paid for carry a **Settled** badge and stay here as history; the summary line also shows the **unsettled** earnings still waiting to be paid out
 - **Notes / chat on entries** — every entry has a conversation thread: workers add notes, the admin replies (and vice versa), both sides are notified
-- **Reports** *(admin)* — today/week/month/custom range, totals & averages, charts (including **Hours by client**, drawn in each client's colour, plus an *Hours & earnings per client* breakdown), **CSV export** (the detailed rows carry the client)
+- **Reports** *(admin, and any worker granted Reports — they get the whole team's numbers, not just their own)* — today/week/month/custom range, totals & averages, charts (including **Hours by client**, drawn in each client's colour, plus an *Hours & earnings per client* breakdown), **CSV export** (the detailed rows carry the client)
 - **Settings** *(admin)* — business name, currency, timezone, default rate, theme, export & delete all data
 - **Settings → Profile** *(worker)* — workers upload their own **profile picture** from their account settings. The picture is saved to their worker profile and shows up **for the admin** next to their name on the Workers page, the Dashboard and the "On the clock now" panel — not just a bare name.
 - **Settings → Payment methods** *(worker)* — each worker chooses how they can be paid: **Cash**, **QR Code**, or both. Enabling **QR Code** requires uploading their QR code image (a screenshot/photo of their GCash, Maya, banking-app, etc. QR — the image is automatically downscaled before saving). The methods and QR image are saved on the worker's profile.
@@ -202,6 +204,8 @@ This creates the `workers`, `time_entries`, `active_timers`, `settings`, `paymen
 > For the **Finance** section, run **`supabase/finance.sql`** once. It creates the `finance_items` ledger (subscriptions, per-worker monthly payroll and one-off bills, all with due dates) with RLS that keeps it **admin-only**: a worker can read it only with `finance.view` and write only with `finance.manage`, both off by default. If the per-worker-permissions migration below has not been applied yet, the table is simply locked to the admin; re-run this file after it. Fresh installs get everything from `schema.sql`. Safe to re-run. Until it is applied the app still runs — the Finance section just reports an empty ledger. On an **existing** database this migration also widens the `workers` permission allow-list: run it **before granting the Finance tick boxes** on the Workers page, otherwise saving reports that the Finance access was skipped (everything else still saves).
 >
 > For **per-worker access** (letting the admin grant individual admin capabilities to individual workers), run **`supabase/worker-permissions.sql`** once. It adds `workers.permissions` (a validated `text[]`), the `public.has_permission(text)` helper, and widens the RLS policies on workers, time entries, timers, payments, tasks, clients, settings and entry comments with one extra "…or I hold this capability" branch each. Fresh installs get it from `schema.sql`. Safe to re-run. Until it is applied the app still runs — everyone keeps the classic admin/worker split, and saving the Access tick boxes reports that the migration is needed.
+>
+> For **Reports that cover the whole team**, run **`supabase/RUN-THIS-reports-view-sees-all-entries.sql`** once on an **existing** database. It widens the `time_entries` read policy so a worker the admin granted **Reports** (`reports.view`) reads **everyone's** entries — reports are computed from them, so without it their Reports page is only a report of themselves — and adds `entries.view_all` to any worker row that already had Reports ticked. Fresh installs get the same policy from `schema.sql`. Safe to re-run.
 >
 > For the **Tasks** kanban board, run **`supabase/RUN-THIS-tasks.sql`** once (a copy-paste-ready version of `supabase/tasks.sql`, with a verification query at the end). It creates the `tasks` table (stage, priority, due date, board position) with RLS policies that let a **worker see and manage only their own cards** while the **admin has access to every worker's tasks**. Fresh installs get this automatically from `schema.sql`. It is safe to re-run: if you applied an earlier version with only three stages, re-running it widens the stage constraint to include **Waiting** and **Approval**.
 >
@@ -370,6 +374,7 @@ time-tracker/
 ├─ supabase/finance-granular-access.sql # One-time migration: View subscriptions / View payroll keys
 ├─ supabase/personal-finance.sql        # One-time migration: Personal Tracker (owner-only row)
 ├─ supabase/RUN-THIS-clients-and-permissions.sql   # Copy-paste bundle of the two migrations above
+├─ supabase/RUN-THIS-reports-view-sees-all-entries.sql  # Copy-paste migration: Reports = the whole team's entries (+ backfill)
 ├─ src/
 │  ├─ lib/                      # types, utils, stats, backend (local + supabase), store, theme
 │  │                          # + platform.ts (shell detection), native.ts (Capacitor bootstrap), useInstallPrompt.ts

@@ -1220,7 +1220,12 @@ create policy "time_entries_select" on public.time_entries
   for select using (
     (select auth.uid()) = user_id
     or worker_id = (select public.current_worker_id())
-    or (user_id = (select public.workspace_owner_id()) and (select public.has_permission('entries.view_all')))
+    -- The team-wide time read: granted outright (`entries.view_all`) or
+    -- through Reports (`reports.view`) — a report is built out of everyone's
+    -- entries, so reporting on the team needs the team's rows.
+    or (user_id = (select public.workspace_owner_id())
+        and ((select public.has_permission('entries.view_all'))
+             or (select public.has_permission('reports.view'))))
   );
 
 drop policy if exists "time_entries_insert" on public.time_entries;

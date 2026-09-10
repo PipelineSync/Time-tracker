@@ -7,6 +7,16 @@ import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
 import { ChevronDown, Search, ShieldCheck, X } from 'lucide-react'
 
+/** "Time entries — View the whole team's time", for the note on a grant that
+ *  reaches into another area (Reports needs it, so ticking Reports ticks it). */
+function permissionLabel(permission: Permission): string {
+  for (const group of PERMISSION_GROUPS) {
+    const item = group.items.find((i) => i.key === permission)
+    if (item) return `${group.label} — ${item.label}`
+  }
+  return permission
+}
+
 /**
  * The "Access" section of the add/edit worker form: which of the admin's
  * capabilities this worker gets. Everything is off by default — a worker with
@@ -146,26 +156,39 @@ export function WorkerPermissionsField({
                   <div className="mt-2 space-y-1.5">
                     {group.items.map((item) => {
                       const blocked = Boolean(item.requires && !active.includes(item.requires))
+                      // A grant that drags in a capability from another area
+                      // (Reports → the team-wide time read) says so out loud:
+                      // otherwise the other toggle lights up on its own with
+                      // no visible reason, and switching that one off silently
+                      // takes this one with it.
+                      const outsideParent =
+                        item.requires && !group.items.some((i) => i.key === item.requires) ? item.requires : null
                       const id = `perm-${item.key.replace('.', '-')}`
                       return (
-                        <div
-                          key={item.key}
-                          className={cn('flex items-center justify-between gap-3', item.requires && 'pl-4')}
-                        >
-                          <Label
-                            htmlFor={id}
-                            title={item.hint}
-                            className={cn('text-[13px] font-normal leading-snug', blocked && 'text-muted-foreground')}
+                        <div key={item.key}>
+                          <div
+                            className={cn('flex items-center justify-between gap-3', item.requires && 'pl-4')}
                           >
-                            {item.label}
-                          </Label>
-                          <Switch
-                            id={id}
-                            className="shrink-0"
-                            checked={active.includes(item.key)}
-                            disabled={disabled || blocked}
-                            onCheckedChange={(on) => toggle(item.key, on)}
-                          />
+                            <Label
+                              htmlFor={id}
+                              title={item.hint}
+                              className={cn('text-[13px] font-normal leading-snug', blocked && 'text-muted-foreground')}
+                            >
+                              {item.label}
+                            </Label>
+                            <Switch
+                              id={id}
+                              className="shrink-0"
+                              checked={active.includes(item.key)}
+                              disabled={disabled || blocked}
+                              onCheckedChange={(on) => toggle(item.key, on)}
+                            />
+                          </div>
+                          {outsideParent && (
+                            <p className="mt-0.5 pl-4 text-[11px] leading-snug text-muted-foreground">
+                              Also grants “{permissionLabel(outsideParent)}” — this one is built out of it.
+                            </p>
+                          )}
                         </div>
                       )
                     })}

@@ -184,6 +184,21 @@ export const TEAM_VIEW_PERMISSIONS: Permission[] = [
   'reports.view',
 ]
 
+/**
+ * Capabilities that let an account read *every* worker's time entries rather
+ * than only its own. `reports.view` is one of them: a report is built out of
+ * the team's entries, so a report access that only ever reported on yourself
+ * would be a self-report, not the team report the admin meant to hand out.
+ * (Both backends and — with Supabase — the `time_entries` RLS policy check
+ * the same pair.)
+ */
+export const ALL_ENTRIES_VIEW_PERMISSIONS: Permission[] = ['entries.view_all', 'reports.view']
+
+/** Does this permission set read every worker's time entries? */
+export function canViewAllEntries(permissions: Permission[] | null | undefined): boolean {
+  return ALL_ENTRIES_VIEW_PERMISSIONS.some((p) => (permissions ?? []).includes(p))
+}
+
 /** Grouped for the "Access" section of the worker form. */
 export interface PermissionGroup {
   key: string
@@ -269,7 +284,16 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
     label: 'Reports',
     description: 'Charts and CSV export.',
     items: [
-      { key: 'reports.view', label: 'View reports and export CSV', hint: 'Hours and earnings across the team, per worker and per client.' },
+      {
+        key: 'reports.view',
+        label: 'View reports and export CSV',
+        hint: 'Hours and earnings across the whole team, per worker and per client — not just their own. Reports are built from everyone’s time, so this also opens the team-wide time entries read.',
+        // A report of the team is only possible if the team's entries can be
+        // read; without this the Reports page would just be their own numbers
+        // again. Ticking Reports therefore ticks the team-wide time read too,
+        // and unticking that one takes Reports with it.
+        requires: 'entries.view_all',
+      },
     ],
   },
   {

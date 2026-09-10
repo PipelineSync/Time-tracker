@@ -29,7 +29,7 @@ import type {
   Permission,
   FinanceItem,
 } from './types'
-import { PERMISSIONS, normalizePermissions } from './types'
+import { PERMISSIONS, normalizePermissions, canViewAllEntries } from './types'
 import type { DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, BackendResult, CreateFinanceItemInput, CreateMeetingInput } from './backend'
 import { localBackend } from './localDb'
 import { supabaseBackend, isSupabaseConfigured, ACCOUNT_DEACTIVATED_MESSAGE } from './supabaseDb'
@@ -289,6 +289,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     (permission: Permission) => isAdmin || permissions.includes(permission),
     [isAdmin, permissions],
   )
+  // Read inside refreshData: the entry window depends on the grants, but the
+  // grants must not become a dependency of refreshData itself (the worker
+  // list it refetches feeds them, which would refresh forever).
+  const permissionsRef = useRef(permissions)
+  useEffect(() => { permissionsRef.current = permissions }, [permissions])
 
   // Only active clients may be picked for new work; inactive ones stay in
   // `clients` so existing tasks, entries and reports keep their label.
@@ -325,7 +330,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const token = ++dataVersion.current
     setDataLoading(true)
     try {
-      const windowSize = userRef.current?.role === 'worker' ? ENTRIES_WINDOW_WORKER : ENTRIES_WINDOW_ADMIN
+      // A worker who can read the whole team's time — outright
+      // (`entries.view_all`) or through Reports (`reports.view`) — needs the
+      // bigger window too: their reports and entries cover everyone, and the
+      // small "just my own last few months" window would silently truncate
+      // the team's numbers.
+      const seesAllEntries = userRef.current?.role === 'admin' || canViewAllEntries(permissionsRef.current)
+      const windowSize = !seesAllEntries && userRef.current?.role === 'worker' ? ENTRIES_WINDOW_WORKER : ENTRIES_WINDOW_ADMIN
       // Captured BEFORE the query: rows updated after this instant are picked
       // up by the next delta; duplicates are harmless (merged by id).
       const syncTime = new Date().toISOString()
