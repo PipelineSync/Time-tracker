@@ -87,7 +87,9 @@ declare
   v_write_check text;
 begin
   if to_regprocedure('public.has_permission(text)') is not null then
-    v_read_check  := '(select public.has_permission(''finance.view''))';
+    -- finance.view opens the whole ledger; the granular keys open the same
+    -- rows (the app shows a granular viewer only their own tab).
+    v_read_check  := '((select public.has_permission(''finance.view'')) or (select public.has_permission(''finance.subscription'')) or (select public.has_permission(''finance.payroll'')))';
     v_write_check := '(select public.has_permission(''finance.manage''))';
   else
     -- No per-worker permissions yet: only the workspace owner reads/writes.
@@ -168,10 +170,14 @@ begin
         'entries.manage',
         'tasks.view_all',
         'tasks.manage_all',
+        'priority_board.view',
+        'meetings.view',
         'payments.view_all',
         'payments.manage',
         'finance.view',
         'finance.manage',
+        'finance.subscription',
+        'finance.payroll',
         'reports.view',
         'clients.manage',
         'settings.manage'
@@ -193,6 +199,8 @@ begin
           or public.has_permission('tasks.view_all')
           or public.has_permission('payments.view_all')
           or public.has_permission('finance.view')
+          or public.has_permission('finance.subscription')
+          or public.has_permission('finance.payroll')
           or public.has_permission('reports.view');
     $f$;
     grant execute on function public.has_team_view() to authenticated;

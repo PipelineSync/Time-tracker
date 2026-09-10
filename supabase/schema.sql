@@ -1117,6 +1117,8 @@ alter table public.workers add constraint workers_permissions_valid check (
     'payments.manage',
     'finance.view',
     'finance.manage',
+    'finance.subscription',
+    'finance.payroll',
     'reports.view',
     'clients.manage',
     'settings.manage'
@@ -1165,6 +1167,8 @@ as $$
       or public.has_permission('tasks.view_all')
       or public.has_permission('payments.view_all')
       or public.has_permission('finance.view')
+      or public.has_permission('finance.subscription')
+      or public.has_permission('finance.payroll')
       or public.has_permission('reports.view');
 $$;
 
@@ -1467,10 +1471,17 @@ alter table public.finance_items enable row level security;
 -- it with finance.manage. Both are off by default, so the section is
 -- admin-only until the admin grants them.
 drop policy if exists "finance_items_select" on public.finance_items;
+-- Read: the admin, or a worker holding finance.view (the whole ledger) or one
+-- of the granular view keys (the app shows them only their tab; the row-level
+-- policy cannot split the ledger per tab, so granular viewers may read rows
+-- their UI hides — the UI, not the database, is the tab gate).
 create policy "finance_items_select" on public.finance_items
   for select using (
     ((select auth.uid()) = user_id and (select public.is_admin()))
-    or (user_id = (select public.workspace_owner_id()) and (select public.has_permission('finance.view')))
+    or (user_id = (select public.workspace_owner_id())
+        and (select public.has_permission('finance.view')
+             or public.has_permission('finance.subscription')
+             or public.has_permission('finance.payroll')))
   );
 
 drop policy if exists "finance_items_insert" on public.finance_items;

@@ -61,6 +61,7 @@ The individual capabilities are **View** / **Manage** pairs per area:
 | Meetings | `meetings.view` — see and run the team's meeting schedule | *(the view is the whole section — scheduling saves for everyone)* |
 | Payments & settlements *(inside Finance → Payroll)* | `payments.view_all` — the team's payments | `payments.manage` — settle, mark paid, delete |
 | Finance | `finance.view` — the subscriptions / payroll / due-dates ledger | `finance.manage` — add, edit, mark paid, delete finance lines |
+| Finance (granular) | `finance.subscription` — read access, the app shows only the **Subscriptions** tab · `finance.payroll` — read access, only the **Payroll** tab *(mutually exclusive in the Access form)* | — |
 | Reports | `reports.view` — charts + CSV export | — |
 | Clients | — | `clients.manage` — add, rename, retire clients |
 | Settings | — | `settings.manage` — business details, currency, default rate, Slack |
@@ -70,6 +71,8 @@ Granting **any** team-wide view (dashboard, time, tasks, payments, finance or re
 The **Access** list is **searchable** — type in its search box (e.g. "board", "time", "finance") to narrow hundreds of toggles' worth of areas down to the one you mean.
 
 What a grant changes: the **navigation** gains that destination (and "My Time"/"My Tasks" become the team-wide "Time Entries"/"Tasks"), the **route** starts resolving, and the matching buttons appear. Nothing else about the person changes — a granted worker still clocks in and out like everyone else, and only the admin can wipe the workspace or load sample data.
+
+**Where the list lives.** The capability vocabulary is defined once in `src/lib/types.ts` (`PERMISSIONS`) and is *duplicated by hand* in two places that cannot import app source: the database's allow-list (`supabase/schema.sql`, the `workers_permissions_valid` check) and the worker-creation Netlify Function (`netlify/functions/create-worker.ts`). When you add a capability, update all three — a key missing from the Function's list is silently dropped when a worker is created, and a key missing from the database check makes the tick box report that the migration is needed.
 
 It is enforced in three places, not just the UI: the **app** hides what you cannot do, both **backends** refuse the call, and on Supabase the **Row Level Security policies check the same keys** (`public.has_permission('…')`), so a granted worker's rows really are readable and an ungranted one's request is rejected by the database itself. Changing someone's access takes effect on their next data sync — no sign-out needed. Note that `workers.manage` is the powerful one: like the admin, whoever can edit workers can also change what other workers may do. See `supabase/worker-permissions.sql`.
 
@@ -208,6 +211,8 @@ This creates the `workers`, `time_entries`, `active_timers`, `settings`, `paymen
 > For the **Client priority board**, run **`supabase/client-priority-board.sql`** once. It creates the `client_priorities` table (which column + rank each ranked client sits in, one row per client) with RLS that keeps the board **admin-only until the admin grants a worker `priority_board.view`**, and widens the `workers` permission allow-list with that key. Requires the Clients and per-worker-permissions migrations. Fresh installs get it from `schema.sql`. Safe to re-run. Until it is applied the app still runs — the board just reports empty, and saving the tick box reports that the migration is needed.
 >
 > For the **Meetings** section, run **`supabase/meetings.sql`** once. It creates the `meetings` table (title, start time, notes) with RLS that keeps the schedule **admin-only until the admin grants a worker `meetings.view`**, and widens the `workers` permission allow-list with that key. Requires the per-worker-permissions migration. Fresh installs get it from `schema.sql`. Safe to re-run. Until it is applied the app still runs — the section just reports an empty schedule, and saving the tick box reports that the migration is needed.
+>
+> For the **granular Finance access** (the "View subscriptions" / "View payroll" tick boxes on the Access form), run **`supabase/finance-granular-access.sql`** once on an **existing** database. Fresh installs already honour both keys from `schema.sql` — on an old database without this file the tick boxes save, but the worker's Subscriptions/Payroll tab would show no data (the ledger's read policy doesn't know the key yet). Safe to re-run.
 
 ---
 
