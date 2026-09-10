@@ -97,6 +97,7 @@ It is enforced in three places, not just the UI: the **app** hides what you cann
   - Access is enforced in the backend *and* at the database level with Row Level Security — see `supabase/tasks.sql`.
 - **Client priority board** *(admin-only until granted — see `priority_board.view`)* — one shared board that ranks the **clients** (not tasks): four fixed columns — **Priority (Me)**, **Priority (Delegated)**, **Waiting for Update** and **Low Priority** — with every **active** client as a card. **Drag between columns** to set the client's stage, **drag up or down inside a column** to rank it (top = highest priority); each drop **saves automatically**. Cards are colour-accented per column and show the client's colour dot; phones get the same **‹ › ↑ ↓** buttons as the Tasks board instead of dragging. Clients with no explicit rank sit at the **bottom of Low Priority (A→Z)**, so a brand-new client lands on the board by itself, and **Reset board** puts every client back to that state (the clients themselves are never changed). A granted worker sees and runs the **very same board** as the admin — columns and ranks are shared workspace-wide. See `supabase/client-priority-board.sql`.
 - **Meetings** *(admin-only until granted — see `meetings.view`)* — the team's **meeting schedule** in one agenda: **Upcoming** (soonest first, with a **Today** badge on the current day) and **Past** (newest first, greyed). Deliberately basic: a **title**, **when it starts** (date + time pickers; a new meeting defaults to the next full hour) and **optional notes**. Anyone with the section can schedule, edit, reschedule or delete — changes save for everyone the section is open to. A granted worker sees and manages the **very same schedule** as the admin. See `supabase/meetings.sql`.
+- **Personal Tracker** *(every signed-in user, strictly private)* — reached from the account menu (**"Switch to Personal Tracker"**), a separate personal-finance workspace that has nothing to do with the team's data: bank/e-wallet **accounts** (with starting balances and archiving), **income / expense / transfer** entries with categories, income sources, due-day **recurring payments** (marking one paid creates the expense automatically), **reconciliation** (set the real balance of an account; the difference folds into its starting balance), and a **reports** view with filters, per-category breakdown and CSV export. Amounts follow the workspace currency when one is set in Settings, otherwise default to PHP. Each account's data is one row the owner alone can read or write (RLS, `supabase/personal-finance.sql`); it is stored in the browser as well, so the tracker still opens offline and a failed cloud read shows a "last saved data" banner instead of silently serving stale balances.
 - **Auth** — sign in with admin or worker credentials. Only the admin can create worker login accounts.
 - **Change password** — available from the account menu (top-right) for both roles: enter your current password and a new one. Admins can also **reset a worker's password** from the Workers page. In demo mode the new password is set directly; with Supabase, a password reset link is emailed to the worker (the anon key cannot set another user's password).
 
@@ -213,6 +214,8 @@ This creates the `workers`, `time_entries`, `active_timers`, `settings`, `paymen
 > For the **Meetings** section, run **`supabase/meetings.sql`** once. It creates the `meetings` table (title, start time, notes) with RLS that keeps the schedule **admin-only until the admin grants a worker `meetings.view`**, and widens the `workers` permission allow-list with that key. Requires the per-worker-permissions migration. Fresh installs get it from `schema.sql`. Safe to re-run. Until it is applied the app still runs — the section just reports an empty schedule, and saving the tick box reports that the migration is needed.
 >
 > For the **granular Finance access** (the "View subscriptions" / "View payroll" tick boxes on the Access form), run **`supabase/finance-granular-access.sql`** once on an **existing** database. Fresh installs already honour both keys from `schema.sql` — on an old database without this file the tick boxes save, but the worker's Subscriptions/Payroll tab would show no data (the ledger's read policy doesn't know the key yet). Safe to re-run.
+>
+> For the **Personal Tracker** (account menu → "Switch to Personal Tracker"), run **`supabase/personal-finance.sql`** once. It creates the `personal_finance_data` table — one strictly private row per account (RLS: owner only). Fresh installs get it from `schema.sql`. Until it is applied the tracker still works from browser storage, but saving reports that the table is missing.
 
 ---
 
@@ -348,13 +351,17 @@ time-tracker/
 ├─ supabase/meetings.sql             # One-time migration: meetings schedule (+ RLS)
 ├─ supabase/finance-subscription-occurrences.sql   # One-time migration: subscription occurrence limits
 ├─ supabase/worker-permissions.sql      # One-time migration: per-worker admin capabilities (+ RLS)
+├─ supabase/finance-granular-access.sql # One-time migration: View subscriptions / View payroll keys
+├─ supabase/personal-finance.sql        # One-time migration: Personal Tracker (owner-only row)
 ├─ supabase/RUN-THIS-clients-and-permissions.sql   # Copy-paste bundle of the two migrations above
 ├─ src/
 │  ├─ lib/                      # types, utils, stats, backend (local + supabase), store, theme
 │  │                          # + platform.ts (shell detection), native.ts (Capacitor bootstrap), useInstallPrompt.ts
+│  │                          # + personalFinance.ts (Personal Tracker data layer — owner-only)
 │  ├─ components/               # shared UI + app components (shadcn-style), incl. AvatarBubble
 │  │                          # + PaymentsPanel.tsx (Finance → Payroll) + InstallAppCard.tsx (Settings → “Get the app”)
 │  ├─ pages/                    # Dashboard, Tracker, Entries, Tasks, Workers, Reports, Settings, Finance, Auth
+│  │                          # + PersonalFinancePage.tsx (the private Personal Tracker)
 │  ├─ App.tsx                   # Routing + auth gate (HashRouter inside native shells)
 │  └─ main.tsx                  # mounts app, registers the PWA service worker (browser shells only)
 ├─ ios/                         # Capacitor iOS project (Xcode) — App Store / TestFlight
