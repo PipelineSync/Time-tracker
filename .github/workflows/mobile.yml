@@ -82,7 +82,7 @@ jobs:
             -PversionName=${{ steps.version.outputs.name }}
 
       - name: Upload Android artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: android-${{ github.ref_name }}
           path: |
@@ -189,7 +189,7 @@ jobs:
             -exportPath build/ipa -exportOptionsPlist ExportOptions.plist
 
       - name: Upload iOS artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ios-${{ github.ref_name }}
           path: |
