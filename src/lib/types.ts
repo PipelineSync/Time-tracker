@@ -133,6 +133,7 @@ export type Permission =
   | 'entries.manage'
   | 'tasks.view_all'
   | 'tasks.manage_all'
+  | 'priority_board.view'
   | 'payments.view_all'
   | 'payments.manage'
   | 'finance.view'
@@ -151,6 +152,7 @@ export const PERMISSIONS: Permission[] = [
   'entries.manage',
   'tasks.view_all',
   'tasks.manage_all',
+  'priority_board.view',
   'payments.view_all',
   'payments.manage',
   'finance.view',
@@ -222,6 +224,14 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
     items: [
       { key: 'tasks.view_all', label: "View everyone's board", hint: 'Otherwise they only see the tasks assigned to them.' },
       { key: 'tasks.manage_all', label: "Assign and edit anyone's tasks", hint: 'Create tasks for other workers, move, edit and delete their cards.', requires: 'tasks.view_all' },
+    ],
+  },
+  {
+    key: 'priority_board',
+    label: 'Client priority board',
+    description: "The admin's board for ranking clients.",
+    items: [
+      { key: 'priority_board.view', label: 'Use the client priority board', hint: 'See every active client on the priority board and drag them between columns and ranks. The board is admin-only until this is ticked.' },
     ],
   },
   {
@@ -528,6 +538,49 @@ export interface Client {
   name: string
   color: ClientColor
   status: ClientStatus
+  created_at: string
+  updated_at: string
+}
+
+// ---- Client priority board --------------------------------------------------
+
+/**
+ * The fixed columns of the client priority board. A client sits in exactly one
+ * of them; within a column, smaller position = higher priority (top of the
+ * column).
+ */
+export type ClientPriorityLane = 'me' | 'delegated' | 'waiting' | 'low'
+
+export const CLIENT_PRIORITY_LANES: ClientPriorityLane[] = ['me', 'delegated', 'waiting', 'low']
+
+export const ClientPriorityLaneNames: Record<ClientPriorityLane, string> = {
+  me: 'Priority (Me)',
+  delegated: 'Priority (Delegated)',
+  waiting: 'Waiting for Update',
+  low: 'Low Priority',
+}
+
+/** Column accent classes — mirrors the TaskStatus column dots. */
+export const ClientPriorityLaneStyles: Record<ClientPriorityLane, { dot: string; accent: string; ring: string }> = {
+  me: { dot: 'bg-red-500', accent: 'border-l-red-500', ring: 'ring-red-400/40' },
+  delegated: { dot: 'bg-amber-500', accent: 'border-l-amber-500', ring: 'ring-amber-500/40' },
+  waiting: { dot: 'bg-blue-500', accent: 'border-l-blue-500', ring: 'ring-blue-500/40' },
+  low: { dot: 'bg-emerald-500', accent: 'border-l-emerald-500', ring: 'ring-emerald-500/40' },
+}
+
+/**
+ * One client's place on the priority board: which column and how highly ranked
+ * inside it. A client with no row is simply unranked — it renders at the
+ * bottom of "Low Priority" (A→Z) until someone drags it, so brand-new clients
+ * land on the board automatically and "Reset board" is just "delete every
+ * row". One row per client, owned by the workspace like everything else.
+ */
+export interface ClientPriority {
+  id: string
+  client_id: string
+  lane: ClientPriorityLane
+  /** Manual ordering inside the column (smaller sorts first, 0 = top). */
+  position: number
   created_at: string
   updated_at: string
 }

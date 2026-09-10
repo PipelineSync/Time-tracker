@@ -17,6 +17,7 @@ const WorkersPage = lazy(() => import('@/pages/WorkersPage').then((m) => ({ defa
 const ReportsPage = lazy(() => import('@/pages/ReportsPage').then((m) => ({ default: m.ReportsPage })))
 const SettingsPage = lazy(() => import('@/pages/SettingsPage').then((m) => ({ default: m.SettingsPage })))
 const TasksPage = lazy(() => import('@/pages/TasksPage').then((m) => ({ default: m.TasksPage })))
+const ClientPriorityBoardPage = lazy(() => import('@/pages/ClientPriorityBoardPage').then((m) => ({ default: m.ClientPriorityBoardPage })))
 const FinancePage = lazy(() => import('@/pages/FinancePage').then((m) => ({ default: m.FinancePage })))
 const PersonalFinancePage = lazy(() => import('@/pages/PersonalFinancePage').then((m) => ({ default: m.PersonalFinancePage })))
 
@@ -58,6 +59,9 @@ export function App() {
           <Route path="/entries" element={<EntriesPage />} />
           {/* Kanban board — workers see their own tasks, the admin sees all. */}
           <Route path="/tasks" element={<TasksPage />} />
+          {/* The client priority board — admin-only until the admin grants
+              `priority_board.view` to a worker, exactly like the screens above. */}
+          {can('priority_board.view') && <Route path="/priority-board" element={<ClientPriorityBoardPage />} />}
           <Route path="/settings" element={<SettingsPage />} />
 
           {/* The standalone Payments section now lives inside Finance → Payroll;

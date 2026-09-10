@@ -15,6 +15,8 @@ import type {
   Task,
   TaskStatus,
   Client,
+  ClientPriority,
+  ClientPriorityLane,
   Permission,
   FinanceItem,
   FinanceKind,
@@ -240,6 +242,28 @@ export interface DataBackend {
    */
   moveTask(id: string, status: TaskStatus, position: number): Promise<BackendResult<Task>>
   deleteTask(id: string): Promise<BackendResult<null>>
+
+  /**
+   * The client priority board's rows (which column + rank each ranked client
+   * sits in). The admin and workers granted `priority_board.view` read it;
+   * everyone else — and any database without the client-priority-board
+   * migration — gets an empty list so the rest of the app never notices.
+   * Clients without a row are unranked: the UI shows them at the bottom of
+   * the Low Priority column.
+   */
+  listClientPriorities(): Promise<BackendResult<ClientPriority[]>>
+  /**
+   * Drag & drop on the priority board: put `clientId` into `lane` at index
+   * `position` of that lane's ranked cards. The backend owns the re-indexing
+   * and stamps updated_at. Allowed for the admin and granted workers only.
+   */
+  moveClientPriority(clientId: string, lane: ClientPriorityLane, position: number): Promise<BackendResult<ClientPriority>>
+  /**
+   * Reset the board: delete every priority row so every client goes back to
+   * unranked (bottom of Low Priority, A→Z). The clients themselves — names,
+   * colours, active/inactive — are untouched.
+   */
+  resetClientPriorities(): Promise<BackendResult<null>>
 
   resetAll(): Promise<BackendResult<null>>
   seedDemo(): Promise<BackendResult<null>>

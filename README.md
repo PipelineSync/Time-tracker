@@ -57,6 +57,7 @@ The individual capabilities are **View** / **Manage** pairs per area:
 | Workers | `workers.view` — the team list & rates | `workers.manage` — add/edit/delete workers, reset their passwords |
 | Time entries | `entries.view_all` — everyone's time | `entries.manage` — add/edit/delete any entry |
 | Tasks | `tasks.view_all` — everyone's board | `tasks.manage_all` — assign, move, edit and delete anyone's cards |
+| Client priority board | `priority_board.view` — see and run the shared client priority board | *(the view is the whole board — dragging saves for everyone)* |
 | Payments & settlements *(inside Finance → Payroll)* | `payments.view_all` — the team's payments | `payments.manage` — settle, mark paid, delete |
 | Finance | `finance.view` — the subscriptions / payroll / due-dates ledger | `finance.manage` — add, edit, mark paid, delete finance lines |
 | Reports | `reports.view` — charts + CSV export | — |
@@ -88,6 +89,7 @@ It is enforced in three places, not just the UI: the **app** hides what you cann
   - **Workers** can add tasks, but only ever for **themselves**, and they only ever see, move, edit, and delete **their own** tasks.
   - The **admin** can add a task for **any** worker and sees **every** worker's cards on one board (each card names its owner), and additionally gets a **worker filter** and a **stage filter** (with a *Clear filters* button) to narrow the board down to one person, one stage, or both. When the admin assigns a task, the worker gets a notification.
   - Access is enforced in the backend *and* at the database level with Row Level Security — see `supabase/tasks.sql`.
+- **Client priority board** *(admin-only until granted — see `priority_board.view`)* — one shared board that ranks the **clients** (not tasks): four fixed columns — **Priority (Me)**, **Priority (Delegated)**, **Waiting for Update** and **Low Priority** — with every **active** client as a card. **Drag between columns** to set the client's stage, **drag up or down inside a column** to rank it (top = highest priority); each drop **saves automatically**. Cards are colour-accented per column and show the client's colour dot; phones get the same **‹ › ↑ ↓** buttons as the Tasks board instead of dragging. Clients with no explicit rank sit at the **bottom of Low Priority (A→Z)**, so a brand-new client lands on the board by itself, and **Reset board** puts every client back to that state (the clients themselves are never changed). A granted worker sees and runs the **very same board** as the admin — columns and ranks are shared workspace-wide. See `supabase/client-priority-board.sql`.
 - **Auth** — sign in with admin or worker credentials. Only the admin can create worker login accounts.
 - **Change password** — available from the account menu (top-right) for both roles: enter your current password and a new one. Admins can also **reset a worker's password** from the Workers page. In demo mode the new password is set directly; with Supabase, a password reset link is emailed to the worker (the anon key cannot set another user's password).
 
@@ -196,6 +198,8 @@ This creates the `workers`, `time_entries`, `active_timers`, `settings`, `paymen
 > For the **Tasks** kanban board, run **`supabase/RUN-THIS-tasks.sql`** once (a copy-paste-ready version of `supabase/tasks.sql`, with a verification query at the end). It creates the `tasks` table (stage, priority, due date, board position) with RLS policies that let a **worker see and manage only their own cards** while the **admin has access to every worker's tasks**. Fresh installs get this automatically from `schema.sql`. It is safe to re-run: if you applied an earlier version with only three stages, re-running it widens the stage constraint to include **Waiting** and **Approval**.
 >
 > For **Slack notifications** (clock in / out, breaks, payments posted to a Slack channel), run `supabase/slack-notifications.sql` once. It creates the admin-only `slack_settings` table (webhook URL + per-event toggles). Then connect the webhook in **Settings → Slack** — see the *Slack notifications* section under Features. Fresh installs get this automatically from `schema.sql`.
+>
+> For the **Client priority board**, run **`supabase/client-priority-board.sql`** once. It creates the `client_priorities` table (which column + rank each ranked client sits in, one row per client) with RLS that keeps the board **admin-only until the admin grants a worker `priority_board.view`**, and widens the `workers` permission allow-list with that key. Requires the Clients and per-worker-permissions migrations. Fresh installs get it from `schema.sql`. Safe to re-run. Until it is applied the app still runs — the board just reports empty, and saving the tick box reports that the migration is needed.
 
 ---
 
@@ -327,6 +331,7 @@ time-tracker/
 ├─ supabase/tasks.sql           # One-time migration: Tasks kanban board (+ per-role RLS)
 ├─ supabase/finance.sql         # One-time migration: Finance ledger (subs, payroll, due dates)
 ├─ supabase/clients.sql         # One-time migration: Clients master list + client_id backfill
+├─ supabase/client-priority-board.sql    # One-time migration: client priority board (+ RLS)
 ├─ supabase/worker-permissions.sql      # One-time migration: per-worker admin capabilities (+ RLS)
 ├─ supabase/RUN-THIS-clients-and-permissions.sql   # Copy-paste bundle of the two migrations above
 ├─ src/

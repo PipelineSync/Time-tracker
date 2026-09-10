@@ -27,10 +27,11 @@
     "verify:clients": "tsx scripts/verify-clients-local.ts",
     "verify:finance": "tsx scripts/verify-finance-local.ts",
     "verify:permissions": "tsx scripts/verify-permissions-local.ts && tsx scripts/verify-permissions-supabase.ts",
+    "verify:priority-board": "tsx scripts/verify-priority-board-local.ts",
     "verify:session": "tsx scripts/verify-session-supabase.ts",
     "verify:entries-sync": "tsx scripts/verify-entries-sync-local.ts",
     "verify:slack": "tsx scripts/verify-slack-local.ts && tsx scripts/verify-slack-function.ts",
-    "verify": "npm run verify:deletion && npm run verify:active-workers && npm run verify:settle && npm run verify:session && npm run verify:entries-sync && npm run verify:clients && npm run verify:finance && npm run verify:permissions && npm run verify:slack",
+    "verify": "npm run verify:deletion && npm run verify:active-workers && npm run verify:settle && npm run verify:session && npm run verify:entries-sync && npm run verify:clients && npm run verify:finance && npm run verify:permissions && npm run verify:priority-board && npm run verify:slack",
     "tauri": "tauri"
   },
   "dependencies": {

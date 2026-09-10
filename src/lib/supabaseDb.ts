@@ -14,10 +14,12 @@ import type {
   Task,
   TaskStatus,
   Client,
+  ClientPriority,
+  ClientPriorityLane,
   Permission,
   FinanceItem,
 } from './types'
-import { DEFAULT_SLACK_SETTINGS, DEFAULT_CLIENT_COLOR, PERMISSIONS, TEAM_VIEW_PERMISSIONS, normalizePermissions } from './types'
+import { CLIENT_PRIORITY_LANES, DEFAULT_SLACK_SETTINGS, DEFAULT_CLIENT_COLOR, PERMISSIONS, TEAM_VIEW_PERMISSIONS, normalizePermissions } from './types'
 import type { BackendResult, DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, CreateFinanceItemInput } from './backend'
 import { ACCOUNT_DEACTIVATED_MESSAGE } from './backend'
 import {
@@ -39,6 +41,10 @@ const PERMISSIONS_MIGRATION_MESSAGE =
 /** Shown when the database's permission allow-list predates supabase/finance.sql. */
 const FINANCE_PERMISSIONS_MIGRATION_MESSAGE =
   'Finance access was not saved: run supabase/finance.sql in the Supabase SQL editor — it widens the allowed permission keys with the finance.* access. Everything else was saved.'
+
+/** Shown when the database's permission allow-list predates the priority board. */
+const PRIORITY_BOARD_PERMISSIONS_MIGRATION_MESSAGE =
+  'Priority board access was not saved: run supabase/client-priority-board.sql in the Supabase SQL editor — it widens the allowed permission keys with priority_board.view. Everything else was saved.'
 
 /** Postgres raises 23514 when the workers_permissions_valid check rejects a key. */
 function isPermissionsCheckViolation(error: { code?: string; message?: string } | null): boolean {
@@ -942,6 +948,12 @@ export const supabaseBackend: DataBackend = {
       const legacy = normalizePermissions(rest.permissions.filter((p) => !p.startsWith('finance.')))
       upd = await client().from('workers').update({ ...rest, permissions: legacy }).eq('id', id).select().single()
       if (!upd.error) return fail(FINANCE_PERMISSIONS_MIGRATION_MESSAGE)
+    }
+    if (upd.error && isPermissionsCheckViolation(upd.error) && rest.permissions?.includes('priority_board.view')) {
+      // Same story for the priority board key (supabase/client-priority-board.sql).
+      const legacy = normalizePermissions(rest.permissions.filter((p) => p !== 'priority_board.view'))
+      upd = await client().from('workers').update({ ...rest, permissions: legacy }).eq('id', id).select().single()
+      if (!upd.error) return fail(PRIORITY_BOARD_PERMISSIONS_MIGRATION_MESSAGE)
     }
     if (upd.error && isMissingColumn(upd.error, 'permissions') && rest.permissions) {
       // Database without supabase/worker-permissions.sql: save everything else
@@ -1914,6 +1926,98 @@ export const supabaseBackend: DataBackend = {
     return ok(null)
   },
 
+  // ---- Client priority board ------------------------------------------------
+  // supabase/client-priority-board.sql owns the real boundary: the admin and
+  // workers granted `priority_board.view` may read and change the rows. A
+  // database that has not run the migration answers "relation does not
+  // exist"; listing then reports an empty board instead of an error so the
+  // rest of the app degrades, and the writes explain exactly what to run.
+
+  async listClientPriorities() {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (!canDo(me.data!, 'priority_board.view')) return denied('use the client priority board')
+    const { data, error } = await client()
+      .from('client_priorities')
+      .select('id, client_id, lane, position, created_at, updated_at')
+      .order('position', { ascending: true })
+    if (error) {
+      if (isMissingTable(error as { code?: string; message?: string }, 'client_priorities')) {
+        console.warn('[work-tracker] the client_priorities table is missing — run supabase/client-priority-board.sql to enable the priority board.')
+        return ok([] as ClientPriority[])
+      }
+      return fail(error.message)
+    }
+    // Anything unknown (e.g. a hand-edited row) falls back to Low Priority.
+    return ok(
+      ((data as ClientPriority[]) ?? []).map((p) => ({
+        ...p,
+        lane: (CLIENT_PRIORITY_LANES.includes(p.lane) ? p.lane : 'low') as ClientPriorityLane,
+        position: Number.isFinite(p.position) ? p.position : 0,
+      })),
+    )
+  },
+
+  async moveClientPriority(clientId, lane, position) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (!canDo(me.data!, 'priority_board.view')) return denied('use the client priority board')
+    const target = CLIENT_PRIORITY_LANES.includes(lane) ? lane : 'low'
+    const sb = client()
+    // The client's current row, if it has one (one row per client).
+    const { data: current, error: readErr } = await sb
+      .from('client_priorities')
+      .select('id')
+      .eq('client_id', clientId)
+      .maybeSingle()
+    if (readErr && !isMissingTable(readErr as { code?: string; message?: string }, 'client_priorities')) return fail(readErr.message)
+    if (readErr) return fail('The priority board is not set up on this database yet. Run supabase/client-priority-board.sql in the Supabase SQL editor.')
+    const existing = (current as { id: string } | null) ?? null
+
+    // Re-number the destination lane so the card lands exactly where it was
+    // dropped and the others keep their relative order.
+    const { data: laneRows, error: laneErr } = await sb
+      .from('client_priorities')
+      .select('id, client_id, position')
+      .eq('lane', target)
+      .order('position', { ascending: true })
+    if (laneErr) return fail(laneErr.message)
+    const others = ((laneRows as Array<{ id: string; client_id: string }> | null) ?? []).filter((r) => r.client_id !== clientId)
+    const at = Math.max(0, Math.min(position, others.length))
+    const ordered = [...others.slice(0, at).map((r) => r.id), existing?.id ?? 'new', ...others.slice(at).map((r) => r.id)]
+
+    const payload = { client_id: clientId, lane: target, position: ordered.indexOf(existing?.id ?? 'new') }
+    const { data, error } = existing
+      ? await sb.from('client_priorities').update(payload).eq('id', existing.id).select().single()
+      : await sb.from('client_priorities').insert(payload).select().single()
+    if (error) {
+      if (isMissingTable(error as { code?: string; message?: string }, 'client_priorities')) {
+        return fail('The priority board is not set up on this database yet. Run supabase/client-priority-board.sql in the Supabase SQL editor.')
+      }
+      return fail(error.message)
+    }
+
+    // Best-effort re-index of the neighbours; a failure only affects ordering.
+    await Promise.all(
+      ordered
+        .filter((rowId) => rowId !== (existing?.id ?? 'new'))
+        .map((rowId, i) => sb.from('client_priorities').update({ position: i }).eq('id', rowId)),
+    )
+    return ok(data as ClientPriority)
+  },
+
+  async resetClientPriorities() {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (!canDo(me.data!, 'priority_board.view')) return denied('use the client priority board')
+    const { error } = await client().from('client_priorities').delete().neq('id', '00000000-0000-0000-0000-000000000000')
+    if (error) {
+      if (isMissingTable(error as { code?: string; message?: string }, 'client_priorities')) return ok(null)
+      return fail(error.message)
+    }
+    return ok(null)
+  },
+
   // ---- Tasks (kanban board) ----------------------------------------------
   // RLS (supabase/tasks.sql) is the real boundary: a worker can only select /
   // insert / update / delete rows whose worker_id is their own, the admin owns
@@ -2111,7 +2215,7 @@ export const supabaseBackend: DataBackend = {
     if (me.error) return fail(me.error)
     if (me.data!.role !== 'admin') return fail('Only the admin can load sample data.')
     const sb = client()
-    const { workers, clients, entries, settings, financeItems } = (await import('./demoSeed')).buildDemoSeed()
+    const { workers, clients, entries, settings, financeItems, clientPriorities } = (await import('./demoSeed')).buildDemoSeed()
     const realIdBySeedId = new Map<string, string>()
     // Sample clients first, so the seeded entries can point at them.
     const clientIdBySeedId = new Map<string, string>()
@@ -2155,6 +2259,13 @@ export const supabaseBackend: DataBackend = {
         paid_at: f.paid_at,
         note: f.note,
       })
+    }
+    // Sample priority board — best effort: a database without the
+    // supabase/client-priority-board.sql migration simply keeps its board empty.
+    for (const p of clientPriorities ?? []) {
+      const seededClientId = clientIdBySeedId.get(p.client_id)
+      if (!seededClientId) continue
+      await sb.from('client_priorities').insert({ client_id: seededClientId, lane: p.lane, position: p.position })
     }
     return ok(null)
   },

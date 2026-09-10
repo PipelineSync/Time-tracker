@@ -18,6 +18,8 @@ import type {
   Client,
   ClientColor,
   ClientStatus,
+  ClientPriority,
+  ClientPriorityLane,
   Permission,
   FinanceItem,
   FinanceKind,
@@ -26,6 +28,7 @@ import type {
 } from './types'
 import {
   CLIENT_COLORS,
+  CLIENT_PRIORITY_LANES,
   DEFAULT_CLIENT_COLOR,
   DEFAULT_SLACK_SETTINGS,
   FINANCE_KINDS,
@@ -67,6 +70,11 @@ interface UserData {
   tasks: Task[]
   /** Client master list (admin-managed, see the Tasks page → Clients). */
   clients: Client[]
+  /**
+   * The client priority board's rows — which column + rank each ranked client
+   * sits in. Clients without a row here are unranked (bottom of Low Priority).
+   */
+  clientPriorities: ClientPriority[]
   /** Finance ledger: subscriptions, payroll runs and bills (see the Finance page). */
   financeItems: FinanceItem[]
 }
@@ -99,7 +107,7 @@ function writeUsers(users: StoredUser[]) {
 }
 
 function emptyData(): UserData {
-  return { workers: [], entries: [], activeTimers: [], settings: null, comments: [], notifications: [], payments: [], tasks: [], clients: [], financeItems: [] }
+  return { workers: [], entries: [], activeTimers: [], settings: null, comments: [], notifications: [], payments: [], tasks: [], clients: [], clientPriorities: [], financeItems: [] }
 }
 
 /** The method the admin paid a settlement with, or null when unknown/invalid. */
@@ -211,6 +219,44 @@ function clientName(d: UserData, clientId: string | null | undefined): string | 
   return d.clients.find((c) => c.id === clientId)?.name ?? null
 }
 
+// ---- Client priority board --------------------------------------------------
+// One row per ranked client: which column (`lane`) and how high (`position`,
+// smaller = higher). Clients without a row are unranked — the UI shows them at
+// the bottom of Low Priority — so "reset the board" is just "delete every
+// row", and brand-new clients appear on the board automatically.
+
+/** Valid board column, defaulting anything unknown/legacy to Low Priority. */
+function normalizeClientPriorityLane(lane: unknown): ClientPriorityLane {
+  return CLIENT_PRIORITY_LANES.includes(lane as ClientPriorityLane) ? (lane as ClientPriorityLane) : 'low'
+}
+
+/** Normalize a priority row loaded from storage (or the demo seed). */
+function normalizeClientPriority(p: ClientPriority): ClientPriority {
+  return {
+    ...p,
+    lane: normalizeClientPriorityLane(p.lane),
+    position: Number.isFinite(p.position) ? p.position : 0,
+  }
+}
+
+/** Board order within a lane: by position, then newest first as a tiebreaker. */
+function sortClientPriorities(rows: ClientPriority[]): ClientPriority[] {
+  return [...rows].sort((a, b) => a.position - b.position || b.updated_at.localeCompare(a.updated_at))
+}
+
+/**
+ * Re-number one lane so `clientId` sits at `index` and every other ranked
+ * client keeps its relative order with a gap-free position.
+ */
+function reindexClientPriorityLane(rows: ClientPriority[], lane: ClientPriorityLane, clientId: string, index: number) {
+  const laneRows = sortClientPriorities(rows.filter((p) => p.lane === lane && p.client_id !== clientId))
+  const moved = rows.find((p) => p.client_id === clientId)
+  if (!moved) return
+  const at = Math.max(0, Math.min(index, laneRows.length))
+  laneRows.splice(at, 0, moved)
+  laneRows.forEach((p, i) => { p.position = i })
+}
+
 // ---- Finance ledger ---------------------------------------------------------
 // One list of due-dated lines (subscription / payroll / bill). Rows are owned
 // by the admin workspace like everything else; `finance.view` opens the read,
@@ -317,6 +363,14 @@ function readData(userId: string): UserData {
   d.payments = d.payments || []
   d.tasks = (d.tasks || []).map(normalizeTask)
   d.clients = (d.clients || []).map(normalizeClient)
+  // Workspaces saved before the priority board simply load with no client
+  // ranked — everything sits unranked at the bottom of Low Priority.
+  d.clientPriorities = (d.clientPriorities || []).map(normalizeClientPriority)
+  // A client that was deleted should not keep a phantom place on the board.
+  const clientIds = new Set(d.clients.map((c) => c.id))
+  const beforePrune = d.clientPriorities.length
+  d.clientPriorities = d.clientPriorities.filter((p) => clientIds.has(p.client_id))
+  if (d.clientPriorities.length !== beforePrune) d.clientPriorities = d.clientPriorities.map((p) => ({ ...p }))
   // Workspaces saved before the Finance section simply load an empty ledger.
   d.financeItems = (d.financeItems || []).map(normalizeFinanceItem)
   d.entries = d.entries.map((e) => ({ ...e, client_id: e.client_id ?? null }))
@@ -1495,6 +1549,49 @@ export const localBackend: DataBackend = {
       return { data: null, error: 'This client is used by existing tasks or time entries. Mark it inactive instead.' }
     }
     c.data.clients = c.data.clients.filter((x) => x.id !== id)
+    // The board is derived from the master list — a deleted client loses its place.
+    c.data.clientPriorities = c.data.clientPriorities.filter((p) => p.client_id !== id)
+    save(c.data)
+    return { data: null, error: null }
+  },
+
+  // ---- Client priority board ----------------------------------------------
+  // One board for the whole workspace. The admin runs it by default; a worker
+  // the admin granted `priority_board.view` sees and drags the very same
+  // board. Clients without a row are unranked (bottom of Low Priority), so
+  // new clients land on the board by themselves and reset = delete all rows.
+
+  async listClientPriorities() {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (!can(c, 'priority_board.view')) return denied('use the client priority board')
+    return { data: sortClientPriorities(c.data.clientPriorities), error: null }
+  },
+
+  async moveClientPriority(clientId, lane, position) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (!can(c, 'priority_board.view')) return denied('use the client priority board')
+    if (!c.data.clients.some((x) => x.id === clientId)) return { data: null, error: 'Client not found.' }
+    const target = normalizeClientPriorityLane(lane)
+    const now = new Date().toISOString()
+    let row = c.data.clientPriorities.find((p) => p.client_id === clientId)
+    if (!row) {
+      row = { id: uid(), client_id: clientId, lane: target, position: 0, created_at: now, updated_at: now }
+      c.data.clientPriorities.push(row)
+    }
+    row.lane = target
+    row.updated_at = now
+    reindexClientPriorityLane(c.data.clientPriorities, target, clientId, position)
+    save(c.data)
+    return { data: row, error: null }
+  },
+
+  async resetClientPriorities() {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (!can(c, 'priority_board.view')) return denied('use the client priority board')
+    c.data.clientPriorities = []
     save(c.data)
     return { data: null, error: null }
   },
@@ -1666,6 +1763,11 @@ export const localBackend: DataBackend = {
       payments: [],
       tasks: [],
       clients: seedClients,
+      clientPriorities: (seed.clientPriorities ?? []).map((p) => ({
+        ...p,
+        client_id: seedClientMap.get(p.client_id) ?? p.client_id,
+        id: uid(),
+      })),
       financeItems: seed.financeItems.map((f) => ({
         ...f,
         worker_id: f.worker_id ? idMap.get(f.worker_id) ?? null : null,

@@ -1,4 +1,4 @@
-import type { Worker, TimeEntry, Settings, Client, Task, FinanceItem } from './types'
+import type { Worker, TimeEntry, Settings, Client, ClientPriority, Task, FinanceItem } from './types'
 import { PERMISSION_PRESETS } from './types'
 import { toISODate } from './finance'
 import { uid } from './utils'
@@ -268,7 +268,16 @@ export function buildDemoSeed() {
     },
   ]
 
-  return { workers, clients, entries, tasks, settings, financeItems }
+  // A starting ranking so the Client priority board is populated in demo
+  // mode. Only some clients are ranked on purpose: Internal stays unranked at
+  // the bottom of Low Priority, the way a real board looks mid-week.
+  const clientPriorities: ClientPriority[] = [
+    { id: 'cp-seed-1', client_id: 'c-seed-1', lane: 'me', position: 0, created_at: daysAgo(9).toISOString(), updated_at: daysAgo(9).toISOString() },
+    { id: 'cp-seed-2', client_id: 'c-seed-2', lane: 'delegated', position: 0, created_at: daysAgo(9).toISOString(), updated_at: daysAgo(7).toISOString() },
+    { id: 'cp-seed-3', client_id: 'c-seed-3', lane: 'waiting', position: 0, created_at: daysAgo(6).toISOString(), updated_at: daysAgo(6).toISOString() },
+  ]
+
+  return { workers, clients, entries, tasks, settings, financeItems, clientPriorities }
 }
 
 // Re-export uid for convenience
