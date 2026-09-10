@@ -66,7 +66,6 @@ export function MeetingFormDialog({
       const parts = localParts(seed)
       setForm({ title: '', date: parts.date, time: parts.time, notes: '' })
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, meeting, defaultDate])
 
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>

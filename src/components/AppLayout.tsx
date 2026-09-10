@@ -83,10 +83,12 @@ function buildNav(isAdmin: boolean, can: (p: Permission) => boolean): NavItem[] 
   // Payments now live in Finance → Payroll. Workers always get in (their own
   // payment history sits in the Payroll tab); the extra tabs and the ledger
   // appear only once the admin grants Finance access (off by default).
-  // Show finance nav if worker has subscription or payroll access; otherwise show payroll tab.
-  const hasFinanceSubscription = can('finance.subscription')
-  const hasFinancePayroll = can('finance.payroll')
-  if (hasFinanceSubscription || hasFinancePayroll) {
+  // The full Finance item appears for anyone the admin gave a Finance view —
+  // finance.view (the whole ledger, which also covers finance.manage because
+  // the store normalizes manage → view) or the granular subscription/payroll
+  // keys. Everyone else gets the honest "Payroll" item (their own payments).
+  const hasFinance = can('finance.view') || can('finance.subscription') || can('finance.payroll')
+  if (hasFinance) {
     items.push(NAV.finance)
   } else {
     items.push(NAV.payroll)
@@ -97,8 +99,28 @@ function buildNav(isAdmin: boolean, can: (p: Permission) => boolean): NavItem[] 
   return items
 }
 
+/**
+ * Demo-mode badge. Demo mode stores everything (including passwords, in
+ * plaintext) in THIS browser only; the sign-in screen warns about it, but a
+ * persistent badge here stops anyone mistaking local demo data for the
+ * workspace's real data while actually using the app.
+ */
+function DemoModeBadge({ onNavy }: { onNavy?: boolean }) {
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+        onNavy ? 'bg-amber-300/15 text-amber-300' : 'bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300'
+      }`}
+      title="Demo mode: data lives only in this browser (no Supabase configured at build time)."
+    >
+      Demo mode
+    </span>
+  )
+}
+
 export function AppLayout() {
-  const { user, signOut, isAdmin, can, workers, settings } = useStore()
+  const { user, signOut, isAdmin, can, workers, settings, backend } = useStore()
+  const isDemo = backend.kind === 'local'
   const { setTheme } = useTheme()
   const navigate = useNavigate()
   const navItems = useMemo(() => buildNav(isAdmin, can), [isAdmin, can])
@@ -196,6 +218,11 @@ export function AppLayout() {
           ))}
         </nav>
         <div className="border-t border-white/10 px-4 py-3">
+          {isDemo && (
+            <div className="mb-2 flex justify-center">
+              <DemoModeBadge onNavy />
+            </div>
+          )}
           <div className="flex items-center gap-2">
             <div className="min-w-0 flex-1">{UserMenu}</div>
             <div className="flex shrink-0 items-center gap-1 rounded-lg bg-white/5 p-1">
@@ -209,7 +236,10 @@ export function AppLayout() {
       <header className="sticky top-0 z-30 border-b border-border bg-background/95 backdrop-blur lg:hidden">
         <div className="pt-safe">
           <div className="flex h-14 items-center justify-between px-4">
-            <BrandLogo className="h-6" />
+            <div className="flex min-w-0 items-center gap-2">
+              <BrandLogo className="h-6 shrink-0" />
+              {isDemo && <DemoModeBadge />}
+            </div>
             <div className="flex items-center gap-1">
               <NotificationsBell />
               <ThemeToggle />

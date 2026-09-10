@@ -1,7 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import {
   Building2,
-  ListOrdered,
   GripVertical,
   ChevronUp,
   ChevronDown,

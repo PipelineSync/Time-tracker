@@ -1,9 +1,14 @@
-import { adminClient, json, requireCapability } from './lib/supabase'
+import { json, requireCapability } from './lib/supabase'
 
 /**
  * Admin capabilities that may be granted to a worker. Kept in step with
- * Permission in src/lib/types.ts (duplicated rather than imported so the
+ * PERMISSIONS in src/lib/types.ts (duplicated rather than imported so the
  * function bundle stays independent of the app source).
+ *
+ * ⚠️ Single source of truth is src/lib/types.ts — when a capability is added
+ * there, add it here too. A key missing from this list is silently dropped
+ * by cleanPermissions() below, so a worker created through this function
+ * would lose the grant without any warning.
  */
 const PERMISSIONS = [
   'dashboard.view',
@@ -13,13 +18,17 @@ const PERMISSIONS = [
   'entries.manage',
   'tasks.view_all',
   'tasks.manage_all',
+  'priority_board.view',
+  'meetings.view',
   'payments.view_all',
   'payments.manage',
+  'finance.view',
+  'finance.manage',
+  'finance.subscription',
+  'finance.payroll',
   'reports.view',
   'clients.manage',
   'settings.manage',
-  'finance.view',
-  'finance.manage',
 ] as const
 
 /** Never trust the client with the grant list — keep only known keys. */

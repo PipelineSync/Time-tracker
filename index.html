@@ -23,31 +23,10 @@
       content="PipelineSync Work Tracker — track worker hours, breaks, notes and payments on web, iPhone, Android and desktop."
     />
 
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <!-- Inter is self-hosted via @fontsource (see src/main.tsx) — no
+         cross-origin font requests at runtime. -->
     <title>PipelineSync — Work Tracker</title>
-    <script>
-      // Apply the saved theme before first paint so installed apps and dark
-      // mode never flash white on launch.
-      ;(function () {
-        try {
-          var stored = localStorage.getItem('wt_theme')
-          var dark =
-            stored === 'dark' ||
-            (stored !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches)
-          document.documentElement.classList.add(dark ? 'dark' : 'light')
-          // Seasonal skin, applied before first paint so the festive palette
-          // never flashes in as the bundle boots. This pre-paint hint is
-          // always added; if the build disabled the theme
-          // (VITE_CHRISTMAS_THEME=off) the app removes the class on mount —
-          // see src/lib/theme.tsx.
-          document.documentElement.classList.add('christmas')
-        } catch (e) {
-          /* private mode: default to light */
-        }
-      })()
-    </script>
+    <script src="/theme-init.js"></script>
   </head>
   <body>
     <div id="root"></div>

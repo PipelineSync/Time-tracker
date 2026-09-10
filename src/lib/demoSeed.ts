@@ -67,7 +67,6 @@ export function buildDemoSeed() {
 
   const daysAgo = (n: number) => new Date(Date.now() - n * day)
 
-  const nowIso = () => new Date().toISOString()
 
   // Sarah doubles as the permissions demo: the admin has given her the
   // Supervisor set, so signing in as her shows the team board and team time

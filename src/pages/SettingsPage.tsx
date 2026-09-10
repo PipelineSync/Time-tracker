@@ -19,7 +19,7 @@ import { imageFileToDataUrl, isImageFile } from '@/lib/image'
 import type { PaymentMethod } from '@/lib/types'
 
 export function SettingsPage() {
-  const { settings, saveSettings, resetAllData, workers, entries, backend, user, isAdmin, can, updateOwnProfile, updateOwnPaymentMethods } = useStore()
+  const { settings, saveSettings, resetAllData, workers, entries, user, isAdmin, can, updateOwnProfile, updateOwnPaymentMethods } = useStore()
   // Business settings can be handed to a worker; wiping the workspace cannot.
   const canManageSettings = can('settings.manage')
   const { theme, setTheme } = useTheme()
@@ -30,7 +30,7 @@ export function SettingsPage() {
   const [saving, setSaving] = useState(false)
   const [avatar, setAvatar] = useState(settings?.avatar_url || '')
   const [confirmReset, setConfirmReset] = useState(false)
-  const [resetting, setResetting] = useState(false)
+  const [, setResetting] = useState(false)
   const avatarInputRef = useRef<HTMLInputElement | null>(null)
 
   // Admin account picture. Downscaled through the same helper as worker

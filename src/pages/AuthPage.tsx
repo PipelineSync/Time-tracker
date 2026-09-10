@@ -104,6 +104,10 @@ export function AuthPage() {
                     type="checkbox"
                     checked={showPassword}
                     onChange={(e) => setShowPassword(e.target.checked)}
+                    /* accent-[#0868D9]: brand blue, kept constant on purpose —
+                       checkbox accents are tiny and don't need to re-skin with
+                       the seasonal theme (same reasoning as the navy action
+                       buttons, see src/lib/brand.ts). */
                     className="h-4 w-4 rounded border-border accent-[#0868D9]"
                   />
                   Show password

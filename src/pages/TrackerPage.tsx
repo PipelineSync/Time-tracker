@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useStore } from '@/lib/store'
 import { PageHeader } from '@/components/PageHeader'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -10,9 +10,10 @@ import { ClockInDialog } from '@/components/ClockInDialog'
 import { SwitchClientDialog } from '@/components/SwitchClientDialog'
 import { toast } from 'sonner'
 import { Square, Pause, PlayCircle, LogIn, TimerReset, Repeat } from 'lucide-react'
-import { formatMinutes, money, timerElapsedMs, timerSessionStart } from '@/lib/utils'
+import { formatMinutes, money, timerBreakMs, timerElapsedMs, timerSessionStart } from '@/lib/utils'
 import { ClientColorStyles } from '@/lib/types'
 import { cn } from '@/lib/utils'
+import { BRAND_ACTION_BUTTON } from '@/lib/brand'
 
 /**
  * Worker-only clock in / break / clock out screen.
@@ -28,7 +29,6 @@ export function TrackerPage() {
   const [clockInOpen, setClockInOpen] = useState(false)
   const [switchOpen, setSwitchOpen] = useState(false)
   const [switching, setSwitching] = useState(false)
-  const [now, setNow] = useState(Date.now())
 
   const workerProfile = user?.workerId ? workers.find((w) => w.id === user.workerId) : null
   const currentWorkerId = user?.workerId ?? null
@@ -40,12 +40,10 @@ export function TrackerPage() {
   // even pretends to work.
   const noActiveClients = activeClients.length === 0
 
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(t)
-  }, [])
-
-  const elapsedMs = myTimer ? timerElapsedMs(myTimer, new Date(now)) : 0
+  // The running readout ticks itself (TimerDisplay owns the 1 s interval);
+  // the page only re-computes this for the clock-out dialog's label, which
+  // is fine at page-render frequency.
+  const elapsedMs = myTimer ? timerElapsedMs(myTimer, new Date()) : 0
 
   /** The client from this worker's most recent shift — the clock-in default. */
   const lastClientId = useMemo(() => {
@@ -148,12 +146,8 @@ export function TrackerPage() {
   }
 
   const running = !!myTimer && !myTimer.paused
-  const paused = !!myTimer && myTimer.paused
 
-  const breakMs = myTimer
-    ? (myTimer.total_pause_ms || 0) +
-      (myTimer.paused && myTimer.pause_start ? Math.max(0, now - new Date(myTimer.pause_start).getTime()) : 0)
-    : 0
+  const breakMs = myTimer ? timerBreakMs(myTimer, new Date()) : 0
 
   // The client this shift is currently booked to, shown at the top of the card.
   const currentClient = myTimer?.client_id ? clients.find((c) => c.id === myTimer.client_id) ?? null : null
@@ -194,7 +188,7 @@ export function TrackerPage() {
           </CardHeader>
           <CardContent className="flex flex-col items-center space-y-6">
             <div className="rounded-2xl bg-primary/5 px-10 py-8">
-              <TimerDisplay ms={elapsedMs} running={running} />
+              <TimerDisplay timer={myTimer} />
             </div>
             <p className="text-sm text-muted-foreground">Clocked in {new Date(timerSessionStart(myTimer)).toLocaleString()}</p>
             {(myTimer.project || myTimer.notes) && (
@@ -218,7 +212,7 @@ export function TrackerPage() {
                   <Repeat className="h-5 w-5" /> Switch client
                 </Button>
               )}
-              <Button size="lg" variant="default" className="gap-2 bg-[#06245B] hover:bg-[#0a306e] dark:bg-white dark:text-[#06245B] dark:hover:bg-white/90" onClick={() => setClockOutOpen(true)} disabled={busy}>
+              <Button size="lg" variant="default" className={cn('gap-2', BRAND_ACTION_BUTTON)} onClick={() => setClockOutOpen(true)} disabled={busy}>
                 {busy ? 'Saving…' : (<><Square className="h-5 w-5" /> Clock Out</>)}
               </Button>
               <Button size="lg" variant="outline" onClick={() => setConfirmCancel(true)}>
@@ -238,7 +232,7 @@ export function TrackerPage() {
             </div>
             <Button
               size="lg"
-              className="gap-2 bg-[#06245B] px-10 text-base hover:bg-[#0a306e] dark:bg-white dark:text-[#06245B] dark:hover:bg-white/90"
+              className={cn('gap-2 px-10 text-base', BRAND_ACTION_BUTTON)}
               onClick={() => setClockInOpen(true)}
               disabled={starting || !currentWorkerId || noActiveClients}
               title={noActiveClients ? 'Add a client before clocking in' : undefined}

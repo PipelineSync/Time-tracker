@@ -78,7 +78,7 @@ const p0 = await supabaseBackend.getSession()
 assert(p0.data === null && p0.error === null, 'fresh page with no session is signed out (no error, no user)')
 
 // ------------------------------------------------------ 1. healthy session
-const healthy = signInAs(ADMIN)
+signInAs(ADMIN)
 const p1 = await supabaseBackend.getSession()
 assert(p1.data !== null && p1.error === null, 'healthy session stays signed in')
 assert(p1.data?.email === ADMIN.email && p1.data?.role === 'admin', 'authenticated user is the admin')

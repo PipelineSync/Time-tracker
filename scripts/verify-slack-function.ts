@@ -63,7 +63,7 @@ const call = (body: unknown) =>
 
 async function main() {
   // ---- 1) Worker fires a clock_in from their phone ----
-  let res = await call({ type: 'event', event: 'clock_in', timer_id: 't1' })
+  const res = await call({ type: 'event', event: 'clock_in', timer_id: 't1' })
   assert(res.status === 200, 'clock_in returns 200')
   assert(slackCalls.length === 1, 'clock_in posts to the Slack webhook')
   let payload = slackCalls[0]?.body

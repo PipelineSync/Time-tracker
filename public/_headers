@@ -38,3 +38,11 @@
 /*
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
+  # Content-Security-Policy — the app's only external origins are Supabase
+  # (REST/Auth/Storage, *.supabase.co) and hooks.slack.com (demo-mode Slack
+  # posts straight from the browser; deployed builds post via the
+  # server-side slack-notify function instead). Fonts are self-hosted
+  # (@fontsource), images are same-origin + data: (avatars, QR codes), and
+  # the pre-paint theme script lives in /theme-init.js so no 'unsafe-inline'
+  # is needed anywhere.
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob:; connect-src 'self' https://*.supabase.co https://hooks.slack.com; object-src 'none'; base-uri 'self'; form-action 'self'

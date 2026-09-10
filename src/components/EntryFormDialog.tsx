@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { TimeEntry, Worker } from '@/lib/types'
+import type { TimeEntry } from '@/lib/types'
 import { useStore } from '@/lib/store'
 import {
   Dialog,
@@ -104,7 +104,6 @@ export function EntryFormDialog({
     }
   }, [open, entry, defaultWorkerId]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const selectedWorker = workers.find((w) => w.id === form.workerId)
 
   function set(key: keyof FormState, value: string) {
     setForm((f) => ({ ...f, [key]: value }))

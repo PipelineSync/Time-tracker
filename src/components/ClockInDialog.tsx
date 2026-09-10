@@ -1,3 +1,4 @@
+import { BRAND_ACTION_BUTTON } from '@/lib/brand'
 import { useEffect, useState } from 'react'
 import {
   Dialog,
@@ -119,7 +120,7 @@ export function ClockInDialog({
             onClick={handleConfirm}
             disabled={loading || !clientId}
             title={!clientId ? 'Choose a client first' : undefined}
-            className="gap-2 bg-[#06245B] hover:bg-[#0a306e] dark:bg-white dark:text-[#06245B] dark:hover:bg-white/90"
+            className={`gap-2 ${BRAND_ACTION_BUTTON}`}
           >
             <LogIn className="h-4 w-4" />
             {loading ? 'Clocking in…' : 'Clock In'}

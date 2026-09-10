@@ -28,6 +28,24 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Lint
+        run: npm run lint
+
+      # The verification harness: scenario tests over the local backend and
+      # the (mocked) Supabase side — permissions, settle, deletion, clients,
+      # finance, sessions, Slack. Runs fully offline.
+      - name: Run verification suite
+        run: npm run verify
+
+      # Report dependency advisories without blocking: the only high-severity
+      # finding is in Vite's dev server (vite 5 → fix is a major upgrade that
+      # vite-plugin-pwa 1.x doesn't support yet), and the rest are moderate
+      # issues in dev-only deps. Revisit when vite 6/vite-plugin-pwa 1.x
+      # land, then switch this to `npm audit --audit-level=high`.
+      - name: npm audit (report only)
+        continue-on-error: true
+        run: npm audit || true
+
       - name: Build (PWA: manifest + service worker + precache)
         env:
           # Baked in at build time. Without them the artifact runs in demo

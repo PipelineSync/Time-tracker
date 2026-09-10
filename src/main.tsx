@@ -1,9 +1,19 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { Toaster } from 'sonner'
+// Self-hosted Inter (the same face and weights 400–800 the app used to load
+// from Google Fonts). Self-hosting removes a render-blocking cross-origin
+// stylesheet, works offline inside the PWA/native shells, and keeps the
+// Content-Security-Policy at 'self' with no font exceptions.
+import '@fontsource/inter/400.css'
+import '@fontsource/inter/500.css'
+import '@fontsource/inter/600.css'
+import '@fontsource/inter/700.css'
+import '@fontsource/inter/800.css'
 import { App } from './App'
 import { StoreProvider } from '@/lib/store'
 import { ThemeProvider } from '@/lib/theme'
+import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { initNativeShell } from '@/lib/native'
 import { isNativeShell } from '@/lib/platform'
 import { isChristmasTheme } from '@/lib/christmas'
@@ -13,11 +23,15 @@ import './index.css'
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ThemeProvider>
-      <StoreProvider>
-        <App />
-        {isChristmasTheme() && <Snowfall />}
-        <Toaster position="top-center" richColors closeButton />
-      </StoreProvider>
+      {/* Outside StoreProvider on purpose: a crash in the provider itself
+          (a bad row shape on boot) must land here, not in a white screen. */}
+      <ErrorBoundary>
+        <StoreProvider>
+          <App />
+          {isChristmasTheme() && <Snowfall />}
+          <Toaster position="top-center" richColors closeButton />
+        </StoreProvider>
+      </ErrorBoundary>
     </ThemeProvider>
   </React.StrictMode>
 )
