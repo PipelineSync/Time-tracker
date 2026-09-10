@@ -8,7 +8,6 @@ import type {
   TimeEntryComment,
   AppNotification,
   Payment,
-  PaymentStatus,
   PaymentMethod,
   Role,
   WorkerAvatar,
@@ -39,10 +38,10 @@ import {
   TASK_STATUSES,
   UNASSIGNED_CLIENT_NAME,
 } from './types'
-import type { BackendResult, DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, CreateFinanceItemInput, CreateMeetingInput } from './backend'
+import type { DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, CreateFinanceItemInput, CreateMeetingInput } from './backend'
 import { ACCOUNT_DEACTIVATED_MESSAGE } from './backend'
 import { buildDemoSeed } from './demoSeed'
-import { uid, computeEarnings, computeTotalMinutes, formatMinutes, formatDate } from './utils'
+import { uid, computeEarnings, formatMinutes, formatDate } from './utils'
 import { storage } from './storage'
 
 export const ADMIN_EMAIL = 'admin'

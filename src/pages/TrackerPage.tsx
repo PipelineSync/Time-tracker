@@ -148,7 +148,6 @@ export function TrackerPage() {
   }
 
   const running = !!myTimer && !myTimer.paused
-  const paused = !!myTimer && myTimer.paused
 
   const breakMs = myTimer
     ? (myTimer.total_pause_ms || 0) +

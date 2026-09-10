@@ -307,6 +307,22 @@ Free-tier Supabase projects are **paused after ~7 days of no API/database activi
 2. Framework preset: **Vite**. Build: `npm run build`, output `dist`.
 3. Add the two env vars, then deploy.
 
+> **Vercel limitation — Netlify Functions do not exist there.** The app
+> calls privileged operations through `/.netlify/functions/*`: **creating and
+> resetting worker login accounts** (the service-role key lives only in that
+> function) and **Slack notifications** (the webhook URL is read server-side
+> so it never reaches the browser). On a Vercel deploy those calls 404, so:
+> - the admin **cannot create worker accounts in the app** — create the auth
+>   user in Supabase (Authentication → Users) and insert the profile row
+>   manually (the SQL in step 6 works for workers too), or deploy to Netlify
+>   for the in-app flow;
+> - Slack notifications and the Settings → Slack test button are unavailable
+>   (everything else works — clock in/out, entries, tasks, payments, reports).
+>
+> The **supabase-keepalive** scheduled function is also Netlify-only; on
+> Vercel point an external cron at your project once a day (see the keep-alive
+> section above).
+
 ---
 
 ## 9. Ship it as phone + desktop apps

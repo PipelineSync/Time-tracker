@@ -102,7 +102,6 @@ export function buildMessage(event: SlackEvent, ctx: {
   periodEnd?: string | null
 }): { text: string; blocks: SlackBlock[] } {
   const project = ctx.project?.trim() || null
-  const projectBit = project ? ` · ${project}` : ''
   const bizBit = ctx.businessName ? ` · ${ctx.businessName}` : ''
 
   const section = (text: string): SlackBlock => ({ type: 'section', text: { type: 'mrkdwn', text } })

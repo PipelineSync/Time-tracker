@@ -1,4 +1,4 @@
-import { adminClient, json, requireCapability } from './lib/supabase'
+import { json, requireCapability } from './lib/supabase'
 
 /**
  * Admin capabilities that may be granted to a worker. Kept in step with

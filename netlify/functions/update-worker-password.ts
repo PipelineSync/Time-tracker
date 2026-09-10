@@ -1,4 +1,4 @@
-import { adminClient, json, requireCapability } from './lib/supabase'
+import { json, requireCapability } from './lib/supabase'
 
 export default async function handler(request: Request) {
   if (request.method !== 'POST') return json(405, { error: 'Method not allowed.' })

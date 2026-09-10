@@ -29,7 +29,6 @@ export function EntryChatDialog({
   const { listEntryComments, addEntryComment, user } = useStore()
   const [comments, setComments] = useState<TimeEntryComment[]>([])
   const [body, setBody] = useState('')
-  const [loading, setLoading] = useState(false)
   const [sending, setSending] = useState(false)
   const endRef = useRef<HTMLDivElement | null>(null)
 

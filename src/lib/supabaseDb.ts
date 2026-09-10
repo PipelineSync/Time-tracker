@@ -770,7 +770,9 @@ export const supabaseBackend: DataBackend = {
     return ok(null)
   },
 
-  async resetWorkerPassword(workerId, newPassword) {
+  // Supabase cannot set another user's password with the anon key — this
+  // sends a reset email instead, so the requested password is not used here.
+  async resetWorkerPassword(workerId, _newPassword) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
     if (!canDo(me.data!, 'workers.manage')) return denied('reset worker passwords')

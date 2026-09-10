@@ -1,0 +1,26 @@
+# Keep the web app's dependencies and CI actions current.
+#
+# Note: dependency bumps land as PRs — review them before merging. The
+# interesting majors to watch (currently blocked by peer deps, safe minors
+# are fine to auto-merge by hand):
+#   - vite 5 → 6+ (needs a matching vite-plugin-pwa)
+#   - react-router-dom 6 → 7 (open-redirect CVE fixed in 7.18+)
+#   - @capacitor/* minor bumps
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    labels: [dependencies]
+    groups:
+      # Cap packages (core + cli + per-OS) bump together; keep them in one
+      # PR so versions never drift apart.
+      capacitor:
+        patterns:
+          - '@capacitor/*'
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    labels: [ci]
