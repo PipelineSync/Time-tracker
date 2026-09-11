@@ -19,6 +19,8 @@ import type {
   ClientPriorityLane,
   Meeting,
   Permission,
+  Invoice,
+  InvoiceStage,
   FinanceItem,
   FinanceKind,
   BillingCycle,
@@ -78,6 +80,19 @@ export interface CreateMeetingInput {
   title: string
   /** Scheduled start (ISO instant). */
   start_time: string
+  notes?: string | null
+}
+
+/** Fields callers may set when creating an invoice. */
+export interface CreateInvoiceInput {
+  /** The client the money is from (an id from the client master list). */
+  client_id: string
+  /** Positive amount, in the workspace's currency. */
+  amount: number
+  /** 'YYYY-MM-DD' — the day payment is due. */
+  due_date: string
+  /** Board column; defaults to 'pending'. */
+  stage?: InvoiceStage
   notes?: string | null
 }
 
@@ -296,6 +311,23 @@ export interface DataBackend {
   createMeeting(input: CreateMeetingInput): Promise<BackendResult<Meeting>>
   updateMeeting(id: string, patch: Partial<Omit<Meeting, 'id' | 'created_at' | 'updated_at'>>): Promise<BackendResult<Meeting>>
   deleteMeeting(id: string): Promise<BackendResult<null>>
+
+  /**
+   * The client invoicing board's cards, one per invoice. The admin and
+   * workers granted `invoices.view` read them; everyone else — and any
+   * database without the client-invoicing migration — gets an empty list so
+   * the rest of the app never notices. Cards sort by due date, so the board
+   * owns the order and there is no position to store.
+   */
+  listInvoices(): Promise<BackendResult<Invoice[]>>
+  createInvoice(input: CreateInvoiceInput): Promise<BackendResult<Invoice>>
+  /**
+   * Patch an invoice. Moving it between board columns is patching `stage`
+   * (free movement — forwards and backwards both allowed); the backend keeps
+   * `updated_at` fresh so other devices pick the change up on their next sync.
+   */
+  updateInvoice(id: string, patch: Partial<Omit<Invoice, 'id' | 'created_at' | 'updated_at'>>): Promise<BackendResult<Invoice>>
+  deleteInvoice(id: string): Promise<BackendResult<null>>
 
   resetAll(): Promise<BackendResult<null>>
   seedDemo(): Promise<BackendResult<null>>

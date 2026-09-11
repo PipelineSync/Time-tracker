@@ -18,10 +18,11 @@ import type {
   ClientPriorityLane,
   Meeting,
   Permission,
+  Invoice,
   FinanceItem,
 } from './types'
 import { CLIENT_PRIORITY_LANES, DEFAULT_SLACK_SETTINGS, DEFAULT_CLIENT_COLOR, PERMISSIONS, TEAM_VIEW_PERMISSIONS, ALL_ENTRIES_VIEW_PERMISSIONS, normalizePermissions } from './types'
-import type { BackendResult, DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, CreateFinanceItemInput, CreateMeetingInput } from './backend'
+import type { BackendResult, DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, CreateFinanceItemInput, CreateMeetingInput, CreateInvoiceInput } from './backend'
 import { ACCOUNT_DEACTIVATED_MESSAGE } from './backend'
 import {
   createClient,
@@ -50,6 +51,10 @@ const PRIORITY_BOARD_PERMISSIONS_MIGRATION_MESSAGE =
 /** Shown when the database's permission allow-list predates the meetings section. */
 const MEETINGS_PERMISSIONS_MIGRATION_MESSAGE =
   'Meetings access was not saved: run supabase/meetings.sql in the Supabase SQL editor — it widens the allowed permission keys with meetings.view. Everything else was saved.'
+
+/** Shown when the database's permission allow-list predates the invoicing section. */
+const INVOICES_PERMISSIONS_MIGRATION_MESSAGE =
+  'Invoicing access was not saved: run supabase/client-invoicing.sql in the Supabase SQL editor — it widens the allowed permission keys with invoices.view. Everything else was saved.'
 
 /** Postgres raises 23514 when the workers_permissions_valid check rejects a key. */
 function isPermissionsCheckViolation(error: { code?: string; message?: string } | null): boolean {
@@ -593,6 +598,23 @@ function normalizeFinanceRow(f: FinanceItem): FinanceItem {
   }
 }
 
+/**
+ * Normalize an invoice row. PostgREST returns `numeric` columns as strings,
+ * so the amount is coerced here; the stage check constraint has kept invalid
+ * values out of the database, but an unknown one still falls back to Pending
+ * so one bad row cannot break the board.
+ */
+function normalizeInvoiceRow(inv: Invoice): Invoice {
+  const amount = Number(inv.amount)
+  return {
+    ...inv,
+    amount: Number.isFinite(amount) ? Math.max(0, amount) : 0,
+    due_date: typeof inv.due_date === 'string' ? inv.due_date.slice(0, 10) : new Date().toISOString().slice(0, 10),
+    stage: inv.stage === 'awaiting' || inv.stage === 'paid' ? inv.stage : 'pending',
+    notes: typeof inv.notes === 'string' && inv.notes.trim() ? inv.notes.trim() : null,
+  }
+}
+
 /** Client-side validation mirroring the database constraints, for nice errors. */
 function validateFinanceInput(input: CreateFinanceItemInput): string | null {
   const name = input.name?.trim() || null
@@ -1013,6 +1035,12 @@ export const supabaseBackend: DataBackend = {
       dropped.add('meetings.view')
       upd = await client().from('workers').update({ ...rest, permissions: normalizePermissions(rest.permissions.filter((p) => !dropped.has(p))) }).eq('id', id).select().single()
       if (!upd.error) return fail(MEETINGS_PERMISSIONS_MIGRATION_MESSAGE)
+    }
+    if (upd.error && isPermissionsCheckViolation(upd.error) && rest.permissions?.includes('invoices.view') && !dropped.has('invoices.view')) {
+      // Same story for the invoicing key (supabase/client-invoicing.sql).
+      dropped.add('invoices.view')
+      upd = await client().from('workers').update({ ...rest, permissions: normalizePermissions(rest.permissions.filter((p) => !dropped.has(p))) }).eq('id', id).select().single()
+      if (!upd.error) return fail(INVOICES_PERMISSIONS_MIGRATION_MESSAGE)
     }
     if (upd.error && isMissingColumn(upd.error, 'permissions') && rest.permissions) {
       // Database without supabase/worker-permissions.sql: save everything else
@@ -2233,6 +2261,106 @@ export const supabaseBackend: DataBackend = {
     return ok(null)
   },
 
+  // ---- Client invoicing -------------------------------------------------------
+  // supabase/client-invoicing.sql owns the real boundary: the admin and
+  // workers granted `invoices.view` may read and change the board. A database
+  // that has not run the migration answers "relation does not exist";
+  // listing then reports an empty board instead of an error so the rest of
+  // the app degrades, and the writes explain exactly what to run.
+
+  async listInvoices() {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (!canDo(me.data!, 'invoices.view')) return denied('use the invoicing board')
+    const { data, error } = await client()
+      .from('invoices')
+      .select('id, client_id, amount, due_date, stage, notes, created_at, updated_at')
+      .order('due_date', { ascending: true })
+      .order('created_at', { ascending: true })
+    if (error) {
+      if (isMissingTable(error as { code?: string; message?: string }, 'invoices')) {
+        console.warn('[work-tracker] the invoices table is missing — run supabase/client-invoicing.sql to enable the invoicing section.')
+        return ok([] as Invoice[])
+      }
+      return fail(error.message)
+    }
+    return ok(((data as Invoice[]) ?? []).map(normalizeInvoiceRow))
+  },
+
+  async createInvoice(input: CreateInvoiceInput) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (!canDo(me.data!, 'invoices.view')) return denied('use the invoicing board')
+    if (!input.client_id) return fail('Pick a client to bill.')
+    const amount = Number(input.amount)
+    if (!Number.isFinite(amount) || amount <= 0) return fail('Give the invoice an amount greater than zero.')
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(input.due_date) || Number.isNaN(new Date(`${input.due_date}T00:00:00`).getTime())) {
+      return fail('Pick the date payment is due.')
+    }
+    const { data, error } = await client()
+      .from('invoices')
+      .insert({
+        client_id: input.client_id,
+        amount: Math.round(amount * 100) / 100,
+        due_date: input.due_date,
+        stage: input.stage ?? 'pending',
+        notes: input.notes?.trim() || null,
+      })
+      .select()
+      .single()
+    if (error) {
+      if (isMissingTable(error as { code?: string; message?: string }, 'invoices')) {
+        return fail('Invoicing is not set up on this database yet. Run supabase/client-invoicing.sql in the Supabase SQL editor.')
+      }
+      return fail(error.message)
+    }
+    return ok(normalizeInvoiceRow(data as Invoice))
+  },
+
+  async updateInvoice(id, patch) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (!canDo(me.data!, 'invoices.view')) return denied('use the invoicing board')
+    const update: Record<string, unknown> = {}
+    if (patch.client_id !== undefined) {
+      if (!patch.client_id) return fail('Pick a client to bill.')
+      update.client_id = patch.client_id
+    }
+    if (patch.amount !== undefined) {
+      const amount = Number(patch.amount)
+      if (!Number.isFinite(amount) || amount <= 0) return fail('Give the invoice an amount greater than zero.')
+      update.amount = Math.round(amount * 100) / 100
+    }
+    if (patch.due_date !== undefined) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(patch.due_date) || Number.isNaN(new Date(`${patch.due_date}T00:00:00`).getTime())) {
+        return fail('Pick the date payment is due.')
+      }
+      update.due_date = patch.due_date
+    }
+    // Free movement: dropping a card into any column — forwards or back — is
+    // just a stage patch. Postgres' check constraint is the last line of
+    // defence against an invalid stage.
+    if (patch.stage !== undefined) update.stage = patch.stage
+    if (patch.notes !== undefined) update.notes = patch.notes?.trim() || null
+    const { data, error } = await client().from('invoices').update(update).eq('id', id).select().single()
+    if (error) {
+      if (isMissingTable(error as { code?: string; message?: string }, 'invoices')) {
+        return fail('Invoicing is not set up on this database yet. Run supabase/client-invoicing.sql in the Supabase SQL editor.')
+      }
+      return fail(error.message)
+    }
+    return ok(normalizeInvoiceRow(data as Invoice))
+  },
+
+  async deleteInvoice(id) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (!canDo(me.data!, 'invoices.view')) return denied('use the invoicing board')
+    const { error } = await client().from('invoices').delete().eq('id', id)
+    if (error) return fail(error.message)
+    return ok(null)
+  },
+
   // ---- Tasks (kanban board) ----------------------------------------------
   // RLS (supabase/tasks.sql) is the real boundary: a worker can only select /
   // insert / update / delete rows whose worker_id is their own, the admin owns
@@ -2430,7 +2558,7 @@ export const supabaseBackend: DataBackend = {
     if (me.error) return fail(me.error)
     if (me.data!.role !== 'admin') return fail('Only the admin can load sample data.')
     const sb = client()
-    const { workers, clients, entries, settings, financeItems, clientPriorities, meetings } = (await import('./demoSeed')).buildDemoSeed()
+    const { workers, clients, entries, settings, financeItems, clientPriorities, meetings, invoices } = (await import('./demoSeed')).buildDemoSeed()
     const realIdBySeedId = new Map<string, string>()
     // Sample clients first, so the seeded entries can point at them.
     const clientIdBySeedId = new Map<string, string>()
@@ -2485,6 +2613,18 @@ export const supabaseBackend: DataBackend = {
     // Sample meetings — best effort, same deal (supabase/meetings.sql).
     for (const m of meetings ?? []) {
       await sb.from('meetings').insert({ title: m.title, start_time: m.start_time, notes: m.notes })
+    }
+    // Sample invoices — best effort, same deal (supabase/client-invoicing.sql).
+    for (const inv of invoices ?? []) {
+      const seededClientId = clientIdBySeedId.get(inv.client_id)
+      if (!seededClientId) continue
+      await sb.from('invoices').insert({
+        client_id: seededClientId,
+        amount: inv.amount,
+        due_date: inv.due_date,
+        stage: inv.stage,
+        notes: inv.notes,
+      })
     }
     return ok(null)
   },

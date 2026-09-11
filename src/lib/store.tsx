@@ -27,10 +27,11 @@ import type {
   ClientPriorityLane,
   Meeting,
   Permission,
+  Invoice,
   FinanceItem,
 } from './types'
 import { PERMISSIONS, normalizePermissions, canViewAllEntries } from './types'
-import type { DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, BackendResult, CreateFinanceItemInput, CreateMeetingInput } from './backend'
+import type { DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, BackendResult, CreateFinanceItemInput, CreateMeetingInput, CreateInvoiceInput } from './backend'
 import { localBackend } from './localDb'
 import { supabaseBackend, isSupabaseConfigured, ACCOUNT_DEACTIVATED_MESSAGE } from './supabaseDb'
 import { toast } from 'sonner'
@@ -130,6 +131,11 @@ interface StoreValue {
    */
   meetings: Meeting[]
   /**
+   * The client invoicing board's cards. Empty for anyone the admin has not
+   * granted `invoices.view`.
+   */
+  invoices: Invoice[]
+  /**
    * The Finance ledger (subscriptions, payroll runs, bills), oldest due date
    * first. Empty for anyone the admin has not granted `finance.view`.
    */
@@ -211,6 +217,14 @@ interface StoreValue {
   /** Remove a meeting from the schedule. meetings.view. */
   deleteMeeting: (id: string) => Promise<boolean>
 
+  // ---- Client invoicing (admin + granted workers) ----
+  /** Raise an invoice on the board. invoices.view. */
+  createInvoice: (input: CreateInvoiceInput) => Promise<Invoice | null>
+  /** Edit an invoice, or move it between board columns (patch `stage`). invoices.view. */
+  updateInvoice: (id: string, patch: Partial<Omit<Invoice, 'id' | 'created_at' | 'updated_at'>>) => Promise<Invoice | null>
+  /** Remove an invoice from the board. invoices.view. */
+  deleteInvoice: (id: string) => Promise<boolean>
+
   createTask: (input: CreateTaskInput) => Promise<Task | null>
   updateTask: (id: string, patch: Partial<Omit<Task, 'id' | 'created_at' | 'updated_at'>>) => Promise<Task | null>
   /** Drag & drop: drop a task into `status` at index `position`. */
@@ -257,6 +271,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [clients, setClients] = useState<Client[]>([])
   const [clientPriorities, setClientPriorities] = useState<ClientPriority[]>([])
   const [meetings, setMeetings] = useState<Meeting[]>([])
+  const [invoices, setInvoices] = useState<Invoice[]>([])
   const [financeItems, setFinanceItems] = useState<FinanceItem[]>([])
   const [dataLoading, setDataLoading] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
@@ -345,7 +360,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // Captured BEFORE the query: rows updated after this instant are picked
       // up by the next delta; duplicates are harmless (merged by id).
       const syncTime = new Date().toISOString()
-      const [w, e, s, at, n, p, u, t, cl, cp, mt, fi] = await Promise.all([
+      const [w, e, s, at, n, p, u, t, cl, cp, mt, inv, fi] = await Promise.all([
         light ? skipped<Worker[]>() : backend.listWorkers(),
         useDelta
           ? backend.listEntries({ since, limit: ENTRY_DELTA_LIMIT })
@@ -373,6 +388,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         // Same for the meetings schedule — it only changes when someone on
         // the section edits it.
         light ? skipped<Meeting[]>() : backend.listMeetings(),
+        // Same for the invoicing board — it only changes when someone drags
+        // a card or edits an invoice.
+        light ? skipped<Invoice[]>() : backend.listInvoices(),
         // Same for the finance ledger (due dates move only when the app itself
         // advances them). An ungranted worker gets an empty list, not an error.
         light ? skipped<FinanceItem[]>() : backend.listFinanceItems(),
@@ -416,6 +434,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (cl.data) setClients(cl.data)
       if (cp.data) setClientPriorities(cp.data)
       if (mt.data) setMeetings(mt.data)
+      if (inv.data) setInvoices(inv.data)
       if (fi.data) setFinanceItems(fi.data)
     } finally {
       refreshInFlight.current = false
@@ -472,7 +491,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       })
     } else {
       avatarsRef.current = new Map()
-      setWorkers([]); setEntries([]); setSettings(null); setActiveTimer(null); setActiveTimers([]); setNotifications([]); setPayments([]); setTasks([]); setClients([]); setClientPriorities([]); setMeetings([]); setFinanceItems([])
+      setWorkers([]); setEntries([]); setSettings(null); setActiveTimer(null); setActiveTimers([]); setNotifications([]); setPayments([]); setTasks([]); setClients([]); setClientPriorities([]); setMeetings([]); setInvoices([]); setFinanceItems([])
     }
   }, [user, refreshData, refreshAvatars])
 
@@ -964,6 +983,47 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return true
   }, [backend, refreshMeetings])
 
+  // ---- Client invoicing -----------------------------------------------------
+  // The board is small and changes only when someone edits it or drags a
+  // card, so every mutation re-reads it from the backend (same pattern as
+  // Meetings). A drag that lands while another device moves the same card
+  // simply wins on the next tick — there is no ranking to merge.
+
+  const refreshInvoices = useCallback(async () => {
+    const res = await backend.listInvoices()
+    if (res.data) setInvoices(res.data)
+  }, [backend])
+
+  const createInvoice = useCallback(async (input: CreateInvoiceInput) => {
+    const res = await backend.createInvoice(input)
+    if (res.error || !res.data) {
+      toast.error(res.error || 'Could not create the invoice.')
+      return null
+    }
+    await refreshInvoices()
+    return res.data
+  }, [backend, refreshInvoices])
+
+  const updateInvoice = useCallback(async (id: string, patch: Partial<Omit<Invoice, 'id' | 'created_at' | 'updated_at'>>) => {
+    const res = await backend.updateInvoice(id, patch)
+    if (res.error || !res.data) {
+      toast.error(res.error || 'Could not save the invoice.')
+      return null
+    }
+    await refreshInvoices()
+    return res.data
+  }, [backend, refreshInvoices])
+
+  const deleteInvoice = useCallback(async (id: string) => {
+    const res = await backend.deleteInvoice(id)
+    if (res.error) {
+      toast.error(res.error)
+      return false
+    }
+    await refreshInvoices()
+    return true
+  }, [backend, refreshInvoices])
+
   // ---- Tasks --------------------------------------------------------------
   // Each mutation refreshes the board from the backend so the positions the
   // backend assigned (and anything another device changed) win.
@@ -1153,6 +1213,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     activeClients,
     clientPriorities,
     meetings,
+    invoices,
     financeItems,
     unreadCount,
     dataLoading,
@@ -1196,6 +1257,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     createMeeting,
     updateMeeting,
     deleteMeeting,
+    createInvoice,
+    updateInvoice,
+    deleteInvoice,
     createTask,
     updateTask,
     moveTask,

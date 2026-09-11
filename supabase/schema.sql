@@ -1118,6 +1118,7 @@ alter table public.workers add constraint workers_permissions_valid check (
     'tasks.manage_all',
     'priority_board.view',
     'meetings.view',
+    'invoices.view',
     'payments.view_all',
     'payments.manage',
     'finance.view',
@@ -1665,6 +1666,81 @@ create trigger trg_meetings_user before insert on public.meetings
 
 drop trigger if exists trg_meetings_updated on public.meetings;
 create trigger trg_meetings_updated before update on public.meetings
+  for each row execute function public.set_updated_at();
+
+-- ============================================================
+-- Client invoicing
+-- The workspace's invoice board (client, amount, due date, stage, notes).
+-- The admin runs the section; a worker reaches it only with `invoices.view`.
+-- The stage is the whole status model — Pending, Awaiting, Paid — and
+-- dragging between the columns is free movement. Deleting a client deletes
+-- its invoices with it (an invoice has nobody to bill).
+-- See supabase/client-invoicing.sql for existing databases.
+-- ============================================================
+
+create table if not exists public.invoices (
+  id        uuid primary key default gen_random_uuid(),
+  -- Workspace owner (the admin). Set automatically by trg_invoices_user.
+  user_id   uuid not null references auth.users (id) on delete cascade,
+  -- The client the money is from. Cascade: a deleted client's invoices go too.
+  client_id uuid not null references public.clients (id) on delete cascade,
+  amount    numeric(12, 2) not null check (amount >= 0),
+  -- The day payment is due (a date, not an instant, so timezones cannot move it).
+  due_date  date not null,
+  -- Board column. Dragging is free movement, so the only constraint is that
+  -- the value is one of the three columns.
+  stage     text not null default 'pending' check (stage in ('pending', 'awaiting', 'paid')),
+  notes     text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- The board's exact query: one workspace, due-soonest order.
+create index if not exists invoices_user_due_idx on public.invoices (user_id, due_date);
+create index if not exists invoices_client_idx on public.invoices (client_id);
+
+alter table public.invoices enable row level security;
+
+-- The admin and granted workers share one board (same pattern as the
+-- priority board and meetings).
+drop policy if exists "invoices_select" on public.invoices;
+create policy "invoices_select" on public.invoices
+  for select using (
+    ((select auth.uid()) = user_id and (select public.is_admin()))
+    or (user_id = (select public.workspace_owner_id()) and (select public.has_permission('invoices.view')))
+  );
+
+drop policy if exists "invoices_insert" on public.invoices;
+create policy "invoices_insert" on public.invoices
+  for insert with check (
+    ((select auth.uid()) = user_id and (select public.is_admin()))
+    or (user_id = (select public.workspace_owner_id()) and (select public.has_permission('invoices.view')))
+  );
+
+drop policy if exists "invoices_update" on public.invoices;
+create policy "invoices_update" on public.invoices
+  for update using (
+    ((select auth.uid()) = user_id and (select public.is_admin()))
+    or (user_id = (select public.workspace_owner_id()) and (select public.has_permission('invoices.view')))
+  )
+  with check (
+    ((select auth.uid()) = user_id and (select public.is_admin()))
+    or (user_id = (select public.workspace_owner_id()) and (select public.has_permission('invoices.view')))
+  );
+
+drop policy if exists "invoices_delete" on public.invoices;
+create policy "invoices_delete" on public.invoices
+  for delete using (
+    ((select auth.uid()) = user_id and (select public.is_admin()))
+    or (user_id = (select public.workspace_owner_id()) and (select public.has_permission('invoices.view')))
+  );
+
+drop trigger if exists trg_invoices_user on public.invoices;
+create trigger trg_invoices_user before insert on public.invoices
+  for each row execute function public.set_user_id();
+
+drop trigger if exists trg_invoices_updated on public.invoices;
+create trigger trg_invoices_updated before update on public.invoices
   for each row execute function public.set_updated_at();
 
 -- ============================================================================
