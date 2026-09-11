@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Building2, Folder } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -14,8 +15,9 @@ import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { ClientSelect } from '@/components/ClientSelect'
 import { useStore } from '@/lib/store'
+import { cn } from '@/lib/utils'
 import type { Invoice, InvoiceBasis, InvoiceStage } from '@/lib/types'
-import { INVOICE_BASES, INVOICE_STAGES, InvoiceBasisNames, InvoiceStageNames } from '@/lib/types'
+import { INVOICE_STAGES, InvoiceStageNames } from '@/lib/types'
 import { toast } from 'sonner'
 
 interface FormState {
@@ -155,49 +157,71 @@ export function InvoiceFormDialog({
           </DialogHeader>
 
           <div className="grid gap-4 py-4">
+            {/* One field, one choice: what the invoice bills. The Client |
+                Project switch and the input it reveals are the same field —
+                client based picks the client; project based picks the client
+                AND names the project. One of the two must be chosen. */}
             <div className="grid gap-2">
-              <Label htmlFor="invoice-client">Client</Label>
-              <ClientSelect
-                id="invoice-client"
-                value={form.clientId}
-                onValueChange={(v) => set('clientId', v)}
-                placeholder="Choose a client"
-              />
-            </div>
+              <span className="text-sm font-medium leading-none">Bill to</span>
+              <div className="grid gap-3 rounded-lg border bg-muted/30 p-2.5">
+                <div className="flex w-fit gap-1 rounded-md bg-muted p-1" role="group" aria-label="Client based or project based">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    aria-pressed={form.basis === 'client'}
+                    onClick={() => set('basis', 'client')}
+                    className={cn('gap-1.5 px-3 text-muted-foreground', form.basis === 'client' && 'bg-background text-foreground shadow-sm')}
+                  >
+                    <Building2 className="h-3.5 w-3.5" />
+                    Client
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    aria-pressed={form.basis === 'project'}
+                    onClick={() => set('basis', 'project')}
+                    className={cn('gap-1.5 px-3 text-muted-foreground', form.basis === 'project' && 'bg-background text-foreground shadow-sm')}
+                  >
+                    <Folder className="h-3.5 w-3.5" />
+                    Project
+                  </Button>
+                </div>
 
-            <div className="grid gap-2">
-              <Label htmlFor="invoice-basis">Based on</Label>
-              <Select value={form.basis} onValueChange={(v) => set('basis', v as InvoiceBasis)}>
-                <SelectTrigger id="invoice-basis">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {INVOICE_BASES.map((basis) => (
-                    <SelectItem key={basis} value={basis}>
-                      {InvoiceBasisNames[basis]}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                <div className="grid gap-2">
+                  <Label htmlFor="invoice-client" className="text-xs text-muted-foreground">
+                    Client
+                  </Label>
+                  <ClientSelect
+                    id="invoice-client"
+                    value={form.clientId}
+                    onValueChange={(v) => set('clientId', v)}
+                    placeholder="Choose a client"
+                  />
+                </div>
+
+                {form.basis === 'project' && (
+                  <div className="grid gap-2">
+                    <Label htmlFor="invoice-project" className="text-xs text-muted-foreground">
+                      Project name
+                    </Label>
+                    <Input
+                      id="invoice-project"
+                      value={form.projectName}
+                      onChange={(e) => set('projectName', e.target.value)}
+                      placeholder="e.g. Website redesign"
+                      required
+                    />
+                  </div>
+                )}
+              </div>
               <p className="text-xs text-muted-foreground">
                 {form.basis === 'project'
                   ? 'Project based — this invoice bills one project of the client.'
                   : 'Client based — this invoice bills the client as a whole.'}
               </p>
             </div>
-
-            {form.basis === 'project' && (
-              <div className="grid gap-2">
-                <Label htmlFor="invoice-project">Project name</Label>
-                <Input
-                  id="invoice-project"
-                  value={form.projectName}
-                  onChange={(e) => set('projectName', e.target.value)}
-                  placeholder="e.g. Website redesign"
-                  required
-                />
-              </div>
-            )}
 
             <div className="grid grid-cols-2 gap-4">
               <div className="grid gap-2">
