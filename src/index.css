@@ -253,3 +253,87 @@
     transform: translate3d(0, 40vh, 0);
   }
 }
+
+/* ============================================================
+   "Claim your bonus" prank button (Christmas theme)
+   Three layers, because each owns a different transform:
+   the anchor springs to a new position, the tilt layer leans
+   in the escape direction, and the bob layer floats idly.
+   ============================================================ */
+.xmas-bonus-anchor {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 30;
+  will-change: transform;
+  transition: transform 0.3s cubic-bezier(0.34, 1.45, 0.64, 1);
+}
+
+.xmas-bonus-tilt {
+  will-change: transform;
+  transition: transform 0.16s ease-out;
+}
+
+.xmas-bonus {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 1.05rem;
+  border-radius: 9999px;
+  border: 2px dashed hsl(var(--xmas-gold) / 0.95);
+  background: linear-gradient(180deg, hsl(var(--xmas-red-bright)) 0%, hsl(var(--xmas-red)) 100%);
+  color: hsl(30 40% 98%);
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  user-select: none;
+  cursor: pointer;
+  box-shadow:
+    0 8px 18px -8px hsl(var(--xmas-red) / 0.7),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+
+.xmas-bonus:hover {
+  filter: brightness(1.07);
+}
+
+.xmas-bonus-bob {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  animation: xmas-bonus-bob 2.6s ease-in-out infinite;
+}
+
+.xmas-bonus-hat {
+  position: absolute;
+  top: -15px;
+  left: -11px;
+  width: 34px;
+  height: 34px;
+  transform: rotate(-18deg);
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.18));
+}
+
+@keyframes xmas-bonus-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3px);
+  }
+}
+
+/* Reduced motion: the button still dodges (it just appears in the new spot
+   instantly), but springs, leans and the idle bob are removed. */
+@media (prefers-reduced-motion: reduce) {
+  .xmas-bonus-anchor,
+  .xmas-bonus-tilt {
+    transition: none;
+  }
+  .xmas-bonus-bob {
+    animation: none;
+  }
+}

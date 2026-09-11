@@ -1,5 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useStore } from '@/lib/store'
+import { isChristmasTheme } from '@/lib/christmas'
+import { ClaimBonusButton } from '@/components/ClaimBonusButton'
 import { PageHeader } from '@/components/PageHeader'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -29,6 +31,10 @@ export function TrackerPage() {
   const [clockInOpen, setClockInOpen] = useState(false)
   const [switchOpen, setSwitchOpen] = useState(false)
   const [switching, setSwitching] = useState(false)
+
+  // Wraps the whole Clock In / Out section so the festive "Claim your bonus"
+  // button can pick a random resting spot and dodge the cursor within it.
+  const sectionRef = useRef<HTMLDivElement>(null)
 
   const workerProfile = user?.workerId ? workers.find((w) => w.id === user.workerId) : null
   const currentWorkerId = user?.workerId ?? null
@@ -154,7 +160,7 @@ export function TrackerPage() {
   const currentScope = currentClient?.name ?? myTimer?.project ?? null
 
   return (
-    <div className="space-y-6">
+    <div ref={sectionRef} className="relative space-y-6">
       <PageHeader title="Clock In / Out" description="Clock in, take breaks, and clock out." />
 
       {myTimer ? (
@@ -293,6 +299,10 @@ export function TrackerPage() {
           await handleStop(note)
         }}
       />
+
+      {/* Festive prank: a "bonus" that leans away and can never be caught.
+          Rendered only with the seasonal skin, like the Santa hat and snow. */}
+      {isChristmasTheme() && <ClaimBonusButton containerRef={sectionRef} />}
     </div>
   )
 }
