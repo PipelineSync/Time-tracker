@@ -77,6 +77,7 @@ export function SettingsPage() {
   useEffect(() => {
     setMethods(myWorker?.payment_methods ?? [])
     setQrCode(savedMethodsKey.includes('qr') ? (myWorker?.qr_code_url ?? null) : null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately keyed on the serialized snapshot; see comment above
   }, [myWorker?.id, savedMethodsKey, myWorker?.qr_code_url])
 
   function toggleMethod(method: PaymentMethod, enabled: boolean) {
@@ -132,6 +133,7 @@ export function SettingsPage() {
       setDefaultRate(String(settings.default_hourly_rate ?? 20))
       setAvatar(settings.avatar_url || '')
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately keyed on the serialized snapshot; see comment above
   }, [savedSettingsKey])
 
   const CURRENCIES = ['USD', 'EUR', 'GBP', 'PHP', 'CAD', 'AUD', 'JPY', 'INR']

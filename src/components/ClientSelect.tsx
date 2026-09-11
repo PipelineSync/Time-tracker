@@ -16,6 +16,8 @@ export function ClientSelect({
   value,
   onValueChange,
   id,
+  /** Accessible name for the trigger, for filter-style uses with no visible label. */
+  ariaLabel,
   includeAll = false,
   allLabel = 'All clients',
   placeholder = 'Choose a client',
@@ -27,6 +29,7 @@ export function ClientSelect({
   value: string
   onValueChange: (value: string) => void
   id?: string
+  ariaLabel?: string
   includeAll?: boolean
   allLabel?: string
   placeholder?: string
@@ -47,7 +50,7 @@ export function ClientSelect({
 
   return (
     <Select value={value} onValueChange={onValueChange} disabled={disabled}>
-      <SelectTrigger id={id} className={className}>
+      <SelectTrigger id={id} aria-label={ariaLabel} className={className}>
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>
       <SelectContent>
