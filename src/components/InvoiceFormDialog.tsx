@@ -14,12 +14,14 @@ import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { ClientSelect } from '@/components/ClientSelect'
 import { useStore } from '@/lib/store'
-import type { Invoice, InvoiceStage } from '@/lib/types'
-import { INVOICE_STAGES, InvoiceStageNames } from '@/lib/types'
+import type { Invoice, InvoiceBasis, InvoiceStage } from '@/lib/types'
+import { INVOICE_BASES, INVOICE_STAGES, InvoiceBasisNames, InvoiceStageNames } from '@/lib/types'
 import { toast } from 'sonner'
 
 interface FormState {
   clientId: string
+  basis: InvoiceBasis
+  projectName: string
   amount: string
   dueDate: string // 'YYYY-MM-DD' (local)
   stage: InvoiceStage
@@ -33,11 +35,13 @@ function localDate(d: Date): string {
 }
 
 /**
- * Raise / edit an invoice: the client, an amount, when payment is due and
- * optional notes — the whole data model. The stage picker doubles as the
- * "record it straight into another column" affordance, so logging an invoice
- * that was already paid needs no drag afterwards; a new invoice defaults to
- * Pending and the board is still where invoices move day to day.
+ * Raise / edit an invoice: what is being billed (the whole client, or one
+ * named project of it), an optional amount — an invoice can go on the board
+ * before its figure is known and the amount filled in later — when payment
+ * is due and optional notes. The stage picker doubles as the "record it
+ * straight into another column" affordance, so logging an invoice that was
+ * already paid needs no drag afterwards; a new invoice defaults to Pending
+ * and the board is still where invoices move day to day.
  */
 export function InvoiceFormDialog({
   open,
@@ -53,7 +57,7 @@ export function InvoiceFormDialog({
   defaultStage?: InvoiceStage
 }) {
   const { createInvoice, updateInvoice, settings } = useStore()
-  const [form, setForm] = useState<FormState>({ clientId: '', amount: '', dueDate: '', stage: 'pending', notes: '' })
+  const [form, setForm] = useState<FormState>({ clientId: '', basis: 'client', projectName: '', amount: '', dueDate: '', stage: 'pending', notes: '' })
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
@@ -61,6 +65,8 @@ export function InvoiceFormDialog({
     if (invoice) {
       setForm({
         clientId: invoice.client_id,
+        basis: invoice.basis,
+        projectName: invoice.project_name || '',
         amount: String(invoice.amount),
         dueDate: invoice.due_date,
         stage: invoice.stage,
@@ -71,7 +77,7 @@ export function InvoiceFormDialog({
       // enough that nobody accidentally bills two months out.
       const due = new Date()
       due.setDate(due.getDate() + 14)
-      setForm({ clientId: '', amount: '', dueDate: localDate(due), stage: defaultStage ?? 'pending', notes: '' })
+      setForm({ clientId: '', basis: 'client', projectName: '', amount: '', dueDate: localDate(due), stage: defaultStage ?? 'pending', notes: '' })
     }
   }, [open, invoice, defaultStage])
 
@@ -84,9 +90,18 @@ export function InvoiceFormDialog({
       toast.error('Pick a client to bill.')
       return
     }
-    const amount = Number(form.amount)
-    if (!form.amount.trim() || !Number.isFinite(amount) || amount <= 0) {
-      toast.error('Give the invoice an amount greater than zero.')
+    // Project-based invoices must name the project; client-based ones carry
+    // no project at all.
+    const projectName = form.basis === 'project' ? form.projectName.trim() : ''
+    if (form.basis === 'project' && !projectName) {
+      toast.error('Name the project this invoice bills.')
+      return
+    }
+    // The amount is optional: left blank it is recorded as zero, to be
+    // filled in once the figure is known.
+    const amount = form.amount.trim() ? Number(form.amount) : 0
+    if (!Number.isFinite(amount) || amount < 0) {
+      toast.error('Give the invoice a valid amount — or leave it blank for now.')
       return
     }
     if (!form.dueDate) {
@@ -98,6 +113,8 @@ export function InvoiceFormDialog({
       if (invoice) {
         const saved = await updateInvoice(invoice.id, {
           client_id: form.clientId,
+          basis: form.basis,
+          project_name: projectName || null,
           amount: Math.round(amount * 100) / 100,
           due_date: form.dueDate,
           stage: form.stage,
@@ -108,6 +125,8 @@ export function InvoiceFormDialog({
       } else {
         const created = await createInvoice({
           client_id: form.clientId,
+          basis: form.basis,
+          project_name: projectName || null,
           amount: Math.round(amount * 100) / 100,
           due_date: form.dueDate,
           stage: form.stage,
@@ -130,7 +149,7 @@ export function InvoiceFormDialog({
             <DialogTitle>{invoice ? 'Edit invoice' : 'New invoice'}</DialogTitle>
             <DialogDescription>
               {invoice
-                ? 'Change the client, amount, due date, column or notes.'
+                ? 'Change what it bills, the amount, due date, column or notes.'
                 : 'A card on the board: drag it to Awaiting once sent, and to Paid once settled.'}
             </DialogDescription>
           </DialogHeader>
@@ -146,9 +165,43 @@ export function InvoiceFormDialog({
               />
             </div>
 
+            <div className="grid gap-2">
+              <Label htmlFor="invoice-basis">Based on</Label>
+              <Select value={form.basis} onValueChange={(v) => set('basis', v as InvoiceBasis)}>
+                <SelectTrigger id="invoice-basis">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {INVOICE_BASES.map((basis) => (
+                    <SelectItem key={basis} value={basis}>
+                      {InvoiceBasisNames[basis]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                {form.basis === 'project'
+                  ? 'Project based — this invoice bills one project of the client.'
+                  : 'Client based — this invoice bills the client as a whole.'}
+              </p>
+            </div>
+
+            {form.basis === 'project' && (
+              <div className="grid gap-2">
+                <Label htmlFor="invoice-project">Project name</Label>
+                <Input
+                  id="invoice-project"
+                  value={form.projectName}
+                  onChange={(e) => set('projectName', e.target.value)}
+                  placeholder="e.g. Website redesign"
+                  required
+                />
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-4">
               <div className="grid gap-2">
-                <Label htmlFor="invoice-amount">Amount ({settings?.currency || 'USD'})</Label>
+                <Label htmlFor="invoice-amount">Amount ({settings?.currency || 'USD'} · optional)</Label>
                 <Input
                   id="invoice-amount"
                   type="number"
@@ -159,7 +212,6 @@ export function InvoiceFormDialog({
                   onChange={(e) => set('amount', e.target.value)}
                   placeholder="0.00"
                   autoFocus={!invoice}
-                  required
                 />
               </div>
               <div className="grid gap-2">

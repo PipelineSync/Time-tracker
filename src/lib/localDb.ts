@@ -25,6 +25,7 @@ import type {
   Permission,
   Invoice,
   InvoiceStage,
+  InvoiceBasis,
   FinanceItem,
   FinanceKind,
   FinanceStatus,
@@ -342,6 +343,21 @@ function normalizeInvoiceStage(stage: unknown): InvoiceStage {
   return INVOICE_STAGES.includes(stage as InvoiceStage) ? (stage as InvoiceStage) : 'pending'
 }
 
+/**
+ * What the invoice bills: 'client' (the whole client) or 'project' (one named
+ * project). Anything unknown — pre-basis invoices, bad values — is client
+ * based, which is what every invoice was before the choice existed.
+ */
+function normalizeInvoiceBasis(basis: unknown): InvoiceBasis {
+  return basis === 'project' ? 'project' : 'client'
+}
+
+/** The project name, kept only when the invoice actually bills a project. */
+function normalizeInvoiceProjectName(basis: InvoiceBasis, projectName: unknown): string | null {
+  if (basis !== 'project') return null
+  return typeof projectName === 'string' && projectName.trim() ? projectName.trim() : null
+}
+
 /** Local 'YYYY-MM-DD', the invoice due-date format (a date, not an instant). */
 function toISODateOnly(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0')
@@ -351,9 +367,12 @@ function toISODateOnly(d: Date): string {
 /** Normalize an invoice loaded from storage (or the demo seed). */
 function normalizeInvoice(inv: Invoice): Invoice {
   const amount = Number(inv.amount)
+  const basis = normalizeInvoiceBasis(inv.basis)
   return {
     ...inv,
     client_id: String(inv.client_id ?? ''),
+    basis,
+    project_name: normalizeInvoiceProjectName(basis, inv.project_name),
     amount: Number.isFinite(amount) ? Math.max(0, amount) : 0,
     due_date: typeof inv.due_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(inv.due_date) ? inv.due_date : toISODateOnly(new Date()),
     stage: normalizeInvoiceStage(inv.stage),
@@ -1941,7 +1960,10 @@ export const localBackend: DataBackend = {
     if (!can(c, 'invoices.view')) return denied('use the invoicing board')
     if (!c.data.clients.some((cl) => cl.id === input.client_id)) return { data: null, error: 'Pick a client to bill.' }
     const amount = Number(input.amount)
-    if (!Number.isFinite(amount) || amount <= 0) return { data: null, error: 'Give the invoice an amount greater than zero.' }
+    if (!Number.isFinite(amount) || amount < 0) return { data: null, error: 'Give the invoice a valid amount — or leave it at zero while the figure is unknown.' }
+    const basis = normalizeInvoiceBasis(input.basis)
+    const project_name = normalizeInvoiceProjectName(basis, input.project_name)
+    if (basis === 'project' && !project_name) return { data: null, error: 'Name the project this invoice bills.' }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(input.due_date) || Number.isNaN(new Date(`${input.due_date}T00:00:00`).getTime())) {
       return { data: null, error: 'Pick the date payment is due.' }
     }
@@ -1949,6 +1971,8 @@ export const localBackend: DataBackend = {
     const invoice: Invoice = {
       id: uid(),
       client_id: input.client_id,
+      basis,
+      project_name,
       amount: Math.round(amount * 100) / 100,
       due_date: input.due_date,
       stage: normalizeInvoiceStage(input.stage),
@@ -1971,7 +1995,12 @@ export const localBackend: DataBackend = {
     const client_id = patch.client_id !== undefined ? patch.client_id : current.client_id
     if (!c.data.clients.some((cl) => cl.id === client_id)) return { data: null, error: 'Pick a client to bill.' }
     const amount = patch.amount !== undefined ? Number(patch.amount) : current.amount
-    if (!Number.isFinite(amount) || amount <= 0) return { data: null, error: 'Give the invoice an amount greater than zero.' }
+    if (!Number.isFinite(amount) || amount < 0) return { data: null, error: 'Give the invoice a valid amount — or leave it at zero while the figure is unknown.' }
+    const basis = patch.basis !== undefined ? normalizeInvoiceBasis(patch.basis) : current.basis
+    const project_name = patch.project_name !== undefined
+      ? normalizeInvoiceProjectName(basis, patch.project_name)
+      : normalizeInvoiceProjectName(basis, current.project_name)
+    if (basis === 'project' && !project_name) return { data: null, error: 'Name the project this invoice bills.' }
     const due_date = patch.due_date !== undefined ? patch.due_date : current.due_date
     if (!/^\d{4}-\d{2}-\d{2}$/.test(due_date) || Number.isNaN(new Date(`${due_date}T00:00:00`).getTime())) {
       return { data: null, error: 'Pick the date payment is due.' }
@@ -1980,6 +2009,8 @@ export const localBackend: DataBackend = {
       ...current,
       ...patch,
       client_id,
+      basis,
+      project_name,
       amount: Math.round(amount * 100) / 100,
       due_date,
       stage: normalizeInvoiceStage(patch.stage !== undefined ? patch.stage : current.stage),

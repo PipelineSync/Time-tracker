@@ -304,12 +304,12 @@ export function buildDemoSeed() {
   // three columns: one overdue (due date already past), one due soon, two
   // chasing payment and two already paid.
   const invoices: Invoice[] = [
-    { id: 'inv-seed-1', client_id: 'c-seed-1', amount: 1200, due_date: dateOffset(-2), stage: 'awaiting', notes: 'Phase 1 — landing page. Payment overdue, chase on Monday.', created_at: daysAgo(20).toISOString(), updated_at: daysAgo(9).toISOString() },
-    { id: 'inv-seed-2', client_id: 'c-seed-2', amount: 850, due_date: dateOffset(3), stage: 'awaiting', notes: 'Monthly retainer — sent, awaiting their accounts payable.', created_at: daysAgo(12).toISOString(), updated_at: daysAgo(12).toISOString() },
-    { id: 'inv-seed-3', client_id: 'c-seed-3', amount: 640, due_date: dateOffset(10), stage: 'pending', notes: 'Draft — waiting for the scope change to be confirmed.', created_at: daysAgo(2).toISOString(), updated_at: daysAgo(2).toISOString() },
-    { id: 'inv-seed-4', client_id: 'c-seed-1', amount: 2200, due_date: dateOffset(18), stage: 'pending', notes: 'Phase 2 — components build, billed at the end of the sprint.', created_at: daysAgo(1).toISOString(), updated_at: daysAgo(1).toISOString() },
-    { id: 'inv-seed-5', client_id: 'c-seed-2', amount: 150, due_date: dateOffset(-14), stage: 'paid', notes: 'Extra report export — settled in full.', created_at: daysAgo(30).toISOString(), updated_at: daysAgo(16).toISOString() },
-    { id: 'inv-seed-6', client_id: 'c-seed-1', amount: 980, due_date: dateOffset(-28), stage: 'paid', notes: null, created_at: daysAgo(45).toISOString(), updated_at: daysAgo(29).toISOString() },
+    { id: 'inv-seed-1', client_id: 'c-seed-1', basis: 'project', project_name: 'Landing page', amount: 1200, due_date: dateOffset(-2), stage: 'awaiting', notes: 'Phase 1 — landing page. Payment overdue, chase on Monday.', created_at: daysAgo(20).toISOString(), updated_at: daysAgo(9).toISOString() },
+    { id: 'inv-seed-2', client_id: 'c-seed-2', basis: 'client', project_name: null, amount: 850, due_date: dateOffset(3), stage: 'awaiting', notes: 'Monthly retainer — sent, awaiting their accounts payable.', created_at: daysAgo(12).toISOString(), updated_at: daysAgo(12).toISOString() },
+    { id: 'inv-seed-3', client_id: 'c-seed-3', basis: 'client', project_name: null, amount: 640, due_date: dateOffset(10), stage: 'pending', notes: 'Draft — waiting for the scope change to be confirmed.', created_at: daysAgo(2).toISOString(), updated_at: daysAgo(2).toISOString() },
+    { id: 'inv-seed-4', client_id: 'c-seed-1', basis: 'project', project_name: 'Components build', amount: 2200, due_date: dateOffset(18), stage: 'pending', notes: 'Phase 2 — components build, billed at the end of the sprint.', created_at: daysAgo(1).toISOString(), updated_at: daysAgo(1).toISOString() },
+    { id: 'inv-seed-5', client_id: 'c-seed-2', basis: 'client', project_name: null, amount: 150, due_date: dateOffset(-14), stage: 'paid', notes: 'Extra report export — settled in full.', created_at: daysAgo(30).toISOString(), updated_at: daysAgo(16).toISOString() },
+    { id: 'inv-seed-6', client_id: 'c-seed-1', basis: 'client', project_name: null, amount: 980, due_date: dateOffset(-28), stage: 'paid', notes: null, created_at: daysAgo(45).toISOString(), updated_at: daysAgo(29).toISOString() },
   ]
 
   return { workers, clients, entries, tasks, settings, financeItems, clientPriorities, meetings, invoices }

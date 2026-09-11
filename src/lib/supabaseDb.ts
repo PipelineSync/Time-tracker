@@ -21,6 +21,7 @@ import type {
   NoteColor,
   Permission,
   Invoice,
+  InvoiceBasis,
   FinanceItem,
 } from './types'
 import { CLIENT_PRIORITY_LANES, DEFAULT_SLACK_SETTINGS, DEFAULT_CLIENT_COLOR, DEFAULT_NOTE_COLOR, NOTE_COLORS, PERMISSIONS, TEAM_VIEW_PERMISSIONS, ALL_ENTRIES_VIEW_PERMISSIONS, normalizePermissions } from './types'
@@ -604,13 +605,17 @@ function normalizeFinanceRow(f: FinanceItem): FinanceItem {
  * Normalize an invoice row. PostgREST returns `numeric` columns as strings,
  * so the amount is coerced here; the stage check constraint has kept invalid
  * values out of the database, but an unknown one still falls back to Pending
- * so one bad row cannot break the board.
+ * so one bad row cannot break the board. The basis falls back to 'client'
+ * for rows written before the column existed.
  */
 function normalizeInvoiceRow(inv: Invoice): Invoice {
   const amount = Number(inv.amount)
+  const basis: InvoiceBasis = inv.basis === 'project' ? 'project' : 'client'
   return {
     ...inv,
     amount: Number.isFinite(amount) ? Math.max(0, amount) : 0,
+    basis,
+    project_name: basis === 'project' && typeof inv.project_name === 'string' && inv.project_name.trim() ? inv.project_name.trim() : null,
     due_date: typeof inv.due_date === 'string' ? inv.due_date.slice(0, 10) : new Date().toISOString().slice(0, 10),
     stage: inv.stage === 'awaiting' || inv.stage === 'paid' ? inv.stage : 'pending',
     notes: typeof inv.notes === 'string' && inv.notes.trim() ? inv.notes.trim() : null,
@@ -2381,7 +2386,7 @@ export const supabaseBackend: DataBackend = {
     if (!canDo(me.data!, 'invoices.view')) return denied('use the invoicing board')
     const { data, error } = await client()
       .from('invoices')
-      .select('id, client_id, amount, due_date, stage, notes, created_at, updated_at')
+      .select('id, client_id, basis, project_name, amount, due_date, stage, notes, created_at, updated_at')
       .order('due_date', { ascending: true })
       .order('created_at', { ascending: true })
     if (error) {
@@ -2400,7 +2405,10 @@ export const supabaseBackend: DataBackend = {
     if (!canDo(me.data!, 'invoices.view')) return denied('use the invoicing board')
     if (!input.client_id) return fail('Pick a client to bill.')
     const amount = Number(input.amount)
-    if (!Number.isFinite(amount) || amount <= 0) return fail('Give the invoice an amount greater than zero.')
+    if (!Number.isFinite(amount) || amount < 0) return fail('Give the invoice a valid amount — or leave it at zero while the figure is unknown.')
+    const basis: InvoiceBasis = input.basis === 'project' ? 'project' : 'client'
+    const project_name = basis === 'project' ? input.project_name?.trim() || null : null
+    if (basis === 'project' && !project_name) return fail('Name the project this invoice bills.')
     if (!/^\d{4}-\d{2}-\d{2}$/.test(input.due_date) || Number.isNaN(new Date(`${input.due_date}T00:00:00`).getTime())) {
       return fail('Pick the date payment is due.')
     }
@@ -2408,6 +2416,8 @@ export const supabaseBackend: DataBackend = {
       .from('invoices')
       .insert({
         client_id: input.client_id,
+        basis,
+        project_name,
         amount: Math.round(amount * 100) / 100,
         due_date: input.due_date,
         stage: input.stage ?? 'pending',
@@ -2435,8 +2445,32 @@ export const supabaseBackend: DataBackend = {
     }
     if (patch.amount !== undefined) {
       const amount = Number(patch.amount)
-      if (!Number.isFinite(amount) || amount <= 0) return fail('Give the invoice an amount greater than zero.')
+      if (!Number.isFinite(amount) || amount < 0) return fail('Give the invoice a valid amount — or leave it at zero while the figure is unknown.')
       update.amount = Math.round(amount * 100) / 100
+    }
+    if (patch.basis !== undefined) {
+      update.basis = patch.basis === 'project' ? 'project' : 'client'
+    }
+    if (patch.project_name !== undefined) {
+      update.project_name = patch.project_name?.trim() || null
+    }
+    // A project-based invoice must name its project. The name may arrive in
+    // the same patch as the basis (the edit dialog saves both) or already sit
+    // on the row, so resolve the effective pair — patch first, row second —
+    // before allowing the write. Stage-only patches (dragging a card) skip
+    // the extra read entirely.
+    if (update.basis !== undefined || update.project_name !== undefined) {
+      const { data: currentRow } = await client()
+        .from('invoices')
+        .select('basis, project_name')
+        .eq('id', id)
+        .single()
+      const row = (currentRow ?? {}) as Pick<Invoice, 'basis' | 'project_name'>
+      const basis: InvoiceBasis = (update.basis as InvoiceBasis | undefined) ?? (row.basis === 'project' ? 'project' : 'client')
+      const project_name = update.project_name !== undefined
+        ? (update.project_name as string | null)
+        : typeof row.project_name === 'string' && row.project_name.trim() ? row.project_name.trim() : null
+      if (basis === 'project' && !project_name) return fail('Name the project this invoice bills.')
     }
     if (patch.due_date !== undefined) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(patch.due_date) || Number.isNaN(new Date(`${patch.due_date}T00:00:00`).getTime())) {
@@ -2727,6 +2761,8 @@ export const supabaseBackend: DataBackend = {
       if (!seededClientId) continue
       await sb.from('invoices').insert({
         client_id: seededClientId,
+        basis: inv.basis,
+        project_name: inv.project_name,
         amount: inv.amount,
         due_date: inv.due_date,
         stage: inv.stage,

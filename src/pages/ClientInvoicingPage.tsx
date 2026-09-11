@@ -6,6 +6,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
+  Folder,
   GripVertical,
   Pencil,
   Plus,
@@ -175,7 +176,21 @@ export function ClientInvoicingPage() {
             <div className="flex items-center gap-1.5">
               <ClientBadge client={clientOf(invoice.client_id)} showInactive={false} />
             </div>
-            <p className="mt-1 text-lg font-bold leading-tight tracking-tight">{money(invoice.amount, currency)}</p>
+            {/* Project-based invoices carry the project they bill; client-based
+                ones bill the client whole, so there is nothing more to show. */}
+            {invoice.basis === 'project' && (
+              <Badge variant="muted" className="mt-1 gap-1 text-[10px]">
+                <Folder className="h-3 w-3" />
+                <span className="max-w-[14rem] truncate">{invoice.project_name || 'Project'}</span>
+              </Badge>
+            )}
+            {invoice.amount > 0 ? (
+              <p className="mt-1 text-lg font-bold leading-tight tracking-tight">{money(invoice.amount, currency)}</p>
+            ) : (
+              // No amount yet — the invoice went on the board before its
+              // figure was known.
+              <p className="mt-1 text-sm font-medium italic leading-tight text-muted-foreground">No amount yet</p>
+            )}
             <div className="mt-1.5 flex flex-wrap items-center gap-1">
               <Badge variant={overdue ? 'destructive' : 'muted'} className="gap-1 text-[10px]">
                 <CalendarDays className="h-3 w-3" />
@@ -402,7 +417,7 @@ export function ClientInvoicingPage() {
         title="Delete this invoice?"
         description={
           deleting
-            ? `The ${money(deleting.amount, currency)} invoice for ${clientOf(deleting.client_id)?.name ?? 'this client'} comes off the board. This cannot be undone.`
+            ? `The ${deleting.amount > 0 ? `${money(deleting.amount, currency)} ` : ''}invoice for ${clientOf(deleting.client_id)?.name ?? 'this client'}${deleting.basis === 'project' && deleting.project_name ? ` — ${deleting.project_name}` : ''} comes off the board. This cannot be undone.`
             : ''
         }
         confirmLabel="Delete invoice"
