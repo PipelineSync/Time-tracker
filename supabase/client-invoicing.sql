@@ -57,11 +57,13 @@ create table if not exists public.invoices (
   id        uuid primary key default gen_random_uuid(),
   -- Workspace owner (the admin). Set automatically by trg_invoices_user.
   user_id   uuid not null references auth.users (id) on delete cascade,
-  -- The client the money is from. Cascade: a deleted client's invoices go
-  -- with it — an invoice has nobody left to bill.
-  client_id uuid not null references public.clients (id) on delete cascade,
-  -- What the invoice bills: the client as a whole, or one named project of
-  -- that client. 'client' is the default so pre-basis rows keep their shape.
+  -- The client billed — set on a client-based invoice, null on a
+  -- project-based one (client and project are different billing targets,
+  -- never both). Cascade: a deleted client's client-based invoices go with
+  -- it — an invoice has nobody left to bill.
+  client_id uuid references public.clients (id) on delete cascade,
+  -- What the invoice bills: a client, or a named project on its own. 'client'
+  -- is the default so pre-basis rows keep their shape.
   basis     text not null default 'client' check (basis in ('client', 'project')),
   -- The project billed — set when basis is 'project' (and required then,
   -- enforced by the app), null for client-based invoices.
@@ -80,14 +82,18 @@ create table if not exists public.invoices (
   updated_at timestamptz not null default now()
 );
 
--- Older databases: add the billing basis and project name. `if not exists`
--- keeps this safe to re-run on databases that just created the table above.
+-- Older databases: add the billing basis and project name, and let
+-- project-based invoices exist without a client. Idempotent alters keep
+-- this safe to re-run on databases that just created the table above.
 alter table public.invoices add column if not exists basis text;
 alter table public.invoices add column if not exists project_name text;
 -- Backfill: every invoice that predates the column bills its client whole.
 update public.invoices set basis = 'client' where basis is null;
 alter table public.invoices alter column basis set default 'client';
 alter table public.invoices alter column basis set not null;
+-- A project-based invoice bills a named project, not a client — its
+-- client_id is null.
+alter table public.invoices alter column client_id drop not null;
 do $$
 begin
   if not exists (

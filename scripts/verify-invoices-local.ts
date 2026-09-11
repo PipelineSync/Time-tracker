@@ -5,8 +5,9 @@
  *  - the admin can create, edit, move (free drag) and delete invoices
  *  - cards sort by due date, so the soonest-due invoice is on top
  *  - the amount is optional — blank/zero is allowed until the figure is known
- *  - an invoice is client based or project based, and a project-based one
- *    must name its project
+ *  - an invoice is client based or project based — different billing
+ *    targets: a project-based one names its project and carries no client,
+ *    a client-based one picks a client and has no project
  *  - invalid invoices (no client, negative amount, bad due date) are refused
  *  - a worker without `invoices.view` is refused at the backend, not just the UI
  *  - a granted worker sees and manages the very same board
@@ -52,6 +53,7 @@ async function main() {
   assert(dueTodayOrFuture.length > 0 && duePast.length > 0, 'the seed has both upcoming and past due dates')
   assert(seeded.every((i) => i.basis === 'client' || (i.basis === 'project' && !!i.project_name)), 'every seeded invoice is client based or a named project')
   assert(seeded.some((i) => i.basis === 'project' && !!i.project_name), 'the seed includes a project-based invoice')
+  assert(seeded.every((i) => (i.basis === 'project') === (i.client_id === null)), 'project-based invoices carry no client, client-based ones always do')
 
   // ---- 3. create / edit / move / delete ------------------------------------
   const clients = (await localBackend.listClients()).data || []
@@ -68,6 +70,7 @@ async function main() {
   assert(created.stage === 'pending', 'a new invoice starts in Pending')
   assert(created.notes === 'verify', 'creating trims the notes')
   assert(created.basis === 'client' && created.project_name === null, 'a new invoice defaults to client based')
+  assert(!!(await localBackend.createInvoice({ client_id: null, amount: 10, due_date: due(5) })).error, 'a client-based invoice without a client is refused')
   assert(!!(await localBackend.createInvoice({ client_id: 'no-such-client', amount: 10, due_date: due(5) })).error, 'an unknown client is refused')
   assert(!!(await localBackend.createInvoice({ client_id: clientId, amount: -5, due_date: due(5) })).error, 'a negative amount is refused')
   assert(!!(await localBackend.createInvoice({ client_id: clientId, amount: 10, due_date: 'not-a-date' })).error, 'an invalid due date is refused')
@@ -77,17 +80,19 @@ async function main() {
   const noAmount = (await localBackend.createInvoice({ client_id: clientId, amount: 0, due_date: due(4) })).data!
   assert(noAmount.amount === 0, 'a zero amount is accepted — the figure can be filled in later')
 
-  // Client or project based; a project-based invoice must name its project.
+  // Client or project based — different billing targets: a project-based
+  // invoice names the project and carries no client at all.
   const projectBased = (await localBackend.createInvoice({
-    client_id: clientId,
+    client_id: null,
     basis: 'project',
     project_name: '  Website redesign  ',
     amount: 0, // optional amount and project basis together
     due_date: due(6),
   })).data!
-  assert(projectBased.basis === 'project' && projectBased.project_name === 'Website redesign', 'a project-based invoice keeps its trimmed project name')
-  assert(!!(await localBackend.createInvoice({ client_id: clientId, basis: 'project', due_date: due(6) })).error, 'a project-based invoice without a project name is refused')
-  assert(!!(await localBackend.createInvoice({ client_id: clientId, basis: 'project', project_name: '   ', due_date: due(6) })).error, 'a blank project name is refused')
+  assert(projectBased.basis === 'project' && projectBased.client_id === null, 'a project-based invoice has no client')
+  assert(projectBased.project_name === 'Website redesign', 'a project-based invoice keeps its trimmed project name')
+  assert(!!(await localBackend.createInvoice({ client_id: null, basis: 'project', due_date: due(6) })).error, 'a project-based invoice without a project name is refused')
+  assert(!!(await localBackend.createInvoice({ client_id: null, basis: 'project', project_name: '   ', due_date: due(6) })).error, 'a blank project name is refused')
 
   // The board's order: due soonest first within a column.
   const pending = ((await localBackend.listInvoices()).data || []).filter((i) => i.stage === 'pending')
@@ -107,13 +112,15 @@ async function main() {
   const draggedProject = (await localBackend.updateInvoice(projectBased.id, { stage: 'awaiting' })).data!
   assert(draggedProject.basis === 'project' && draggedProject.project_name === 'Website redesign', 'dragging a project-based invoice keeps its basis and project name')
 
-  // Editing can switch the basis — and switching back to the client clears
-  // the project, while going project-based without a name is refused.
-  const nowClient = (await localBackend.updateInvoice(projectBased.id, { basis: 'client' })).data!
-  assert(nowClient.basis === 'client' && nowClient.project_name === null, 'switching to client based clears the project name')
+  // Editing can switch the billing target: to project (client comes off,
+  // project name required) and back to client (project cleared, client
+  // required again).
+  assert(!!(await localBackend.updateInvoice(projectBased.id, { basis: 'client', client_id: null })).error, 'switching to client based without picking a client is refused')
+  const nowClient = (await localBackend.updateInvoice(projectBased.id, { basis: 'client', client_id: clientId })).data!
+  assert(nowClient.basis === 'client' && nowClient.client_id === clientId && nowClient.project_name === null, 'switching to client based bills the client and clears the project')
   assert(!!(await localBackend.updateInvoice(projectBased.id, { basis: 'project', project_name: null })).error, 'switching back to project based without a name is refused')
   const nowProject = (await localBackend.updateInvoice(projectBased.id, { basis: 'project', project_name: ' Components ' })).data!
-  assert(nowProject.basis === 'project' && nowProject.project_name === 'Components', 'switching back to project based with a name works')
+  assert(nowProject.basis === 'project' && nowProject.client_id === null && nowProject.project_name === 'Components', 'switching back to project based drops the client and names the project')
   const amountFilled = (await localBackend.updateInvoice(projectBased.id, { amount: 450 })).data!
   assert(amountFilled.amount === 450, 'the amount can be filled in after the fact')
 

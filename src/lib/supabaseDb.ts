@@ -2403,19 +2403,23 @@ export const supabaseBackend: DataBackend = {
     const me = await requireUser()
     if (me.error) return fail(me.error)
     if (!canDo(me.data!, 'invoices.view')) return denied('use the invoicing board')
-    if (!input.client_id) return fail('Pick a client to bill.')
-    const amount = Number(input.amount)
-    if (!Number.isFinite(amount) || amount < 0) return fail('Give the invoice a valid amount — or leave it at zero while the figure is unknown.')
+    // Client and project are different billing targets: a client-based
+    // invoice bills a client, a project-based one bills a named project and
+    // carries no client at all.
     const basis: InvoiceBasis = input.basis === 'project' ? 'project' : 'client'
+    const client_id = basis === 'client' ? input.client_id : null
+    if (basis === 'client' && !client_id) return fail('Pick a client to bill.')
     const project_name = basis === 'project' ? input.project_name?.trim() || null : null
     if (basis === 'project' && !project_name) return fail('Name the project this invoice bills.')
+    const amount = Number(input.amount)
+    if (!Number.isFinite(amount) || amount < 0) return fail('Give the invoice a valid amount — or leave it at zero while the figure is unknown.')
     if (!/^\d{4}-\d{2}-\d{2}$/.test(input.due_date) || Number.isNaN(new Date(`${input.due_date}T00:00:00`).getTime())) {
       return fail('Pick the date payment is due.')
     }
     const { data, error } = await client()
       .from('invoices')
       .insert({
-        client_id: input.client_id,
+        client_id,
         basis,
         project_name,
         amount: Math.round(amount * 100) / 100,
@@ -2440,8 +2444,9 @@ export const supabaseBackend: DataBackend = {
     if (!canDo(me.data!, 'invoices.view')) return denied('use the invoicing board')
     const update: Record<string, unknown> = {}
     if (patch.client_id !== undefined) {
-      if (!patch.client_id) return fail('Pick a client to bill.')
-      update.client_id = patch.client_id
+      // null clears the client — only valid on a project-based invoice,
+      // checked below together with the basis.
+      update.client_id = patch.client_id || null
     }
     if (patch.amount !== undefined) {
       const amount = Number(patch.amount)
@@ -2471,6 +2476,9 @@ export const supabaseBackend: DataBackend = {
         ? (update.project_name as string | null)
         : typeof row.project_name === 'string' && row.project_name.trim() ? row.project_name.trim() : null
       if (basis === 'project' && !project_name) return fail('Name the project this invoice bills.')
+      // Project based bills the project alone — the client comes off.
+      if (basis === 'project') update.client_id = null
+      else if (update.client_id === null) return fail('Pick a client to bill.')
     }
     if (patch.due_date !== undefined) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(patch.due_date) || Number.isNaN(new Date(`${patch.due_date}T00:00:00`).getTime())) {
@@ -2756,9 +2764,10 @@ export const supabaseBackend: DataBackend = {
       await sb.from('meetings').insert({ title: m.title, start_time: m.start_time, notes: m.notes })
     }
     // Sample invoices — best effort, same deal (supabase/client-invoicing.sql).
+    // Project-based invoices bill a named project and carry no client.
     for (const inv of invoices ?? []) {
-      const seededClientId = clientIdBySeedId.get(inv.client_id)
-      if (!seededClientId) continue
+      const seededClientId = inv.client_id ? clientIdBySeedId.get(inv.client_id) : null
+      if (inv.client_id && !seededClientId) continue
       await sb.from('invoices').insert({
         client_id: seededClientId,
         basis: inv.basis,

@@ -1683,10 +1683,12 @@ create table if not exists public.invoices (
   id        uuid primary key default gen_random_uuid(),
   -- Workspace owner (the admin). Set automatically by trg_invoices_user.
   user_id   uuid not null references auth.users (id) on delete cascade,
-  -- The client the money is from. Cascade: a deleted client's invoices go too.
-  client_id uuid not null references public.clients (id) on delete cascade,
-  -- What the invoice bills: the client as a whole, or one named project of
-  -- that client (the project name is required then, enforced by the app).
+  -- The client billed — set on a client-based invoice, null on a
+  -- project-based one (client and project are different billing targets).
+  -- Cascade: a deleted client's client-based invoices go too.
+  client_id uuid references public.clients (id) on delete cascade,
+  -- What the invoice bills: a client, or a named project on its own (the
+  -- project name is required then, enforced by the app).
   basis     text not null default 'client' check (basis in ('client', 'project')),
   project_name text,
   -- Zero is allowed: an invoice can go on the board before its figure is known.

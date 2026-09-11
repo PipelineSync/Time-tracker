@@ -66,7 +66,7 @@ export function InvoiceFormDialog({
     if (!open) return
     if (invoice) {
       setForm({
-        clientId: invoice.client_id,
+        clientId: invoice.client_id ?? '',
         basis: invoice.basis,
         projectName: invoice.project_name || '',
         amount: String(invoice.amount),
@@ -88,13 +88,14 @@ export function InvoiceFormDialog({
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!form.clientId) {
+    // Client and project are different billing targets: a client-based
+    // invoice must pick a client, a project-based one must name the project
+    // — and carries no client at all.
+    const projectName = form.basis === 'project' ? form.projectName.trim() : ''
+    if (form.basis === 'client' && !form.clientId) {
       toast.error('Pick a client to bill.')
       return
     }
-    // Project-based invoices must name the project; client-based ones carry
-    // no project at all.
-    const projectName = form.basis === 'project' ? form.projectName.trim() : ''
     if (form.basis === 'project' && !projectName) {
       toast.error('Name the project this invoice bills.')
       return
@@ -112,28 +113,21 @@ export function InvoiceFormDialog({
     }
     setSaving(true)
     try {
+      const payload = {
+        client_id: form.basis === 'client' ? form.clientId : null,
+        basis: form.basis,
+        project_name: projectName || null,
+        amount: Math.round(amount * 100) / 100,
+        due_date: form.dueDate,
+        stage: form.stage,
+        notes: form.notes.trim() || null,
+      }
       if (invoice) {
-        const saved = await updateInvoice(invoice.id, {
-          client_id: form.clientId,
-          basis: form.basis,
-          project_name: projectName || null,
-          amount: Math.round(amount * 100) / 100,
-          due_date: form.dueDate,
-          stage: form.stage,
-          notes: form.notes.trim() || null,
-        })
+        const saved = await updateInvoice(invoice.id, payload)
         if (!saved) return
         toast.success(saved.stage !== invoice.stage ? `Invoice moved to ${InvoiceStageNames[saved.stage]}.` : 'Invoice updated.')
       } else {
-        const created = await createInvoice({
-          client_id: form.clientId,
-          basis: form.basis,
-          project_name: projectName || null,
-          amount: Math.round(amount * 100) / 100,
-          due_date: form.dueDate,
-          stage: form.stage,
-          notes: form.notes.trim() || null,
-        })
+        const created = await createInvoice(payload)
         if (!created) return
         toast.success(created.stage === 'pending' ? 'Invoice raised — it is on the board as Pending.' : `Invoice raised — filed under ${InvoiceStageNames[created.stage]}.`)
       }
@@ -157,10 +151,10 @@ export function InvoiceFormDialog({
           </DialogHeader>
 
           <div className="grid gap-4 py-4">
-            {/* One field, one choice: what the invoice bills. The Client |
-                Project switch and the input it reveals are the same field —
-                client based picks the client; project based picks the client
-                AND names the project. One of the two must be chosen. */}
+            {/* One field, one choice: what the invoice bills. Client and
+                project are different billing targets — client based shows
+                the client dropdown, project based replaces it with the
+                project name. Exactly one of the two is billed. */}
             <div className="grid gap-2">
               <span className="text-sm font-medium leading-none">Bill to</span>
               <div className="grid gap-3 rounded-lg border bg-muted/30 p-2.5">
@@ -189,19 +183,7 @@ export function InvoiceFormDialog({
                   </Button>
                 </div>
 
-                <div className="grid gap-2">
-                  <Label htmlFor="invoice-client" className="text-xs text-muted-foreground">
-                    Client
-                  </Label>
-                  <ClientSelect
-                    id="invoice-client"
-                    value={form.clientId}
-                    onValueChange={(v) => set('clientId', v)}
-                    placeholder="Choose a client"
-                  />
-                </div>
-
-                {form.basis === 'project' && (
+                {form.basis === 'project' ? (
                   <div className="grid gap-2">
                     <Label htmlFor="invoice-project" className="text-xs text-muted-foreground">
                       Project name
@@ -214,12 +196,24 @@ export function InvoiceFormDialog({
                       required
                     />
                   </div>
+                ) : (
+                  <div className="grid gap-2">
+                    <Label htmlFor="invoice-client" className="text-xs text-muted-foreground">
+                      Client
+                    </Label>
+                    <ClientSelect
+                      id="invoice-client"
+                      value={form.clientId}
+                      onValueChange={(v) => set('clientId', v)}
+                      placeholder="Choose a client"
+                    />
+                  </div>
                 )}
               </div>
               <p className="text-xs text-muted-foreground">
                 {form.basis === 'project'
-                  ? 'Project based — this invoice bills one project of the client.'
-                  : 'Client based — this invoice bills the client as a whole.'}
+                  ? 'Project based — this invoice bills the project named above, not a client.'
+                  : 'Client based — this invoice bills the client chosen above.'}
               </p>
             </div>
 
