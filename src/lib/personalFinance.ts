@@ -6,10 +6,85 @@ export type PFSource = { id: string; name: string }
 export type PFIncome = { id: string; date: string; sourceId: string; amount: number; accountId: string; note: string }
 export type PFExpense = { id: string; date: string; name: string; categoryId: string; amount: number; accountId: string; paid: boolean; note: string; recurringId?: string; period?: string }
 export type PFTransfer = { id: string; date: string; fromId: string; toId: string; amount: number; note: string }
-export type PFRecurring = { id: string; name: string; categoryId: string; accountId: string; expectedAmount: number | null; dueDay: number | null; active: boolean }
+export type PFRecurring = {
+  id: string
+  name: string
+  categoryId: string
+  accountId: string
+  expectedAmount: number | null
+  dueDay: number | null
+  active: boolean
+  /** Null means the payment continues until it is switched off manually. */
+  maxOccurrences: number | null
+  /** Number of payments recorded from this recurring item. */
+  runCount: number
+}
 export type PFData = { accounts: PFAccount[]; categories: PFCategory[]; sources: PFSource[]; incomes: PFIncome[]; expenses: PFExpense[]; transfers: PFTransfer[]; recurring: PFRecurring[] }
 
 export const emptyPFData = (): PFData => ({ accounts: [], categories: [], sources: [], incomes: [], expenses: [], transfers: [], recurring: [] })
+
+function occurrenceLimit(value: unknown): number | null {
+  const n = Number(value)
+  return Number.isInteger(n) && n >= 1 ? n : null
+}
+
+function occurrenceCount(value: unknown): number | null {
+  const n = Number(value)
+  return Number.isInteger(n) && n >= 0 ? n : null
+}
+
+/**
+ * Bring saved Personal Tracker JSON forward to the current shape. Recurring
+ * rows created before run limits existed infer their count from the expenses
+ * they generated, while remaining open-ended exactly as they were before.
+ */
+export function normalizePFData(value: unknown): PFData {
+  const input = value && typeof value === 'object' ? value as Partial<PFData> : {}
+  const accounts = Array.isArray(input.accounts) ? input.accounts : []
+  const categories = Array.isArray(input.categories) ? input.categories : []
+  const sources = Array.isArray(input.sources) ? input.sources : []
+  const incomes = Array.isArray(input.incomes) ? input.incomes : []
+  const expenses = Array.isArray(input.expenses) ? input.expenses : []
+  const transfers = Array.isArray(input.transfers) ? input.transfers : []
+  const savedRecurring = Array.isArray(input.recurring) ? input.recurring : []
+
+  const historicalRuns = new Map<string, number>()
+  for (const expense of expenses) {
+    if (!expense.recurringId) continue
+    historicalRuns.set(expense.recurringId, (historicalRuns.get(expense.recurringId) ?? 0) + 1)
+  }
+
+  const recurring = savedRecurring.map((item) => {
+    const maxOccurrences = occurrenceLimit(item.maxOccurrences)
+    const runCount = occurrenceCount(item.runCount) ?? historicalRuns.get(item.id) ?? 0
+    return {
+      ...item,
+      maxOccurrences,
+      runCount,
+      // A completed limited plan stays off even if an older client saved a
+      // stale active flag after its final payment.
+      active: Boolean(item.active) && (maxOccurrences === null || runCount < maxOccurrences),
+    }
+  })
+
+  return { ...input, accounts, categories, sources, incomes, expenses, transfers, recurring }
+}
+
+/** Count one recorded payment and switch the item off after its final run. */
+export function recordRecurringRun(item: PFRecurring): PFRecurring {
+  const maxOccurrences = occurrenceLimit(item.maxOccurrences)
+  const currentRunCount = occurrenceCount(item.runCount) ?? 0
+  if (!item.active || (maxOccurrences !== null && currentRunCount >= maxOccurrences)) {
+    return { ...item, maxOccurrences, runCount: currentRunCount, active: false }
+  }
+  const runCount = currentRunCount + 1
+  return {
+    ...item,
+    maxOccurrences,
+    runCount,
+    active: maxOccurrences === null || runCount < maxOccurrences,
+  }
+}
 export const pfId = () => crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`
 export const today = () => new Date().toISOString().slice(0, 10)
 export const currentPeriod = () => new Date().toISOString().slice(0, 7)
@@ -35,8 +110,9 @@ export function accountBalance(data: PFData, accountId: string) {
     - data.transfers.filter((x) => x.fromId === accountId).reduce((s, x) => s + x.amount, 0)
 }
 
-const url = import.meta.env.VITE_SUPABASE_URL as string | undefined
-const key = (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY) as string | undefined
+const env = import.meta.env
+const url = env?.VITE_SUPABASE_URL as string | undefined
+const key = (env?.VITE_SUPABASE_PUBLISHABLE_KEY || env?.VITE_SUPABASE_ANON_KEY) as string | undefined
 const cloud = url && key ? createClient(url, key) : null
 const localKey = (userId: string) => `work-tracker:personal-finance:${userId}`
 
@@ -56,31 +132,32 @@ export interface PFLoadResult {
 export async function loadPersonalFinance(userId: string): Promise<PFLoadResult> {
   if (cloud) {
     const { data, error } = await cloud.from('personal_finance_data').select('data').eq('user_id', userId).maybeSingle()
-    if (!error && data?.data) return { data: { ...emptyPFData(), ...(data.data as PFData) }, stale: false, cloudError: null }
+    if (!error && data?.data) return { data: normalizePFData(data.data), stale: false, cloudError: null }
     const missingTable = error?.code === '42P01'
     if (error) console.warn('[personal-finance] Cloud load failed', error.message)
     // Fall back to the local copy, but flag it: silently serving a stale
     // balance during an outage is how "the tracker says I have X" goes wrong.
     try {
       return {
-        data: { ...emptyPFData(), ...JSON.parse(localStorage.getItem(localKey(userId)) || '{}') },
+        data: normalizePFData(JSON.parse(localStorage.getItem(localKey(userId)) || '{}')),
         stale: !missingTable,
         cloudError: error?.message ?? null,
       }
     } catch { return { data: emptyPFData(), stale: false, cloudError: error?.message ?? null } }
   }
-  try { return { data: { ...emptyPFData(), ...JSON.parse(localStorage.getItem(localKey(userId)) || '{}') }, stale: false, cloudError: null } }
+  try { return { data: normalizePFData(JSON.parse(localStorage.getItem(localKey(userId)) || '{}')), stale: false, cloudError: null } }
   catch { return { data: emptyPFData(), stale: false, cloudError: null } }
 }
 
 export async function savePersonalFinance(userId: string, data: PFData) {
-  const serialized = JSON.stringify(data)
+  const normalized = normalizePFData(data)
+  const serialized = JSON.stringify(normalized)
   if (serialized.length > MAX_PF_BYTES) {
     throw new Error('Personal tracker data is too large to save. Archive old accounts or delete transactions you no longer need.')
   }
   localStorage.setItem(localKey(userId), serialized)
   if (cloud) {
-    const { error } = await cloud.from('personal_finance_data').upsert({ user_id: userId, data, updated_at: new Date().toISOString() })
+    const { error } = await cloud.from('personal_finance_data').upsert({ user_id: userId, data: normalized, updated_at: new Date().toISOString() })
     if (error) throw new Error(error.code === '42P01' ? 'Personal Tracker database is not installed. Run supabase/personal-finance.sql.' : error.message)
   }
 }
