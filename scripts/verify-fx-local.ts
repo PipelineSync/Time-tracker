@@ -255,9 +255,94 @@ async function checkSyncFunction() {
   }
 }
 
+/**
+ * Renders the REAL components with react-dom/server and inspects the markup.
+ *
+ * This is the part the pure-logic checks above cannot reach: that RateChip
+ * actually paints "1 USD = ₱62.63", that it paints NOTHING (an empty string,
+ * not an empty wrapper that would still occupy a slot) for a non-USD
+ * workspace, and that the Dashboard's earnings card really carries the peso
+ * sub-line. createElement rather than JSX so this stays a .ts file like every
+ * other verify script.
+ */
+async function checkRenderedMarkup() {
+  const { createElement } = await import('react')
+  const { renderToStaticMarkup } = await import('react-dom/server')
+  const { RateChip } = await import('@/components/RateChip')
+  const { StatCard } = await import('@/components/StatCard')
+  const { usdPhpRate, phpEquivalent } = await import('@/lib/fx')
+  const { money } = await import('@/lib/utils')
+
+  const chip = (over: Record<string, unknown> = {}) =>
+    renderToStaticMarkup(createElement(RateChip, { settings: settings(over) as any }))
+
+  // --- a synced rate --------------------------------------------------------
+  const synced = chip({ usd_php_rate: 62.629, usd_php_rate_updated_at: '2026-09-11T00:00:00.000Z' })
+  assert(synced.includes('1 USD'), `the chip states the pair (got "${stripTags(synced)}")`)
+  assert(synced.includes('₱62.63'), `the chip shows the synced rate (got "${stripTags(synced)}")`)
+  assert(synced.includes('=') && !synced.includes('≈'), 'a synced rate is stated with "=", not the approximate "≈"')
+  assert(synced.includes('<svg'), 'the chip renders its icon')
+  assert(
+    /title="[^"]*2026/.test(synced),
+    'the tooltip names the day the rate was synced',
+  )
+
+  // --- the bundled fallback -------------------------------------------------
+  const fallback = chip({ usd_php_rate: null })
+  assert(fallback.includes('≈'), `an unsynced rate is marked approximate (got "${stripTags(fallback)}")`)
+  assert(!/>[^<]*1 USD =/.test(fallback), 'and is NOT stated with "=" as though it were a live quote')
+  assert(
+    /title="[^"]*daily sync has not written/i.test(fallback),
+    'its tooltip says why it is approximate',
+  )
+
+  // --- hidden entirely for a non-USD workspace ------------------------------
+  // The whole point of the "hide it" decision: nothing is rendered at all, so
+  // not even an empty pill is left taking up room on the title row.
+  for (const currency of ['PHP', 'EUR', 'GBP', 'JPY']) {
+    assert(chip({ currency }) === '', `a ${currency} workspace renders nothing at all`)
+  }
+  assert(chip({ currency: 'usd' }) === '', 'the currency match is case-sensitive, so a malformed code hides rather than shows')
+
+  // --- the Dashboard earnings card ------------------------------------------
+  const fx = usdPhpRate(settings({ usd_php_rate: 62.629 }))
+  const card = renderToStaticMarkup(
+    createElement(StatCard, {
+      label: "Today's Earnings",
+      value: money(120, 'USD'),
+      sub: phpEquivalent(120, fx),
+      loading: false,
+    }),
+  )
+  assert(card.includes("Today&#x27;s Earnings") || card.includes("Today's Earnings"), 'the card keeps its label')
+  assert(card.includes('$120.00'), `the card still leads with the workspace currency (got "${stripTags(card)}")`)
+  assert(card.includes('₱7,515'), `and carries the peso equivalent underneath (got "${stripTags(card)}")`)
+
+  // With no rate the sub prop is undefined, so the card must be byte-identical
+  // in structure to how it rendered before this feature existed.
+  const without = renderToStaticMarkup(
+    createElement(StatCard, {
+      label: "Today's Earnings",
+      value: money(120, 'USD'),
+      sub: phpEquivalent(120, usdPhpRate(settings({ currency: 'PHP' }))),
+      loading: false,
+    }),
+  )
+  assert(!without.includes('₱'), 'a non-USD workspace gets no peso sub-line on the card')
+  assert(without === card.replace(/<p class="text-xs text-muted-foreground">≈ ₱7,515<\/p>/, ''),
+    'and the card markup is otherwise unchanged — no empty sub-line element left behind')
+}
+
+/** Collapse rendered markup to its visible text, for readable failure output. */
+function stripTags(html: string): string {
+  return html.replace(/<svg[\s\S]*?<\/svg>/g, '[icon]').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
 async function main() {
   console.log('\n— USD → PHP rate logic —')
   await checkPureLogic()
+  console.log('\n— rendered markup —')
+  await checkRenderedMarkup()
   console.log('\n— demo-mode settings —')
   await checkDemoBackend()
   console.log('\n— sync-fx-rate function —')
