@@ -135,6 +135,7 @@ export type Permission =
   | 'tasks.manage_all'
   | 'priority_board.view'
   | 'meetings.view'
+  | 'invoices.view'
   | 'payments.view_all'
   | 'payments.manage'
   | 'finance.view'
@@ -155,6 +156,7 @@ export const PERMISSIONS: Permission[] = [
   'tasks.manage_all',
   'priority_board.view',
   'meetings.view',
+  'invoices.view',
   'payments.view_all',
   'payments.manage',
   'finance.view',
@@ -257,6 +259,14 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
     description: "The admin's meeting schedule.",
     items: [
       { key: 'meetings.view', label: 'Use the meetings section', hint: 'See every scheduled and past meeting, and add, edit or delete them. The section is admin-only until this is ticked.' },
+    ],
+  },
+  {
+    key: 'invoices',
+    label: 'Client invoicing',
+    description: "The admin's invoice board.",
+    items: [
+      { key: 'invoices.view', label: 'Use the client invoicing board', hint: 'See every invoice on the board, drag it between Pending, Awaiting and Paid, and add, edit or delete invoices. The section is admin-only until this is ticked.' },
     ],
   },
   {
@@ -632,6 +642,52 @@ export interface Meeting {
   title: string
   /** Scheduled start (ISO instant). */
   start_time: string
+  notes: string | null
+  created_at: string
+  updated_at: string
+}
+
+// ---- Client invoicing -------------------------------------------------------
+
+/**
+ * The fixed columns of the client invoicing board. An invoice sits in exactly
+ * one of them and dragging is free — forwards to progress it, backwards to
+ * undo a mistake. There is no ranking inside a column: the cards sort by due
+ * date, so the invoice that needs attention first is always on top.
+ */
+export type InvoiceStage = 'pending' | 'awaiting' | 'paid'
+
+export const INVOICE_STAGES: InvoiceStage[] = ['pending', 'awaiting', 'paid']
+
+export const InvoiceStageNames: Record<InvoiceStage, string> = {
+  pending: 'Pending',
+  awaiting: 'Awaiting',
+  paid: 'Paid',
+}
+
+/** Column accent classes — mirrors the priority board's column dots. */
+export const InvoiceStageStyles: Record<InvoiceStage, { dot: string; accent: string; ring: string }> = {
+  pending: { dot: 'bg-sky-500', accent: 'border-l-sky-500', ring: 'ring-sky-500/40' },
+  awaiting: { dot: 'bg-amber-500', accent: 'border-l-amber-500', ring: 'ring-amber-500/40' },
+  paid: { dot: 'bg-emerald-500', accent: 'border-l-emerald-500', ring: 'ring-emerald-500/40' },
+}
+
+/**
+ * One invoice on the client invoicing board: a client, an amount, when
+ * payment is due and optional notes. The kanban stage is the whole status
+ * model — there is no invoice numbering, line items or tax here (an invoice
+ * raised in the team's real invoicing tool is tracked, not reproduced).
+ * Deliberately minimal, like Meetings: whoever can open the board can run it.
+ */
+export interface Invoice {
+  id: string
+  /** The client the money is from. */
+  client_id: string
+  /** Positive amount, in the workspace's currency. */
+  amount: number
+  /** 'YYYY-MM-DD' — the day payment is due (a date, not an instant, so timezones cannot move it). */
+  due_date: string
+  stage: InvoiceStage
   notes: string | null
   created_at: string
   updated_at: string

@@ -21,6 +21,8 @@ import type {
   ClientPriorityLane,
   Meeting,
   Permission,
+  Invoice,
+  InvoiceStage,
   FinanceItem,
   FinanceKind,
   FinanceStatus,
@@ -29,6 +31,7 @@ import type {
 import {
   CLIENT_COLORS,
   CLIENT_PRIORITY_LANES,
+  INVOICE_STAGES,
   DEFAULT_CLIENT_COLOR,
   DEFAULT_SLACK_SETTINGS,
   FINANCE_KINDS,
@@ -39,7 +42,7 @@ import {
   TASK_STATUSES,
   UNASSIGNED_CLIENT_NAME,
 } from './types'
-import type { DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, CreateFinanceItemInput, CreateMeetingInput } from './backend'
+import type { DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, CreateFinanceItemInput, CreateMeetingInput, CreateInvoiceInput } from './backend'
 import { ACCOUNT_DEACTIVATED_MESSAGE } from './backend'
 import { buildDemoSeed } from './demoSeed'
 import { uid, computeEarnings, formatMinutes, formatDate } from './utils'
@@ -78,6 +81,8 @@ interface UserData {
   clientPriorities: ClientPriority[]
   /** The meetings schedule (see the Meetings page). */
   meetings: Meeting[]
+  /** The client invoicing board's cards (see the Client Invoicing page). */
+  invoices: Invoice[]
   /** Finance ledger: subscriptions, payroll runs and bills (see the Finance page). */
   financeItems: FinanceItem[]
 }
@@ -110,7 +115,7 @@ function writeUsers(users: StoredUser[]) {
 }
 
 function emptyData(): UserData {
-  return { workers: [], entries: [], activeTimers: [], settings: null, comments: [], notifications: [], payments: [], tasks: [], clients: [], clientPriorities: [], meetings: [], financeItems: [] }
+  return { workers: [], entries: [], activeTimers: [], settings: null, comments: [], notifications: [], payments: [], tasks: [], clients: [], clientPriorities: [], meetings: [], invoices: [], financeItems: [] }
 }
 
 /** The method the admin paid a settlement with, or null when unknown/invalid. */
@@ -298,6 +303,41 @@ function sortMeetings(rows: Meeting[], now: number): Meeting[] {
   return [...upcoming, ...past]
 }
 
+// ---- Client invoicing -------------------------------------------------------
+// One board for the whole workspace: every invoice sits in Pending, Awaiting
+// or Paid, and dragging between the columns is the entire workflow. There is
+// no ranking inside a column — cards sort by due date — so a drag is one row
+// patch, not a re-index.
+
+/** Valid board column, defaulting anything unknown/legacy to Pending. */
+function normalizeInvoiceStage(stage: unknown): InvoiceStage {
+  return INVOICE_STAGES.includes(stage as InvoiceStage) ? (stage as InvoiceStage) : 'pending'
+}
+
+/** Local 'YYYY-MM-DD', the invoice due-date format (a date, not an instant). */
+function toISODateOnly(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
+/** Normalize an invoice loaded from storage (or the demo seed). */
+function normalizeInvoice(inv: Invoice): Invoice {
+  const amount = Number(inv.amount)
+  return {
+    ...inv,
+    client_id: String(inv.client_id ?? ''),
+    amount: Number.isFinite(amount) ? Math.max(0, amount) : 0,
+    due_date: typeof inv.due_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(inv.due_date) ? inv.due_date : toISODateOnly(new Date()),
+    stage: normalizeInvoiceStage(inv.stage),
+    notes: typeof inv.notes === 'string' && inv.notes.trim() ? inv.notes.trim() : null,
+  }
+}
+
+/** Board order within a column: due soonest on top, then oldest-created. */
+function sortInvoices(rows: Invoice[]): Invoice[] {
+  return [...rows].sort((a, b) => a.due_date.localeCompare(b.due_date) || a.created_at.localeCompare(b.created_at))
+}
+
 // ---- Finance ledger ---------------------------------------------------------
 // One list of due-dated lines (subscription / payroll / bill). Rows are owned
 // by the admin workspace like everything else; `finance.view` opens the read,
@@ -432,11 +472,15 @@ function readData(userId: string): UserData {
   d.clientPriorities = (d.clientPriorities || []).map(normalizeClientPriority)
   // Workspaces saved before the Meetings section simply load an empty schedule.
   d.meetings = (d.meetings || []).map(normalizeMeeting)
+  // Workspaces saved before the invoicing section simply load an empty board.
+  d.invoices = (d.invoices || []).map(normalizeInvoice)
   // A client that was deleted should not keep a phantom place on the board.
   const clientIds = new Set(d.clients.map((c) => c.id))
   const beforePrune = d.clientPriorities.length
   d.clientPriorities = d.clientPriorities.filter((p) => clientIds.has(p.client_id))
   if (d.clientPriorities.length !== beforePrune) d.clientPriorities = d.clientPriorities.map((p) => ({ ...p }))
+  // Same for invoices — an invoice for a deleted client has nobody to bill.
+  d.invoices = d.invoices.filter((i) => clientIds.has(i.client_id))
   // Workspaces saved before the Finance section simply load an empty ledger.
   d.financeItems = (d.financeItems || []).map(normalizeFinanceItem)
   d.entries = d.entries.map((e) => ({ ...e, client_id: e.client_id ?? null }))
@@ -625,6 +669,20 @@ function maybeAutoSeed(data: UserData) {
     data.financeItems = seed.financeItems.map((f) => ({
       ...f,
       worker_id: f.worker_id ? idMap.get(f.worker_id) ?? null : null,
+      id: uid(),
+    }))
+    // The boards and the schedule are workspace-wide, so the first login
+    // seeds them too — an admin opening the app fresh should see every
+    // section populated, not just the worker/entry lists.
+    data.clientPriorities = (seed.clientPriorities ?? []).map((p) => ({
+      ...p,
+      client_id: clientMap.get(p.client_id) ?? p.client_id,
+      id: uid(),
+    }))
+    data.meetings = (seed.meetings ?? []).map((m) => ({ ...m, id: uid() }))
+    data.invoices = (seed.invoices ?? []).map((i) => ({
+      ...i,
+      client_id: clientMap.get(i.client_id) ?? i.client_id,
       id: uid(),
     }))
     data.settings = seed.settings
@@ -1760,6 +1818,86 @@ export const localBackend: DataBackend = {
     return { data: null, error: null }
   },
 
+  // ---- Client invoicing -----------------------------------------------------
+  // One board for the whole workspace. The admin runs it by default; a worker
+  // the admin granted `invoices.view` sees and manages the very same board.
+  // Whoever can open the page can run it — the stage IS the status, so there
+  // is no separate manage key (same shape as the meetings section).
+
+  async listInvoices() {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (!can(c, 'invoices.view')) return denied('use the invoicing board')
+    return { data: sortInvoices(c.data.invoices), error: null }
+  },
+
+  async createInvoice(input: CreateInvoiceInput) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (!can(c, 'invoices.view')) return denied('use the invoicing board')
+    if (!c.data.clients.some((cl) => cl.id === input.client_id)) return { data: null, error: 'Pick a client to bill.' }
+    const amount = Number(input.amount)
+    if (!Number.isFinite(amount) || amount <= 0) return { data: null, error: 'Give the invoice an amount greater than zero.' }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(input.due_date) || Number.isNaN(new Date(`${input.due_date}T00:00:00`).getTime())) {
+      return { data: null, error: 'Pick the date payment is due.' }
+    }
+    const now = new Date().toISOString()
+    const invoice: Invoice = {
+      id: uid(),
+      client_id: input.client_id,
+      amount: Math.round(amount * 100) / 100,
+      due_date: input.due_date,
+      stage: normalizeInvoiceStage(input.stage),
+      notes: input.notes?.trim() || null,
+      created_at: now,
+      updated_at: now,
+    }
+    c.data.invoices.push(invoice)
+    save(c.data)
+    return { data: invoice, error: null }
+  },
+
+  async updateInvoice(id, patch) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (!can(c, 'invoices.view')) return denied('use the invoicing board')
+    const idx = c.data.invoices.findIndex((i) => i.id === id)
+    if (idx === -1) return { data: null, error: 'Invoice not found.' }
+    const current = c.data.invoices[idx]
+    const client_id = patch.client_id !== undefined ? patch.client_id : current.client_id
+    if (!c.data.clients.some((cl) => cl.id === client_id)) return { data: null, error: 'Pick a client to bill.' }
+    const amount = patch.amount !== undefined ? Number(patch.amount) : current.amount
+    if (!Number.isFinite(amount) || amount <= 0) return { data: null, error: 'Give the invoice an amount greater than zero.' }
+    const due_date = patch.due_date !== undefined ? patch.due_date : current.due_date
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(due_date) || Number.isNaN(new Date(`${due_date}T00:00:00`).getTime())) {
+      return { data: null, error: 'Pick the date payment is due.' }
+    }
+    const next: Invoice = normalizeInvoice({
+      ...current,
+      ...patch,
+      client_id,
+      amount: Math.round(amount * 100) / 100,
+      due_date,
+      stage: normalizeInvoiceStage(patch.stage !== undefined ? patch.stage : current.stage),
+      notes: patch.notes !== undefined ? patch.notes?.trim() || null : current.notes,
+      id: current.id,
+      created_at: current.created_at,
+      updated_at: new Date().toISOString(),
+    })
+    c.data.invoices[idx] = next
+    save(c.data)
+    return { data: next, error: null }
+  },
+
+  async deleteInvoice(id) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (!can(c, 'invoices.view')) return denied('use the invoicing board')
+    c.data.invoices = c.data.invoices.filter((i) => i.id !== id)
+    save(c.data)
+    return { data: null, error: null }
+  },
+
   // ---- Tasks (kanban board) ----------------------------------------------
   // A worker only ever sees and touches their own tasks; the admin sees and
   // manages every worker's. Both roles can add tasks — a worker's new task is
@@ -1933,6 +2071,11 @@ export const localBackend: DataBackend = {
         id: uid(),
       })),
       meetings: (seed.meetings ?? []).map((m) => ({ ...m, id: uid() })),
+      invoices: (seed.invoices ?? []).map((i) => ({
+        ...i,
+        client_id: seedClientMap.get(i.client_id) ?? i.client_id,
+        id: uid(),
+      })),
       financeItems: seed.financeItems.map((f) => ({
         ...f,
         worker_id: f.worker_id ? idMap.get(f.worker_id) ?? null : null,
