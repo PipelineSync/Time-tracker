@@ -422,10 +422,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (!at.error) {
         const timers = at.data ?? []
         setActiveTimers(timers)
-        // The backend scopes the list to the signed-in worker (self-healing
-        // stale rows), so their own timer is the first row. The admin has no
-        // personal timer.
-        setActiveTimer(userRef.current?.role === 'worker' ? timers[0] ?? null : null)
+        // A worker with team-wide entry access may receive every running timer,
+        // not only their own. Never assume the first (most recently started)
+        // timer belongs to the signed-in worker: doing so made the installed app
+        // show a coworker's timer after login and actions failed with
+        // "Not your timer." The admin has no personal timer.
+        const currentUser = userRef.current
+        setActiveTimer(
+          currentUser?.role === 'worker'
+            ? timers.find((timer) => timer.worker_id === currentUser.workerId) ?? null
+            : null
+        )
       }
       if (n.data) setNotifications(n.data)
       if (p.data) setPayments(p.data)
@@ -696,7 +703,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (!at.error) {
       const timers = at.data ?? []
       setActiveTimers(timers)
-      setActiveTimer(userRef.current?.role === 'worker' ? timers[0] ?? null : null)
+      const currentUser = userRef.current
+      setActiveTimer(
+        currentUser?.role === 'worker'
+          ? timers.find((timer) => timer.worker_id === currentUser.workerId) ?? null
+          : null
+      )
     }
   }
 
