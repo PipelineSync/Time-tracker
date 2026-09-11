@@ -98,7 +98,8 @@ do $$
 begin
   if not exists (
     select 1 from pg_constraint
-     where conname = 'invoices_basis_valid' and conrelid = 'public.invoices'::regclass
+     where conrelid = 'public.invoices'::regclass
+       and conname in ('invoices_basis_valid', 'invoices_basis_check')
   ) then
     alter table public.invoices add constraint invoices_basis_valid check (basis in ('client', 'project'));
   end if;
