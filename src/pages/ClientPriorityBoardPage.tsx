@@ -93,17 +93,20 @@ export function ClientPriorityBoardPage() {
 
   /** Commit a drop: the client goes into `lane` at rendered index `index`. */
   function moveTo(client: Client, lane: ClientPriorityLane, index: number) {
-    const rendered = lanes[lane].filter((c) => c.id !== client.id)
-    const target = Math.max(0, Math.min(index, rendered.length))
-    const current = lanes[lane].findIndex((c) => c.id === client.id)
+    const items = lanes[lane]
+    const from = items.findIndex((c) => c.id === client.id)
+    const rendered = items.filter((c) => c.id !== client.id)
+    // `index` counts the dragged card itself when the drop is in its own
+    // lane; once the card is taken out, every drop point after its old slot
+    // shifts up by one — otherwise a downward move lands one spot too low.
+    const target = Math.max(0, Math.min(from !== -1 && from < index ? index - 1 : index, rendered.length))
     // Dropping a card exactly where it already sits is a no-op.
-    if (priorityOf(client.id)?.lane === lane && current === target) return
+    if (priorityOf(client.id)?.lane === lane && from === target) return
     // The drop index counts unranked cards too (they render in the lane), but
     // positions only exist for ranked rows — so the client slots in after the
     // ranked cards above the drop point. Dropping into the unranked tail
     // ranks it just above that tail, which is what the gesture promises.
-    const rankedCount = rendered.filter((c) => priorityOf(c.id)).length
-    const position = Math.min(rendered.slice(0, target).filter((c) => priorityOf(c.id)).length, rankedCount)
+    const position = rendered.slice(0, target).filter((c) => priorityOf(c.id)).length
     void moveClientPriority(client.id, lane, position)
   }
 
@@ -122,9 +125,9 @@ export function ClientPriorityBoardPage() {
     const i = CLIENT_PRIORITY_LANES.indexOf(lane)
     const next = CLIENT_PRIORITY_LANES[i + (direction === 'right' ? 1 : -1)]
     if (!next) return
-    // Lanes over: the bottom of the destination, unless dropping below the
-    // card's own rank would be more faithful — bottom is the simplest promise.
-    moveTo(client, next, lanes[next].length)
+    // Lanes over: same rule as a drop — the card lands on top of the
+    // destination lane, first, not buried at the bottom.
+    moveTo(client, next, 0)
   }
 
   function onReset() {
@@ -239,8 +242,9 @@ export function ClientPriorityBoardPage() {
         onDragOver={(e) => {
           if (!draggingRef.current) return
           e.preventDefault()
-          // Empty space below the cards drops at the end of the lane.
-          if (!isTarget) setDropTarget({ lane, index: items.length })
+          // Empty space drops at the TOP of the lane: a freshly dragged card
+          // lands first, not buried at the bottom.
+          if (!isTarget) setDropTarget({ lane, index: 0 })
         }}
         onDragLeave={(e) => {
           if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
@@ -249,7 +253,7 @@ export function ClientPriorityBoardPage() {
         }}
         onDrop={(e) => {
           e.preventDefault()
-          commitDrop(lane, isTarget ? dropTarget.index : items.length)
+          commitDrop(lane, isTarget ? dropTarget.index : 0)
         }}
         className={cn(
           // One lane of the row: its own framed card, sharing the board evenly

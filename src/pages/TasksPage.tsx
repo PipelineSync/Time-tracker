@@ -197,10 +197,15 @@ export function TasksPage() {
     const task = draggingRef.current
     endDrag()
     if (!task) return
-    const column = columns[status].filter((t) => t.id !== task.id)
-    const target = Math.max(0, Math.min(index, column.length))
+    const items = columns[status]
+    const from = items.findIndex((t) => t.id === task.id)
+    const others = items.filter((t) => t.id !== task.id)
+    // `index` counts the dragged card itself when the drop is in its own
+    // column; once the card is taken out, every drop point after its old slot
+    // shifts up by one — otherwise a downward move lands one spot too low.
+    const target = Math.max(0, Math.min(from !== -1 && from < index ? index - 1 : index, others.length))
     // Dropping a card exactly where it already sits is a no-op.
-    if (task.status === status && columns[status].findIndex((t) => t.id === task.id) === target) return
+    if (task.status === status && from === target) return
     await moveTask(task.id, status, target)
   }
 
@@ -209,7 +214,8 @@ export function TasksPage() {
     const i = TASK_STATUSES.indexOf(task.status)
     const next = TASK_STATUSES[i + direction]
     if (!next) return
-    await moveTask(task.id, next, columns[next].length)
+    // Same rule as a drop into the column: the moved card lands on top.
+    await moveTask(task.id, next, 0)
   }
 
   /**
@@ -377,8 +383,10 @@ export function TasksPage() {
         onDragOver={(e) => {
           if (!draggingRef.current) return
           e.preventDefault()
-          // Empty space below the cards drops at the end of the column.
-          if (!isTarget) setDropTarget({ status, index: items.length })
+          // Empty space drops at the TOP of the column: a freshly dragged
+          // card is the newest thing on the stack, so it lands first, not
+          // buried at the bottom.
+          if (!isTarget) setDropTarget({ status, index: 0 })
         }}
         onDragLeave={(e) => {
           if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
@@ -387,7 +395,7 @@ export function TasksPage() {
         }}
         onDrop={(e) => {
           e.preventDefault()
-          void commitDrop(status, isTarget ? dropTarget.index : items.length)
+          void commitDrop(status, isTarget ? dropTarget.index : 0)
         }}
         className={cn(
           // One lane of the row. `flex: 1 0 15.5rem` lets the lanes share the

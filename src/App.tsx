@@ -19,6 +19,7 @@ const SettingsPage = lazy(() => import('@/pages/SettingsPage').then((m) => ({ de
 const TasksPage = lazy(() => import('@/pages/TasksPage').then((m) => ({ default: m.TasksPage })))
 const ClientPriorityBoardPage = lazy(() => import('@/pages/ClientPriorityBoardPage').then((m) => ({ default: m.ClientPriorityBoardPage })))
 const MeetingsPage = lazy(() => import('@/pages/MeetingsPage').then((m) => ({ default: m.MeetingsPage })))
+const NotepadPage = lazy(() => import('@/pages/NotepadPage').then((m) => ({ default: m.NotepadPage })))
 const ClientInvoicingPage = lazy(() => import('@/pages/ClientInvoicingPage').then((m) => ({ default: m.ClientInvoicingPage })))
 const FinancePage = lazy(() => import('@/pages/FinancePage').then((m) => ({ default: m.FinancePage })))
 const PersonalFinancePage = lazy(() => import('@/pages/PersonalFinancePage').then((m) => ({ default: m.PersonalFinancePage })))
@@ -68,6 +69,9 @@ export function App() {
           {can('meetings.view') && <Route path="/meetings" element={<MeetingsPage />} />}
           {/* The client invoicing board — same grant pattern (`invoices.view`). */}
           {can('invoices.view') && <Route path="/invoices" element={<ClientInvoicingPage />} />}
+          {/* The notepad is everyone's own private scratchpad — admin and
+              every worker reach it, there is no permission to gate. */}
+          <Route path="/notepad" element={<NotepadPage />} />
           <Route path="/settings" element={<SettingsPage />} />
 
           {/* The standalone Payments section now lives inside Finance → Payroll;

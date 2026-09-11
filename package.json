@@ -32,9 +32,10 @@
     "verify:session": "tsx scripts/verify-session-supabase.ts",
     "verify:entries-sync": "tsx scripts/verify-entries-sync-local.ts",
     "verify:slack": "tsx scripts/verify-slack-local.ts && tsx scripts/verify-slack-function.ts",
-    "verify": "npm run verify:deletion && npm run verify:active-workers && npm run verify:settle && npm run verify:session && npm run verify:entries-sync && npm run verify:clients && npm run verify:finance && npm run verify:subscription-occurrences && npm run verify:permissions && npm run verify:priority-board && npm run verify:invoices && npm run verify:meetings && npm run verify:slack",
+    "verify": "npm run verify:deletion && npm run verify:active-workers && npm run verify:settle && npm run verify:session && npm run verify:entries-sync && npm run verify:clients && npm run verify:finance && npm run verify:subscription-occurrences && npm run verify:permissions && npm run verify:priority-board && npm run verify:invoices && npm run verify:meetings && npm run verify:notepad && npm run verify:slack",
     "tauri": "tauri",
     "verify:meetings": "tsx scripts/verify-meetings-local.ts",
+    "verify:notepad": "tsx scripts/verify-notepad-local.ts",
     "verify:subscription-occurrences": "tsx scripts/verify-subscription-occurrences-local.ts",
     "lint": "eslint ."
   },

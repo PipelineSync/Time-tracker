@@ -26,12 +26,13 @@ import type {
   ClientPriority,
   ClientPriorityLane,
   Meeting,
+  Note,
   Permission,
   Invoice,
   FinanceItem,
 } from './types'
 import { PERMISSIONS, normalizePermissions, canViewAllEntries } from './types'
-import type { DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, BackendResult, CreateFinanceItemInput, CreateMeetingInput, CreateInvoiceInput } from './backend'
+import type { DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, BackendResult, CreateFinanceItemInput, CreateMeetingInput, CreateNoteInput, CreateInvoiceInput } from './backend'
 import { localBackend } from './localDb'
 import { supabaseBackend, isSupabaseConfigured, ACCOUNT_DEACTIVATED_MESSAGE } from './supabaseDb'
 import { toast } from 'sonner'
@@ -131,6 +132,11 @@ interface StoreValue {
    */
   meetings: Meeting[]
   /**
+   * The signed-in user's own notepad notes (pinned first, newest edit first).
+   * Strictly private — the admin and every worker see only their own.
+   */
+  notes: Note[]
+  /**
    * The client invoicing board's cards. Empty for anyone the admin has not
    * granted `invoices.view`.
    */
@@ -217,6 +223,14 @@ interface StoreValue {
   /** Remove a meeting from the schedule. meetings.view. */
   deleteMeeting: (id: string) => Promise<boolean>
 
+  // ---- Notepad (everyone's own, strictly private) ----
+  /** Add a note to the signed-in user's private notepad. */
+  createNote: (input: CreateNoteInput) => Promise<Note | null>
+  /** Edit, re-colour, pin or unpin one of the signed-in user's notes. */
+  updateNote: (id: string, patch: Partial<Omit<Note, 'id' | 'owner_id' | 'created_at' | 'updated_at'>>) => Promise<Note | null>
+  /** Remove one of the signed-in user's notes. */
+  deleteNote: (id: string) => Promise<boolean>
+
   // ---- Client invoicing (admin + granted workers) ----
   /** Raise an invoice on the board. invoices.view. */
   createInvoice: (input: CreateInvoiceInput) => Promise<Invoice | null>
@@ -271,6 +285,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [clients, setClients] = useState<Client[]>([])
   const [clientPriorities, setClientPriorities] = useState<ClientPriority[]>([])
   const [meetings, setMeetings] = useState<Meeting[]>([])
+  const [notes, setNotes] = useState<Note[]>([])
   const [invoices, setInvoices] = useState<Invoice[]>([])
   const [financeItems, setFinanceItems] = useState<FinanceItem[]>([])
   const [dataLoading, setDataLoading] = useState(false)
@@ -360,7 +375,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // Captured BEFORE the query: rows updated after this instant are picked
       // up by the next delta; duplicates are harmless (merged by id).
       const syncTime = new Date().toISOString()
-      const [w, e, s, at, n, p, u, t, cl, cp, mt, inv, fi] = await Promise.all([
+      const [w, e, s, at, n, p, u, t, cl, cp, mt, nt, inv, fi] = await Promise.all([
         light ? skipped<Worker[]>() : backend.listWorkers(),
         useDelta
           ? backend.listEntries({ since, limit: ENTRY_DELTA_LIMIT })
@@ -388,6 +403,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         // Same for the meetings schedule — it only changes when someone on
         // the section edits it.
         light ? skipped<Meeting[]>() : backend.listMeetings(),
+        // The notepad is each account's own private list — small, and it only
+        // changes when the user edits it.
+        light ? skipped<Note[]>() : backend.listNotes(),
         // Same for the invoicing board — it only changes when someone drags
         // a card or edits an invoice.
         light ? skipped<Invoice[]>() : backend.listInvoices(),
@@ -441,6 +459,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (cl.data) setClients(cl.data)
       if (cp.data) setClientPriorities(cp.data)
       if (mt.data) setMeetings(mt.data)
+      if (nt.data) setNotes(nt.data)
       if (inv.data) setInvoices(inv.data)
       if (fi.data) setFinanceItems(fi.data)
     } finally {
@@ -498,7 +517,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       })
     } else {
       avatarsRef.current = new Map()
-      setWorkers([]); setEntries([]); setSettings(null); setActiveTimer(null); setActiveTimers([]); setNotifications([]); setPayments([]); setTasks([]); setClients([]); setClientPriorities([]); setMeetings([]); setInvoices([]); setFinanceItems([])
+      setWorkers([]); setEntries([]); setSettings(null); setActiveTimer(null); setActiveTimers([]); setNotifications([]); setPayments([]); setTasks([]); setClients([]); setClientPriorities([]); setMeetings([]); setNotes([]); setInvoices([]); setFinanceItems([])
     }
   }, [user, refreshData, refreshAvatars])
 
@@ -926,14 +945,28 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [backend])
 
   const moveClientPriority = useCallback(async (clientId: string, lane: ClientPriorityLane, position: number) => {
-    // Optimistic: the card follows the drop immediately.
+    // Optimistic: re-rank the destination lane around the dropped card so the
+    // board shows the drop's exact result — a card dropped on top stays on
+    // top — until the backend's authoritative numbering arrives.
     setClientPriorities((prev) => {
-      const others = prev.filter((p) => p.client_id !== clientId)
       const moved = prev.find((p) => p.client_id === clientId)
-      const row: ClientPriority = moved
-        ? { ...moved, lane, position }
-        : { id: `optimistic-${clientId}`, client_id: clientId, lane, position, created_at: '', updated_at: '' }
-      return [...others, row]
+      const card: ClientPriority = {
+        id: `optimistic-${clientId}`,
+        client_id: clientId,
+        position: 0,
+        created_at: '',
+        updated_at: '',
+        ...moved,
+        lane,
+      }
+      const laneRows = prev
+        .filter((p) => p.lane === lane && p.client_id !== clientId)
+        .sort((a, b) => a.position - b.position)
+      laneRows.splice(Math.max(0, Math.min(position, laneRows.length)), 0, card)
+      const rank = new Map(laneRows.map((p, i) => [p.id, i] as const))
+      return prev
+        .filter((p) => p.client_id !== clientId && !rank.has(p.id))
+        .concat(laneRows.map((p) => ({ ...p, position: rank.get(p.id)! })))
     })
     const res = await backend.moveClientPriority(clientId, lane, position)
     if (res.error || !res.data) {
@@ -994,6 +1027,47 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     await refreshMeetings()
     return true
   }, [backend, refreshMeetings])
+
+  // ---- Notepad -------------------------------------------------------------
+  // Each account's strictly private scratchpad: the list is small and changes
+  // only when its owner edits it, so every mutation simply re-reads it (same
+  // pattern as Meetings). The backend (and RLS, in Supabase) guarantees only
+  // the owner's rows ever come back.
+
+  const refreshNotes = useCallback(async () => {
+    const res = await backend.listNotes()
+    if (res.data) setNotes(res.data)
+  }, [backend])
+
+  const createNote = useCallback(async (input: CreateNoteInput) => {
+    const res = await backend.createNote(input)
+    if (res.error || !res.data) {
+      toast.error(res.error || 'Could not save the note.')
+      return null
+    }
+    await refreshNotes()
+    return res.data
+  }, [backend, refreshNotes])
+
+  const updateNote = useCallback(async (id: string, patch: Partial<Omit<Note, 'id' | 'owner_id' | 'created_at' | 'updated_at'>>) => {
+    const res = await backend.updateNote(id, patch)
+    if (res.error || !res.data) {
+      toast.error(res.error || 'Could not save the note.')
+      return null
+    }
+    await refreshNotes()
+    return res.data
+  }, [backend, refreshNotes])
+
+  const deleteNote = useCallback(async (id: string) => {
+    const res = await backend.deleteNote(id)
+    if (res.error) {
+      toast.error(res.error)
+      return false
+    }
+    await refreshNotes()
+    return true
+  }, [backend, refreshNotes])
 
   // ---- Client invoicing -----------------------------------------------------
   // The board is small and changes only when someone edits it or drags a
@@ -1089,9 +1163,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const moveTask = useCallback(async (id: string, status: TaskStatus, position: number) => {
     const previous = tasks.find((t) => t.id === id)
-    // Optimistic: the card follows the pointer immediately, then the backend's
-    // authoritative ordering replaces it.
-    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, status } : t)))
+    // Optimistic: re-rank the destination column around the dropped card so
+    // the board shows the drop's exact result — a card dropped on top stays
+    // on top — until the backend's authoritative numbering arrives.
+    setTasks((prev) => {
+      const moved = prev.find((t) => t.id === id)
+      if (!moved) return prev
+      const column = prev
+        .filter((t) => t.status === status && t.id !== id)
+        .sort((a, b) => a.position - b.position || b.created_at.localeCompare(a.created_at))
+      column.splice(Math.max(0, Math.min(position, column.length)), 0, { ...moved, status })
+      const rank = new Map(column.map((t, i) => [t.id, i] as const))
+      return prev.map((t) => {
+        const pos = rank.get(t.id)
+        return pos === undefined ? t : { ...t, status: t.id === id ? status : t.status, position: pos }
+      })
+    })
     const res = await backend.moveTask(id, status, position)
     if (res.error || !res.data) {
       toast.error(res.error || 'Could not move the task.')
@@ -1225,6 +1312,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     activeClients,
     clientPriorities,
     meetings,
+    notes,
     invoices,
     financeItems,
     unreadCount,
@@ -1269,6 +1357,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     createMeeting,
     updateMeeting,
     deleteMeeting,
+    createNote,
+    updateNote,
+    deleteNote,
     createInvoice,
     updateInvoice,
     deleteInvoice,
