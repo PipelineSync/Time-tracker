@@ -914,14 +914,28 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [backend])
 
   const moveClientPriority = useCallback(async (clientId: string, lane: ClientPriorityLane, position: number) => {
-    // Optimistic: the card follows the drop immediately.
+    // Optimistic: re-rank the destination lane around the dropped card so the
+    // board shows the drop's exact result — a card dropped on top stays on
+    // top — until the backend's authoritative numbering arrives.
     setClientPriorities((prev) => {
-      const others = prev.filter((p) => p.client_id !== clientId)
       const moved = prev.find((p) => p.client_id === clientId)
-      const row: ClientPriority = moved
-        ? { ...moved, lane, position }
-        : { id: `optimistic-${clientId}`, client_id: clientId, lane, position, created_at: '', updated_at: '' }
-      return [...others, row]
+      const card: ClientPriority = {
+        id: `optimistic-${clientId}`,
+        client_id: clientId,
+        position: 0,
+        created_at: '',
+        updated_at: '',
+        ...moved,
+        lane,
+      }
+      const laneRows = prev
+        .filter((p) => p.lane === lane && p.client_id !== clientId)
+        .sort((a, b) => a.position - b.position)
+      laneRows.splice(Math.max(0, Math.min(position, laneRows.length)), 0, card)
+      const rank = new Map(laneRows.map((p, i) => [p.id, i] as const))
+      return prev
+        .filter((p) => p.client_id !== clientId && !rank.has(p.id))
+        .concat(laneRows.map((p) => ({ ...p, position: rank.get(p.id)! })))
     })
     const res = await backend.moveClientPriority(clientId, lane, position)
     if (res.error || !res.data) {
@@ -1077,9 +1091,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const moveTask = useCallback(async (id: string, status: TaskStatus, position: number) => {
     const previous = tasks.find((t) => t.id === id)
-    // Optimistic: the card follows the pointer immediately, then the backend's
-    // authoritative ordering replaces it.
-    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, status } : t)))
+    // Optimistic: re-rank the destination column around the dropped card so
+    // the board shows the drop's exact result — a card dropped on top stays
+    // on top — until the backend's authoritative numbering arrives.
+    setTasks((prev) => {
+      const moved = prev.find((t) => t.id === id)
+      if (!moved) return prev
+      const column = prev
+        .filter((t) => t.status === status && t.id !== id)
+        .sort((a, b) => a.position - b.position || b.created_at.localeCompare(a.created_at))
+      column.splice(Math.max(0, Math.min(position, column.length)), 0, { ...moved, status })
+      const rank = new Map(column.map((t, i) => [t.id, i] as const))
+      return prev.map((t) => {
+        const pos = rank.get(t.id)
+        return pos === undefined ? t : { ...t, status: t.id === id ? status : t.status, position: pos }
+      })
+    })
     const res = await backend.moveTask(id, status, position)
     if (res.error || !res.data) {
       toast.error(res.error || 'Could not move the task.')
