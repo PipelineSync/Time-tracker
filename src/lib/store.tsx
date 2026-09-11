@@ -646,7 +646,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     rememberAvatar(res.data)
     await refreshData()
     return res.data
-  }, [backend, refreshData, rememberAvatar, toast])
+  }, [backend, refreshData, rememberAvatar])
 
   const updateWorker = useCallback(async (id: string, patch: Partial<Worker> & { newPassword?: string }) => {
     const res = await backend.updateWorker(id, patch)
@@ -661,7 +661,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     rememberAvatar(res.data)
     await refreshData()
     return res.data
-  }, [backend, refreshData, rememberAvatar, toast])
+  }, [backend, refreshData, rememberAvatar])
 
   const deleteWorker = useCallback(async (id: string) => {
     const res = await backend.deleteWorker(id)
@@ -716,8 +716,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return true
   }, [backend, refreshData])
 
-  async function refreshTimer() {
+  const refreshTimer = useCallback(async () => {
     // One query for both lists — getActiveTimer() re-runs listActiveTimers().
+    // Reads state only through userRef, so [backend] is a complete dep list.
     const at = await backend.listActiveTimers()
     if (!at.error) {
       const timers = at.data ?? []
@@ -729,7 +730,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           : null
       )
     }
-  }
+  }, [backend])
 
   /** Keep the running-timer list in sync after a local timer change. */
   const upsertActiveTimer = useCallback((timer: ActiveTimer) => {
@@ -792,7 +793,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     await refreshTimer()
     await refreshData()
     return { data: res.data, error: null }
-  }, [backend, activeTimer, refreshData, workers])
+  }, [backend, activeTimer, refreshData, refreshTimer, workers])
 
   const switchClient = useCallback(async (clientId: string, notes?: string) => {
     const current = activeTimer

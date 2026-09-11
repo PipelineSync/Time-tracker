@@ -239,15 +239,15 @@ export function EntriesPage() {
               </div>
             </div>
             <Select value={workerFilter} onValueChange={setWorkerFilter}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectTrigger aria-label="Filter by worker"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All workers</SelectItem>
                 {workers.map((w) => <SelectItem key={w.id} value={w.id}>{w.name}</SelectItem>)}
               </SelectContent>
             </Select>
-            <ClientSelect value={clientFilter} onValueChange={setClientFilter} includeAll />
+            <ClientSelect value={clientFilter} onValueChange={setClientFilter} includeAll ariaLabel="Filter by client" />
             <Select value={dateFilter} onValueChange={setDateFilter}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectTrigger aria-label="Filter by date"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All dates</SelectItem>
                 <SelectItem value="week">This week</SelectItem>
@@ -256,7 +256,7 @@ export function EntriesPage() {
               </SelectContent>
             </Select>
             <Select value={settleFilter} onValueChange={(v) => setSettleFilter(v as 'all' | 'unsettled' | 'settled')}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectTrigger aria-label="Filter by settled status"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Settled & unsettled</SelectItem>
                 <SelectItem value="unsettled">Unsettled only</SelectItem>
@@ -264,7 +264,7 @@ export function EntriesPage() {
               </SelectContent>
             </Select>
             <Select value={sortKey} onValueChange={(v) => setSortKey(v as SortKey)}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectTrigger aria-label="Sort entries by"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="date">Sort: Date</SelectItem>
                 <SelectItem value="worker">Sort: Worker</SelectItem>
@@ -276,12 +276,12 @@ export function EntriesPage() {
           {dateFilter === 'custom' && (
             <div className="mt-3 flex flex-wrap items-end gap-3">
               <div className="space-y-1">
-                <label className="text-xs text-muted-foreground">From</label>
-                <Input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="w-40" />
+                <label htmlFor="entries-from" className="text-xs text-muted-foreground">From</label>
+                <Input id="entries-from" type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="w-40" />
               </div>
               <div className="space-y-1">
-                <label className="text-xs text-muted-foreground">To</label>
-                <Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="w-40" />
+                <label htmlFor="entries-to" className="text-xs text-muted-foreground">To</label>
+                <Input id="entries-to" type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="w-40" />
               </div>
               <div className="flex items-center gap-2">
                 <Button variant="outline" size="sm" onClick={() => setSortDir(sortDir === 'asc' ? 'desc' : 'asc')}>
