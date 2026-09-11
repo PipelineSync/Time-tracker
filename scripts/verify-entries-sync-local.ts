@@ -49,7 +49,16 @@ async function main() {
   assert(window.every((e) => all.some((a) => a.id === e.id)), 'window rows are real entries')
 
   // ---- Delta: nothing changed since "now" ---------------------------------
-  const marker = new Date(Date.now() - 60_000).toISOString()
+  // The marker is derived from the data, not from the wall clock: it plays
+  // the app's "last sync" timestamp, which by definition sits after the
+  // newest change we already have. (A clock-based "a minute ago" is not
+  // deterministic — the seed writes today's rows moments before this runs,
+  // and the runner's UTC morning sits before the seeded hours.)
+  const newestChange = all.reduce(
+    (m, e) => Math.max(m, Date.parse(e.created_at), Date.parse(e.updated_at)),
+    0,
+  )
+  const marker = new Date(newestChange + 1).toISOString()
   const quiet = (await localBackend.listEntries({ since: marker })).data || []
   assert(quiet.length === 0, 'a delta sync right after the marker is empty')
 

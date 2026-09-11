@@ -90,7 +90,10 @@ export function buildDemoSeed() {
   function entry(worker_id: string, start: Date, end: Date, client_id: string, project: string | null, break_minutes: number, notes: string | null, hourly_rate: number): TimeEntry {
     const totalMinutes = Math.round((end.getTime() - start.getTime()) / 60000) - break_minutes
     const earnings = Math.round((Math.max(0, totalMinutes) / 60) * hourly_rate * 100) / 100
-    const created = start.toISOString()
+    // Row metadata is "when this row was written", never the (possibly
+    // future) shift start — a future stamp would make a freshly-seeded
+    // workspace look changed on every delta sync that follows.
+    const created = new Date(Math.min(start.getTime(), Date.now())).toISOString()
     return {
       id: 'e-' + uid(),
       worker_id,
