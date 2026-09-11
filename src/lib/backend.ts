@@ -23,6 +23,7 @@ import type {
   Permission,
   Invoice,
   InvoiceStage,
+  InvoiceBasis,
   FinanceItem,
   FinanceKind,
   BillingCycle,
@@ -95,9 +96,17 @@ export interface CreateNoteInput {
 
 /** Fields callers may set when creating an invoice. */
 export interface CreateInvoiceInput {
-  /** The client the money is from (an id from the client master list). */
-  client_id: string
-  /** Positive amount, in the workspace's currency. */
+  /**
+   * The client billed — required for a client-based invoice, ignored (pass
+   * null) for a project-based one: client and project are different billing
+   * targets, never both.
+   */
+  client_id: string | null
+  /** Bills a client ('client', the default) or a named project ('project'). */
+  basis?: InvoiceBasis
+  /** The project billed — required when `basis` is 'project'. */
+  project_name?: string | null
+  /** Amount in the workspace's currency; zero or more (zero = figure still unknown). */
   amount: number
   /** 'YYYY-MM-DD' — the day payment is due. */
   due_date: string

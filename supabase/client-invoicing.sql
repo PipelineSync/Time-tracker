@@ -8,9 +8,10 @@
 -- What it does
 --   1. adds 'invoices.view' to the allowed permission keys, so the admin can
 --      tick "Use the client invoicing board" on a worker
---   2. creates public.invoices — the workspace's invoice board: a client, an
---      amount, when payment is due, which board column it sits in
---      (pending / awaiting / paid) and optional notes
+--   2. creates public.invoices — the workspace's invoice board: a client,
+--      whether it bills the whole client or one named project, an amount
+--      (zero while the figure is still unknown), when payment is due, which
+--      board column it sits in (pending / awaiting / paid) and optional notes
 --
 -- Access model (mirrors the rest of the app):
 --   * the admin (workspace owner) always sees and runs the board
@@ -56,10 +57,20 @@ create table if not exists public.invoices (
   id        uuid primary key default gen_random_uuid(),
   -- Workspace owner (the admin). Set automatically by trg_invoices_user.
   user_id   uuid not null references auth.users (id) on delete cascade,
-  -- The client the money is from. Cascade: a deleted client's invoices go
-  -- with it — an invoice has nobody left to bill.
-  client_id uuid not null references public.clients (id) on delete cascade,
-  amount    numeric(12, 2) not null check (amount >= 0),
+  -- The client billed — set on a client-based invoice, null on a
+  -- project-based one (client and project are different billing targets,
+  -- never both). Cascade: a deleted client's client-based invoices go with
+  -- it — an invoice has nobody left to bill.
+  client_id uuid references public.clients (id) on delete cascade,
+  -- What the invoice bills: a client, or a named project on its own. 'client'
+  -- is the default so pre-basis rows keep their shape.
+  basis     text not null default 'client' check (basis in ('client', 'project')),
+  -- The project billed — set when basis is 'project' (and required then,
+  -- enforced by the app), null for client-based invoices.
+  project_name text,
+  -- Zero is allowed: an invoice can go on the board before its figure is
+  -- known and the amount filled in later.
+  amount    numeric(12, 2) not null default 0 check (amount >= 0),
   -- The day payment is due (a date, not an instant, so timezones cannot move it).
   due_date  date not null,
   -- Board column. Dragging is free movement — forwards to progress an
@@ -70,6 +81,28 @@ create table if not exists public.invoices (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+-- Older databases: add the billing basis and project name, and let
+-- project-based invoices exist without a client. Idempotent alters keep
+-- this safe to re-run on databases that just created the table above.
+alter table public.invoices add column if not exists basis text;
+alter table public.invoices add column if not exists project_name text;
+-- Backfill: every invoice that predates the column bills its client whole.
+update public.invoices set basis = 'client' where basis is null;
+alter table public.invoices alter column basis set default 'client';
+alter table public.invoices alter column basis set not null;
+-- A project-based invoice bills a named project, not a client — its
+-- client_id is null.
+alter table public.invoices alter column client_id drop not null;
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+     where conname = 'invoices_basis_valid' and conrelid = 'public.invoices'::regclass
+  ) then
+    alter table public.invoices add constraint invoices_basis_valid check (basis in ('client', 'project'));
+  end if;
+end $$;
 
 -- The board's exact query: one workspace, due-soonest order.
 create index if not exists invoices_user_due_idx on public.invoices (user_id, due_date);
@@ -121,5 +154,5 @@ create trigger trg_invoices_updated before update on public.invoices
 
 -- ---------- verify ----------
 -- Expect: the table, then the helper returning t for the admin.
-select client_id, amount, due_date, stage from public.invoices order by due_date;
+select client_id, basis, project_name, amount, due_date, stage from public.invoices order by due_date;
 select public.has_permission('invoices.view') as admin_can_use_invoicing;

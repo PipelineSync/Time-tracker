@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Building2, Folder } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -14,12 +15,15 @@ import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { ClientSelect } from '@/components/ClientSelect'
 import { useStore } from '@/lib/store'
-import type { Invoice, InvoiceStage } from '@/lib/types'
+import { cn } from '@/lib/utils'
+import type { Invoice, InvoiceBasis, InvoiceStage } from '@/lib/types'
 import { INVOICE_STAGES, InvoiceStageNames } from '@/lib/types'
 import { toast } from 'sonner'
 
 interface FormState {
   clientId: string
+  basis: InvoiceBasis
+  projectName: string
   amount: string
   dueDate: string // 'YYYY-MM-DD' (local)
   stage: InvoiceStage
@@ -33,11 +37,13 @@ function localDate(d: Date): string {
 }
 
 /**
- * Raise / edit an invoice: the client, an amount, when payment is due and
- * optional notes — the whole data model. The stage picker doubles as the
- * "record it straight into another column" affordance, so logging an invoice
- * that was already paid needs no drag afterwards; a new invoice defaults to
- * Pending and the board is still where invoices move day to day.
+ * Raise / edit an invoice: what is being billed (the whole client, or one
+ * named project of it), an optional amount — an invoice can go on the board
+ * before its figure is known and the amount filled in later — when payment
+ * is due and optional notes. The stage picker doubles as the "record it
+ * straight into another column" affordance, so logging an invoice that was
+ * already paid needs no drag afterwards; a new invoice defaults to Pending
+ * and the board is still where invoices move day to day.
  */
 export function InvoiceFormDialog({
   open,
@@ -53,14 +59,16 @@ export function InvoiceFormDialog({
   defaultStage?: InvoiceStage
 }) {
   const { createInvoice, updateInvoice, settings } = useStore()
-  const [form, setForm] = useState<FormState>({ clientId: '', amount: '', dueDate: '', stage: 'pending', notes: '' })
+  const [form, setForm] = useState<FormState>({ clientId: '', basis: 'client', projectName: '', amount: '', dueDate: '', stage: 'pending', notes: '' })
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     if (!open) return
     if (invoice) {
       setForm({
-        clientId: invoice.client_id,
+        clientId: invoice.client_id ?? '',
+        basis: invoice.basis,
+        projectName: invoice.project_name || '',
         amount: String(invoice.amount),
         dueDate: invoice.due_date,
         stage: invoice.stage,
@@ -71,7 +79,7 @@ export function InvoiceFormDialog({
       // enough that nobody accidentally bills two months out.
       const due = new Date()
       due.setDate(due.getDate() + 14)
-      setForm({ clientId: '', amount: '', dueDate: localDate(due), stage: defaultStage ?? 'pending', notes: '' })
+      setForm({ clientId: '', basis: 'client', projectName: '', amount: '', dueDate: localDate(due), stage: defaultStage ?? 'pending', notes: '' })
     }
   }, [open, invoice, defaultStage])
 
@@ -80,13 +88,23 @@ export function InvoiceFormDialog({
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!form.clientId) {
+    // Client and project are different billing targets: a client-based
+    // invoice must pick a client, a project-based one must name the project
+    // — and carries no client at all.
+    const projectName = form.basis === 'project' ? form.projectName.trim() : ''
+    if (form.basis === 'client' && !form.clientId) {
       toast.error('Pick a client to bill.')
       return
     }
-    const amount = Number(form.amount)
-    if (!form.amount.trim() || !Number.isFinite(amount) || amount <= 0) {
-      toast.error('Give the invoice an amount greater than zero.')
+    if (form.basis === 'project' && !projectName) {
+      toast.error('Name the project this invoice bills.')
+      return
+    }
+    // The amount is optional: left blank it is recorded as zero, to be
+    // filled in once the figure is known.
+    const amount = form.amount.trim() ? Number(form.amount) : 0
+    if (!Number.isFinite(amount) || amount < 0) {
+      toast.error('Give the invoice a valid amount — or leave it blank for now.')
       return
     }
     if (!form.dueDate) {
@@ -95,24 +113,21 @@ export function InvoiceFormDialog({
     }
     setSaving(true)
     try {
+      const payload = {
+        client_id: form.basis === 'client' ? form.clientId : null,
+        basis: form.basis,
+        project_name: projectName || null,
+        amount: Math.round(amount * 100) / 100,
+        due_date: form.dueDate,
+        stage: form.stage,
+        notes: form.notes.trim() || null,
+      }
       if (invoice) {
-        const saved = await updateInvoice(invoice.id, {
-          client_id: form.clientId,
-          amount: Math.round(amount * 100) / 100,
-          due_date: form.dueDate,
-          stage: form.stage,
-          notes: form.notes.trim() || null,
-        })
+        const saved = await updateInvoice(invoice.id, payload)
         if (!saved) return
         toast.success(saved.stage !== invoice.stage ? `Invoice moved to ${InvoiceStageNames[saved.stage]}.` : 'Invoice updated.')
       } else {
-        const created = await createInvoice({
-          client_id: form.clientId,
-          amount: Math.round(amount * 100) / 100,
-          due_date: form.dueDate,
-          stage: form.stage,
-          notes: form.notes.trim() || null,
-        })
+        const created = await createInvoice(payload)
         if (!created) return
         toast.success(created.stage === 'pending' ? 'Invoice raised — it is on the board as Pending.' : `Invoice raised — filed under ${InvoiceStageNames[created.stage]}.`)
       }
@@ -130,25 +145,81 @@ export function InvoiceFormDialog({
             <DialogTitle>{invoice ? 'Edit invoice' : 'New invoice'}</DialogTitle>
             <DialogDescription>
               {invoice
-                ? 'Change the client, amount, due date, column or notes.'
+                ? 'Change what it bills, the amount, due date, column or notes.'
                 : 'A card on the board: drag it to Awaiting once sent, and to Paid once settled.'}
             </DialogDescription>
           </DialogHeader>
 
           <div className="grid gap-4 py-4">
+            {/* One field, one choice: what the invoice bills. Client and
+                project are different billing targets — client based shows
+                the client dropdown, project based replaces it with the
+                project name. Exactly one of the two is billed. */}
             <div className="grid gap-2">
-              <Label htmlFor="invoice-client">Client</Label>
-              <ClientSelect
-                id="invoice-client"
-                value={form.clientId}
-                onValueChange={(v) => set('clientId', v)}
-                placeholder="Choose a client"
-              />
+              <span className="text-sm font-medium leading-none">Bill to</span>
+              <div className="grid gap-3 rounded-lg border bg-muted/30 p-2.5">
+                <div className="flex w-fit gap-1 rounded-md bg-muted p-1" role="group" aria-label="Client based or project based">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    aria-pressed={form.basis === 'client'}
+                    onClick={() => set('basis', 'client')}
+                    className={cn('gap-1.5 px-3 text-muted-foreground', form.basis === 'client' && 'bg-background text-foreground shadow-sm')}
+                  >
+                    <Building2 className="h-3.5 w-3.5" />
+                    Client
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    aria-pressed={form.basis === 'project'}
+                    onClick={() => set('basis', 'project')}
+                    className={cn('gap-1.5 px-3 text-muted-foreground', form.basis === 'project' && 'bg-background text-foreground shadow-sm')}
+                  >
+                    <Folder className="h-3.5 w-3.5" />
+                    Project
+                  </Button>
+                </div>
+
+                {form.basis === 'project' ? (
+                  <div className="grid gap-2">
+                    <Label htmlFor="invoice-project" className="text-xs text-muted-foreground">
+                      Project name
+                    </Label>
+                    <Input
+                      id="invoice-project"
+                      value={form.projectName}
+                      onChange={(e) => set('projectName', e.target.value)}
+                      placeholder="e.g. Website redesign"
+                      required
+                    />
+                  </div>
+                ) : (
+                  <div className="grid gap-2">
+                    <Label htmlFor="invoice-client" className="text-xs text-muted-foreground">
+                      Client
+                    </Label>
+                    <ClientSelect
+                      id="invoice-client"
+                      value={form.clientId}
+                      onValueChange={(v) => set('clientId', v)}
+                      placeholder="Choose a client"
+                    />
+                  </div>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {form.basis === 'project'
+                  ? 'Project based — this invoice bills the project named above, not a client.'
+                  : 'Client based — this invoice bills the client chosen above.'}
+              </p>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
               <div className="grid gap-2">
-                <Label htmlFor="invoice-amount">Amount ({settings?.currency || 'USD'})</Label>
+                <Label htmlFor="invoice-amount">Amount ({settings?.currency || 'USD'} · optional)</Label>
                 <Input
                   id="invoice-amount"
                   type="number"
@@ -159,7 +230,6 @@ export function InvoiceFormDialog({
                   onChange={(e) => set('amount', e.target.value)}
                   placeholder="0.00"
                   autoFocus={!invoice}
-                  required
                 />
               </div>
               <div className="grid gap-2">

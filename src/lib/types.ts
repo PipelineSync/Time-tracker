@@ -707,6 +707,20 @@ export const InvoiceStageNames: Record<InvoiceStage, string> = {
   paid: 'Paid',
 }
 
+/**
+ * What an invoice bills: the client as a whole, or one named project of that
+ * client. Projects are free text here (like time entries carried before
+ * clients existed) — there is no projects master list to attach to.
+ */
+export type InvoiceBasis = 'client' | 'project'
+
+export const INVOICE_BASES: InvoiceBasis[] = ['client', 'project']
+
+export const InvoiceBasisNames: Record<InvoiceBasis, string> = {
+  client: 'Client',
+  project: 'Project',
+}
+
 /** Column accent classes — mirrors the priority board's column dots. */
 export const InvoiceStageStyles: Record<InvoiceStage, { dot: string; accent: string; ring: string }> = {
   pending: { dot: 'bg-sky-500', accent: 'border-l-sky-500', ring: 'ring-sky-500/40' },
@@ -723,9 +737,17 @@ export const InvoiceStageStyles: Record<InvoiceStage, { dot: string; accent: str
  */
 export interface Invoice {
   id: string
-  /** The client the money is from. */
-  client_id: string
-  /** Positive amount, in the workspace's currency. */
+  /**
+   * The client billed — the whole of a client-based invoice. A project-based
+   * invoice bills a named project instead and has no client here (null):
+   * client and project are different billing targets, never both.
+   */
+  client_id: string | null
+  /** Whether the invoice bills a client ('client') or a named project ('project'). */
+  basis: InvoiceBasis
+  /** The project billed — required when `basis` is 'project', null otherwise. */
+  project_name: string | null
+  /** Amount in the workspace's currency; zero while the figure is still unknown. */
   amount: number
   /** 'YYYY-MM-DD' — the day payment is due (a date, not an instant, so timezones cannot move it). */
   due_date: string

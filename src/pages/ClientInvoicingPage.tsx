@@ -1,11 +1,11 @@
 import { useMemo, useRef, useState } from 'react'
 import {
-  Banknote,
   CalendarDays,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
   Clock,
+  Folder,
   GripVertical,
   Pencil,
   Plus,
@@ -20,7 +20,6 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { StatCard } from '@/components/StatCard'
-import { EmptyState } from '@/components/EmptyState'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { InvoiceFormDialog } from '@/components/InvoiceFormDialog'
 import { ClientBadge } from '@/components/ClientBadge'
@@ -115,10 +114,17 @@ export function ClientInvoicingPage() {
     void updateInvoice(invoice.id, { stage: next })
   }
 
-  const clientOf = (clientId: string) => clients.find((c) => c.id === clientId) ?? null
+  // A project-based invoice has no client — only client-based ones look one up.
+  const clientOf = (clientId: string | null) => (clientId ? clients.find((c) => c.id === clientId) ?? null : null)
 
   /** Is payment overdue? Unpaid stages only, compared as plain dates. */
   const isOverdue = (invoice: Invoice) => invoice.stage !== 'paid' && invoice.due_date < today
+
+  /** What the invoice is billed to, in words — the client, or the project. */
+  const billedTo = (invoice: Invoice) =>
+    invoice.basis === 'project'
+      ? invoice.project_name || 'project'
+      : clientOf(invoice.client_id)?.name ?? 'client'
 
   function openNew(stage: InvoiceStage) {
     setEditing(null)
@@ -172,10 +178,28 @@ export function ClientInvoicingPage() {
         <div className="flex items-start gap-2">
           <GripVertical className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/50" aria-hidden />
           <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-1.5">
-              <ClientBadge client={clientOf(invoice.client_id)} showInactive={false} />
-            </div>
-            <p className="mt-1 text-lg font-bold leading-tight tracking-tight">{money(invoice.amount, currency)}</p>
+            {/* The billing target is the card's identity: a project-based
+                invoice bills the named project, a client-based one the
+                client — never both. */}
+            {invoice.basis === 'project' ? (
+              <div className="flex items-center gap-1.5">
+                <Badge variant="muted" className="gap-1 text-[11px]">
+                  <Folder className="h-3 w-3" />
+                  <span className="max-w-[14rem] truncate font-medium">{invoice.project_name || 'Project'}</span>
+                </Badge>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5">
+                <ClientBadge client={clientOf(invoice.client_id)} showInactive={false} />
+              </div>
+            )}
+            {invoice.amount > 0 ? (
+              <p className="mt-1 text-lg font-bold leading-tight tracking-tight">{money(invoice.amount, currency)}</p>
+            ) : (
+              // No amount yet — the invoice went on the board before its
+              // figure was known.
+              <p className="mt-1 text-sm font-medium italic leading-tight text-muted-foreground">No amount yet</p>
+            )}
             <div className="mt-1.5 flex flex-wrap items-center gap-1">
               <Badge variant={overdue ? 'destructive' : 'muted'} className="gap-1 text-[10px]">
                 <CalendarDays className="h-3 w-3" />
@@ -198,7 +222,7 @@ export function ClientInvoicingPage() {
               size="icon"
               className="h-6 w-6"
               disabled={stageIndex === 0}
-              aria-label={`Move the ${clientOf(invoice.client_id)?.name ?? 'client'} invoice to the previous column`}
+              aria-label={`Move the ${billedTo(invoice)} invoice to the previous column`}
               onClick={() => nudge(invoice, -1)}
             >
               <ChevronLeft className="h-3.5 w-3.5" />
@@ -208,7 +232,7 @@ export function ClientInvoicingPage() {
               size="icon"
               className="h-6 w-6"
               disabled={stageIndex === INVOICE_STAGES.length - 1}
-              aria-label={`Move the ${clientOf(invoice.client_id)?.name ?? 'client'} invoice to the next column`}
+              aria-label={`Move the ${billedTo(invoice)} invoice to the next column`}
               onClick={() => nudge(invoice, 1)}
             >
               <ChevronRight className="h-3.5 w-3.5" />
@@ -219,7 +243,7 @@ export function ClientInvoicingPage() {
               variant="ghost"
               size="icon"
               className="h-6 w-6"
-              aria-label={`Edit the ${clientOf(invoice.client_id)?.name ?? 'client'} invoice`}
+              aria-label={`Edit the ${billedTo(invoice)} invoice`}
               onClick={() => openEdit(invoice)}
             >
               <Pencil className="h-3.5 w-3.5" />
@@ -228,7 +252,7 @@ export function ClientInvoicingPage() {
               variant="ghost"
               size="icon"
               className="h-6 w-6 text-destructive"
-              aria-label={`Delete the ${clientOf(invoice.client_id)?.name ?? 'client'} invoice`}
+              aria-label={`Delete the ${billedTo(invoice)} invoice`}
               onClick={() => setDeleting(invoice)}
             >
               <Trash2 className="h-3.5 w-3.5" />
@@ -312,7 +336,7 @@ export function ClientInvoicingPage() {
   const stageTotal = (stage: InvoiceStage) => lanes[stage].reduce((sum, inv) => sum + inv.amount, 0)
   const overdueCount = invoices.filter(isOverdue).length
 
-  const showSkeleton = dataLoading && invoices.length === 0 && clients.length === 0
+  const showSkeleton = dataLoading && invoices.length === 0
 
   return (
     <div className="space-y-6">
@@ -340,12 +364,6 @@ export function ClientInvoicingPage() {
             </div>
           </div>
         </>
-      ) : clients.length === 0 ? (
-        <EmptyState
-          icon={Banknote}
-          title="No clients yet"
-          description="Add clients from the Tasks page (Clients), then raise your first invoice here."
-        />
       ) : (
         <>
           <div className="grid gap-4 sm:grid-cols-3">
@@ -402,7 +420,7 @@ export function ClientInvoicingPage() {
         title="Delete this invoice?"
         description={
           deleting
-            ? `The ${money(deleting.amount, currency)} invoice for ${clientOf(deleting.client_id)?.name ?? 'this client'} comes off the board. This cannot be undone.`
+            ? `The ${deleting.amount > 0 ? `${money(deleting.amount, currency)} ` : ''}invoice for ${billedTo(deleting)} comes off the board. This cannot be undone.`
             : ''
         }
         confirmLabel="Delete invoice"
