@@ -20,6 +20,8 @@ import type {
   ClientPriority,
   ClientPriorityLane,
   Meeting,
+  Note,
+  NoteColor,
   Permission,
   Invoice,
   InvoiceStage,
@@ -33,8 +35,10 @@ import {
   CLIENT_PRIORITY_LANES,
   INVOICE_STAGES,
   DEFAULT_CLIENT_COLOR,
+  DEFAULT_NOTE_COLOR,
   DEFAULT_SLACK_SETTINGS,
   FINANCE_KINDS,
+  NOTE_COLORS,
   PERMISSIONS,
   TEAM_VIEW_PERMISSIONS,
   ALL_ENTRIES_VIEW_PERMISSIONS,
@@ -42,7 +46,7 @@ import {
   TASK_STATUSES,
   UNASSIGNED_CLIENT_NAME,
 } from './types'
-import type { DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, CreateFinanceItemInput, CreateMeetingInput, CreateInvoiceInput } from './backend'
+import type { DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, CreateFinanceItemInput, CreateMeetingInput, CreateNoteInput, CreateInvoiceInput } from './backend'
 import { ACCOUNT_DEACTIVATED_MESSAGE } from './backend'
 import { buildDemoSeed } from './demoSeed'
 import { uid, computeEarnings, formatMinutes, formatDate } from './utils'
@@ -81,6 +85,8 @@ interface UserData {
   clientPriorities: ClientPriority[]
   /** The meetings schedule (see the Meetings page). */
   meetings: Meeting[]
+  /** Every account's private notepad notes — rows carry `owner_id` (see the Notepad page). */
+  notes: Note[]
   /** The client invoicing board's cards (see the Client Invoicing page). */
   invoices: Invoice[]
   /** Finance ledger: subscriptions, payroll runs and bills (see the Finance page). */
@@ -115,7 +121,7 @@ function writeUsers(users: StoredUser[]) {
 }
 
 function emptyData(): UserData {
-  return { workers: [], entries: [], activeTimers: [], settings: null, comments: [], notifications: [], payments: [], tasks: [], clients: [], clientPriorities: [], meetings: [], invoices: [], financeItems: [] }
+  return { workers: [], entries: [], activeTimers: [], settings: null, comments: [], notifications: [], payments: [], tasks: [], clients: [], clientPriorities: [], meetings: [], notes: [], invoices: [], financeItems: [] }
 }
 
 /** The method the admin paid a settlement with, or null when unknown/invalid. */
@@ -303,6 +309,28 @@ function sortMeetings(rows: Meeting[], now: number): Meeting[] {
   return [...upcoming, ...past]
 }
 
+// ---- Notepad ------------------------------------------------------------------
+// Every account's notes live in the same workspace blob, but each carries an
+// `owner_id` and every read/write filters on the session user — a strictly
+// private scratchpad per person.
+
+/** Normalize a note loaded from storage. */
+function normalizeNote(n: Note): Note {
+  return {
+    ...n,
+    owner_id: n.owner_id ?? '',
+    title: n.title ?? '',
+    body: n.body ?? '',
+    color: NOTE_COLORS.includes(n.color) ? n.color : DEFAULT_NOTE_COLOR,
+    pinned: !!n.pinned,
+  }
+}
+
+/** Notepad order: pinned first, then newest edit first. */
+function sortNotes(rows: Note[]): Note[] {
+  return [...rows].sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updated_at.localeCompare(a.updated_at))
+}
+
 // ---- Client invoicing -------------------------------------------------------
 // One board for the whole workspace: every invoice sits in Pending, Awaiting
 // or Paid, and dragging between the columns is the entire workflow. There is
@@ -472,6 +500,8 @@ function readData(userId: string): UserData {
   d.clientPriorities = (d.clientPriorities || []).map(normalizeClientPriority)
   // Workspaces saved before the Meetings section simply load an empty schedule.
   d.meetings = (d.meetings || []).map(normalizeMeeting)
+  // Workspaces saved before the Notepad simply load no notes.
+  d.notes = (d.notes || []).map(normalizeNote)
   // Workspaces saved before the invoicing section simply load an empty board.
   d.invoices = (d.invoices || []).map(normalizeInvoice)
   // A client that was deleted should not keep a phantom place on the board.
@@ -1818,6 +1848,80 @@ export const localBackend: DataBackend = {
     return { data: null, error: null }
   },
 
+  // ---- Notepad -------------------------------------------------------------
+  // STRICTLY PRIVATE scratchpad: the admin and every worker have their own
+  // notepad. `owner_id` is the session user's id and every query filters on
+  // it, so nobody ever reads another person's notes — no permission gate,
+  // because nothing is shared.
+
+  async listNotes() {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    return { data: sortNotes(c.data.notes.filter((n) => n.owner_id === c.user.id)), error: null }
+  },
+
+  async createNote(input: CreateNoteInput) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    const title = input.title.trim()
+    const body = input.body.trim()
+    if (title.length > 200) return { data: null, error: 'Note titles are limited to 200 characters.' }
+    if (body.length > 10000) return { data: null, error: 'Notes are limited to 10,000 characters.' }
+    if (!title && !body) return { data: null, error: 'Write something in the note first.' }
+    const now = new Date().toISOString()
+    const note: Note = {
+      id: uid(),
+      owner_id: c.user.id,
+      title,
+      body,
+      color: NOTE_COLORS.includes(input.color as NoteColor) ? (input.color as NoteColor) : DEFAULT_NOTE_COLOR,
+      pinned: !!input.pinned,
+      created_at: now,
+      updated_at: now,
+    }
+    c.data.notes.push(note)
+    save(c.data)
+    return { data: note, error: null }
+  },
+
+  async updateNote(id, patch) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    // Owner-scoped lookup: another account's note answers "not found".
+    const idx = c.data.notes.findIndex((n) => n.id === id && n.owner_id === c.user.id)
+    if (idx === -1) return { data: null, error: 'Note not found.' }
+    const current = c.data.notes[idx]
+    const title = patch.title !== undefined ? patch.title.trim() : current.title
+    const body = patch.body !== undefined ? patch.body.trim() : current.body
+    if (title.length > 200) return { data: null, error: 'Note titles are limited to 200 characters.' }
+    if (body.length > 10000) return { data: null, error: 'Notes are limited to 10,000 characters.' }
+    if (!title && !body) return { data: null, error: 'Write something in the note first.' }
+    // Pin/colour toggles are not "edits": they must not make the card jump to
+    // newest-first. Only title/body changes re-stamp updated_at.
+    const contentChanged = patch.title !== undefined || patch.body !== undefined
+    const next: Note = normalizeNote({
+      ...current,
+      ...patch,
+      title,
+      body,
+      id: current.id,
+      owner_id: current.owner_id,
+      created_at: current.created_at,
+      updated_at: contentChanged ? new Date().toISOString() : current.updated_at,
+    })
+    c.data.notes[idx] = next
+    save(c.data)
+    return { data: next, error: null }
+  },
+
+  async deleteNote(id) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    c.data.notes = c.data.notes.filter((n) => !(n.id === id && n.owner_id === c.user.id))
+    save(c.data)
+    return { data: null, error: null }
+  },
+
   // ---- Client invoicing -----------------------------------------------------
   // One board for the whole workspace. The admin runs it by default; a worker
   // the admin granted `invoices.view` sees and manages the very same board.
@@ -2071,6 +2175,7 @@ export const localBackend: DataBackend = {
         id: uid(),
       })),
       meetings: (seed.meetings ?? []).map((m) => ({ ...m, id: uid() })),
+      notes: [],
       invoices: (seed.invoices ?? []).map((i) => ({
         ...i,
         client_id: seedClientMap.get(i.client_id) ?? i.client_id,

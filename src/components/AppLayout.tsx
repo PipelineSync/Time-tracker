@@ -8,6 +8,7 @@ import {
   ListOrdered,
   CalendarDays,
   ReceiptText,
+  StickyNote,
   Users,
   BarChart3,
   Settings,
@@ -54,6 +55,8 @@ const NAV = {
   priorityBoard: { to: '/priority-board', label: 'Priority Board', shortLabel: 'Priority', icon: ListOrdered },
   meetings: { to: '/meetings', label: 'Meetings', shortLabel: 'Meet', icon: CalendarDays },
   invoicing: { to: '/invoices', label: 'Invoicing', shortLabel: 'Invoice', icon: ReceiptText },
+  // Everyone's own private notepad — no grant needed, nothing is shared.
+  notepad: { to: '/notepad', label: 'Notepad', shortLabel: 'Notes', icon: StickyNote },
   // The Payments section lives inside Finance → Payroll now; workers without
   // Finance access get the direct, honestly-named "Payroll" entry.
   payroll: { to: '/finance?tab=payroll', label: 'Payroll', shortLabel: 'Pay', icon: Wallet },
@@ -70,7 +73,7 @@ const NAV = {
  */
 function buildNav(isAdmin: boolean, can: (p: Permission) => boolean): NavItem[] {
   if (isAdmin) {
-    return [NAV.dashboard, NAV.entriesAll, NAV.tasksAll, NAV.priorityBoard, NAV.meetings, NAV.invoicing, NAV.finance, NAV.workers, NAV.reports, NAV.settings]
+    return [NAV.dashboard, NAV.entriesAll, NAV.tasksAll, NAV.priorityBoard, NAV.meetings, NAV.invoicing, NAV.notepad, NAV.finance, NAV.workers, NAV.reports, NAV.settings]
   }
   const items: NavItem[] = []
   if (can('dashboard.view')) items.push(NAV.dashboard)
@@ -84,6 +87,9 @@ function buildNav(isAdmin: boolean, can: (p: Permission) => boolean): NavItem[] 
   if (can('meetings.view')) items.push(NAV.meetings)
   // Same for the client invoicing board (`invoices.view`).
   if (can('invoices.view')) items.push(NAV.invoicing)
+  // The notepad is each worker's own private scratchpad — every account has
+  // one, so there is nothing to grant.
+  items.push(NAV.notepad)
   // Payments now live in Finance → Payroll. Workers always get in (their own
   // payment history sits in the Payroll tab); the extra tabs and the ledger
   // appear only once the admin grants Finance access (off by default).

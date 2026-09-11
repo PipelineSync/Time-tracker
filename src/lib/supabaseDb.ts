@@ -17,12 +17,14 @@ import type {
   ClientPriority,
   ClientPriorityLane,
   Meeting,
+  Note,
+  NoteColor,
   Permission,
   Invoice,
   FinanceItem,
 } from './types'
-import { CLIENT_PRIORITY_LANES, DEFAULT_SLACK_SETTINGS, DEFAULT_CLIENT_COLOR, PERMISSIONS, TEAM_VIEW_PERMISSIONS, ALL_ENTRIES_VIEW_PERMISSIONS, normalizePermissions } from './types'
-import type { BackendResult, DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, CreateFinanceItemInput, CreateMeetingInput, CreateInvoiceInput } from './backend'
+import { CLIENT_PRIORITY_LANES, DEFAULT_SLACK_SETTINGS, DEFAULT_CLIENT_COLOR, DEFAULT_NOTE_COLOR, NOTE_COLORS, PERMISSIONS, TEAM_VIEW_PERMISSIONS, ALL_ENTRIES_VIEW_PERMISSIONS, normalizePermissions } from './types'
+import type { BackendResult, DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, CreateFinanceItemInput, CreateMeetingInput, CreateNoteInput, CreateInvoiceInput } from './backend'
 import { ACCOUNT_DEACTIVATED_MESSAGE } from './backend'
 import {
   createClient,
@@ -2257,6 +2259,111 @@ export const supabaseBackend: DataBackend = {
     if (me.error) return fail(me.error)
     if (!canDo(me.data!, 'meetings.view')) return denied('use the meetings section')
     const { error } = await client().from('meetings').delete().eq('id', id)
+    if (error) return fail(error.message)
+    return ok(null)
+  },
+
+  // ---- Notepad --------------------------------------------------------------
+  // STRICTLY PRIVATE scratchpad: the admin and every worker have their own
+  // notepad. supabase/notepad.sql owns the boundary — row level security
+  // limits every statement to rows the signed-in account owns, so no role
+  // check is needed here (and no other account, not even the admin, can read
+  // them). A database without the migration answers "relation does not
+  // exist": listing then reports an empty notepad so the rest of the app
+  // degrades, and the writes explain exactly what to run (meetings pattern).
+
+  async listNotes() {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    const { data, error } = await client()
+      .from('notepad_notes')
+      .select('id, user_id, title, body, color, pinned, created_at, updated_at')
+      .order('pinned', { ascending: false })
+      .order('updated_at', { ascending: false })
+    if (error) {
+      if (isMissingTable(error as { code?: string; message?: string }, 'notepad_notes')) {
+        console.warn('[work-tracker] the notepad_notes table is missing — run supabase/notepad.sql to enable the notepad.')
+        return ok([] as Note[])
+      }
+      return fail(error.message)
+    }
+    return ok(((data as Array<Note & { user_id: string }> | null) ?? []).map((n) => ({
+      ...n,
+      owner_id: n.user_id,
+      color: (NOTE_COLORS.includes(n.color) ? n.color : DEFAULT_NOTE_COLOR) as NoteColor,
+      pinned: !!n.pinned,
+    })))
+  },
+
+  async createNote(input: CreateNoteInput) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    const title = input.title.trim()
+    const body = input.body.trim()
+    if (title.length > 200) return fail('Note titles are limited to 200 characters.')
+    if (body.length > 10000) return fail('Notes are limited to 10,000 characters.')
+    if (!title && !body) return fail('Write something in the note first.')
+    const { data, error } = await client()
+      .from('notepad_notes')
+      .insert({
+        user_id: me.data!.id,
+        title,
+        body,
+        color: NOTE_COLORS.includes(input.color as NoteColor) ? (input.color as NoteColor) : DEFAULT_NOTE_COLOR,
+        pinned: !!input.pinned,
+      })
+      .select()
+      .single()
+    if (error) {
+      if (isMissingTable(error as { code?: string; message?: string }, 'notepad_notes')) {
+        return fail('The notepad is not set up on this database yet. Run supabase/notepad.sql in the Supabase SQL editor.')
+      }
+      return fail(error.message)
+    }
+    return ok({ ...(data as Note & { user_id: string }), owner_id: me.data!.id })
+  },
+
+  async updateNote(id, patch) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    const update: Record<string, unknown> = {}
+    // Pin/colour toggles are not "edits": they must not make the card jump to
+    // newest-first. Only title/body changes re-stamp updated_at.
+    let contentChanged = false
+    if (patch.title !== undefined) {
+      const title = patch.title.trim()
+      if (title.length > 200) return fail('Note titles are limited to 200 characters.')
+      update.title = title
+      contentChanged = true
+    }
+    if (patch.body !== undefined) {
+      const body = patch.body.trim()
+      if (body.length > 10000) return fail('Notes are limited to 10,000 characters.')
+      update.body = body
+      contentChanged = true
+    }
+    // The note dialog always sends title and body together — catch the empty note there.
+    if (update.title === '' && update.body === '') return fail('Write something in the note first.')
+    if (patch.color !== undefined) update.color = NOTE_COLORS.includes(patch.color) ? patch.color : DEFAULT_NOTE_COLOR
+    if (patch.pinned !== undefined) update.pinned = !!patch.pinned
+    if (contentChanged || Object.keys(update).length === 0) update.updated_at = new Date().toISOString()
+    // RLS scopes the row to the owner: another account's note simply
+    // matches no rows and comes back as not found.
+    const { data, error } = await client().from('notepad_notes').update(update).eq('id', id).select().maybeSingle()
+    if (error) {
+      if (isMissingTable(error as { code?: string; message?: string }, 'notepad_notes')) {
+        return fail('The notepad is not set up on this database yet. Run supabase/notepad.sql in the Supabase SQL editor.')
+      }
+      return fail(error.message)
+    }
+    if (!data) return fail('Note not found.')
+    return ok({ ...(data as Note & { user_id: string }), owner_id: me.data!.id })
+  },
+
+  async deleteNote(id) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    const { error } = await client().from('notepad_notes').delete().eq('id', id)
     if (error) return fail(error.message)
     return ok(null)
   },

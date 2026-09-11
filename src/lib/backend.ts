@@ -18,6 +18,8 @@ import type {
   ClientPriority,
   ClientPriorityLane,
   Meeting,
+  Note,
+  NoteColor,
   Permission,
   Invoice,
   InvoiceStage,
@@ -81,6 +83,14 @@ export interface CreateMeetingInput {
   /** Scheduled start (ISO instant). */
   start_time: string
   notes?: string | null
+}
+
+/** Fields callers may set when creating a notepad note. */
+export interface CreateNoteInput {
+  title: string
+  body: string
+  color?: NoteColor
+  pinned?: boolean
 }
 
 /** Fields callers may set when creating an invoice. */
@@ -311,6 +321,19 @@ export interface DataBackend {
   createMeeting(input: CreateMeetingInput): Promise<BackendResult<Meeting>>
   updateMeeting(id: string, patch: Partial<Omit<Meeting, 'id' | 'created_at' | 'updated_at'>>): Promise<BackendResult<Meeting>>
   deleteMeeting(id: string): Promise<BackendResult<null>>
+
+  /**
+   * The signed-in user's own notepad notes — pinned first, then newest edit
+   * first. STRICTLY PRIVATE per account: the admin and every worker have
+   * their own notepad and can only ever read or change their own notes (no
+   * permission gate, because nothing is shared). Any database without the
+   * notepad migration gets an empty list so the rest of the app never
+   * notices.
+   */
+  listNotes(): Promise<BackendResult<Note[]>>
+  createNote(input: CreateNoteInput): Promise<BackendResult<Note>>
+  updateNote(id: string, patch: Partial<Omit<Note, 'id' | 'owner_id' | 'created_at' | 'updated_at'>>): Promise<BackendResult<Note>>
+  deleteNote(id: string): Promise<BackendResult<null>>
 
   /**
    * The client invoicing board's cards, one per invoice. The admin and

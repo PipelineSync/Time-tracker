@@ -647,6 +647,48 @@ export interface Meeting {
   updated_at: string
 }
 
+// ---- Notepad -----------------------------------------------------------------
+
+/** The background tint of a notepad card. `default` is the plain card look. */
+export type NoteColor = 'default' | 'amber' | 'emerald' | 'blue' | 'violet' | 'rose'
+
+export const NOTE_COLORS: NoteColor[] = ['default', 'amber', 'emerald', 'blue', 'violet', 'rose']
+
+export const DEFAULT_NOTE_COLOR: NoteColor = 'default'
+
+/**
+ * Soft card tints (dark-mode friendly) plus the solid swatch the colour
+ * picker shows for each choice.
+ */
+export const NoteColorStyles: Record<NoteColor, { card: string; swatch: string; label: string }> = {
+  default: { card: '', swatch: 'bg-muted-foreground/30', label: 'None' },
+  amber: { card: 'border-amber-500/40 bg-amber-500/10', swatch: 'bg-amber-500', label: 'Amber' },
+  emerald: { card: 'border-emerald-500/40 bg-emerald-500/10', swatch: 'bg-emerald-500', label: 'Green' },
+  blue: { card: 'border-blue-500/40 bg-blue-500/10', swatch: 'bg-blue-500', label: 'Blue' },
+  violet: { card: 'border-violet-500/40 bg-violet-500/10', swatch: 'bg-violet-500', label: 'Violet' },
+  rose: { card: 'border-rose-500/40 bg-rose-500/10', swatch: 'bg-rose-500', label: 'Rose' },
+}
+
+/**
+ * A notepad note: a title plus a free-text body, optionally pinned and
+ * colour-tinted. STRICTLY PRIVATE — `owner_id` is the account (admin or
+ * worker) that wrote it and nobody else can read or change it, not even
+ * the admin. The admin and every worker get their own notepad; there is no
+ * permission to grant because nothing is ever shared.
+ */
+export interface Note {
+  id: string
+  /** The owning account (AuthUser.id). Never rendered — notes have one reader. */
+  owner_id: string
+  title: string
+  body: string
+  color: NoteColor
+  /** Pinned notes float above the rest, then everything sorts newest edit first. */
+  pinned: boolean
+  created_at: string
+  updated_at: string
+}
+
 // ---- Client invoicing -------------------------------------------------------
 
 /**
