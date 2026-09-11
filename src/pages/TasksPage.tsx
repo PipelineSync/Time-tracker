@@ -15,12 +15,15 @@ import {
   Loader2,
   PauseCircle,
   BadgeCheck,
+  Search,
+  X,
 } from 'lucide-react'
 import { useStore } from '@/lib/store'
 import type { Task, TaskPriority, TaskStatus } from '@/lib/types'
 import { TASK_STATUSES, TaskPriorityNames, TaskStatusNames } from '@/lib/types'
 import { PageHeader } from '@/components/PageHeader'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/EmptyState'
@@ -75,6 +78,9 @@ export function TasksPage() {
   // Filters both roles get: narrow the board to one client and/or one priority.
   const [clientFilter, setClientFilter] = useState<string>('all')
   const [priorityFilter, setPriorityFilter] = useState<'all' | TaskPriority>('all')
+  // Search is intentionally title-only so results stay predictable as task
+  // descriptions, assignees and client labels change around the board.
+  const [searchQuery, setSearchQuery] = useState('')
   // Drag state. `dragging` is the card under the pointer; `dropTarget` is the
   // column (and index) it would land in — used to draw the placeholder.
   // The ref mirrors `dragging` synchronously: dragover fires before React has
@@ -111,15 +117,20 @@ export function TasksPage() {
   const workerAvatar = (id: string) => workers.find((w) => w.id === id)?.avatar_url ?? null
   const clientOf = (id: string | null) => (id ? clients.find((c) => c.id === id) ?? null : null)
 
+  const normalizedSearch = searchQuery.trim().toLocaleLowerCase()
+  const searchActive = normalizedSearch.length > 0
+
   // Without tasks.view_all the backend only ever returns the signed-in
   // worker's own tasks; this keeps the UI honest if a stale row is cached.
+  // Search composes with the existing filters and only considers task titles.
   const visible = useMemo(() => {
     let rows = canViewAll ? tasks : tasks.filter((t) => t.worker_id === user?.workerId)
     if (workerFilter !== 'all') rows = rows.filter((t) => t.worker_id === workerFilter)
     if (clientFilter !== 'all') rows = rows.filter((t) => t.client_id === clientFilter)
     if (priorityFilter !== 'all') rows = rows.filter((t) => t.priority === priorityFilter)
+    if (normalizedSearch) rows = rows.filter((t) => t.title.toLocaleLowerCase().includes(normalizedSearch))
     return rows
-  }, [tasks, canViewAll, user?.workerId, workerFilter, clientFilter, priorityFilter])
+  }, [tasks, canViewAll, user?.workerId, workerFilter, clientFilter, priorityFilter, normalizedSearch])
 
   // Cards stay compact boxes: the title clamps to two lines and the
   // description to three, and "See more" expands a card on demand instead of
@@ -179,6 +190,7 @@ export function TasksPage() {
   // Which lanes to render. Filtering by stage hides the other lanes entirely
   // rather than emptying them, so the board stays a board.
   const shownStages = stageFilter === 'all' ? TASK_STATUSES : [stageFilter]
+  const shownTaskCount = stageFilter === 'all' ? visible.length : columns[stageFilter].length
 
   function openNew(status: TaskStatus) {
     setEditing(null)
@@ -461,6 +473,34 @@ export function TasksPage() {
             : 'Your board. Drag a card between stages as you work through it.'
         }
       >
+        <div className="relative w-full sm:w-[220px]" role="search">
+          <Search
+            className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+            aria-hidden
+          />
+          <Input
+            type="search"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setSearchQuery('')
+            }}
+            placeholder="Search task titles…"
+            aria-label="Search tasks by title"
+            className="pl-9 pr-9"
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              aria-label="Clear task search"
+              onClick={() => setSearchQuery('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <X className="h-4 w-4" aria-hidden />
+            </button>
+          )}
+        </div>
+
         {/* Worker + stage are the cross-team filters, shown to anyone who can
             see the whole board; client and priority narrow any board. */}
         {canViewAll && (
@@ -542,6 +582,17 @@ export function TasksPage() {
             ))}
           </div>
         </div>
+      ) : shownTaskCount === 0 && searchActive ? (
+        <EmptyState
+          icon={Search}
+          title="No tasks found"
+          description={
+            filtersActive
+              ? `No task titles matching “${searchQuery.trim()}” were found with the current filters.`
+              : `No task titles match “${searchQuery.trim()}”. Try a different title or clear the search.`
+          }
+          action={<Button variant="outline" onClick={() => setSearchQuery('')}>Clear search</Button>}
+        />
       ) : visible.length === 0 && filtersActive ? (
         // The board is not empty — the filters just hide everything.
         <EmptyState
