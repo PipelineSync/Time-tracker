@@ -131,6 +131,17 @@ Setup (Supabase-connected deploys):
 
 Messages are posted server-side by the `slack-notify` Netlify Function, which rebuilds each message from the database (worker name, project, hours, earnings, currency, business timezone) — so a client can never forge names or amounts, and a slow/broken Slack hookup can never block clocking in or out.
 
+### USD → PHP reference rate
+For teams that bill in USD but live in pesos, the **Dashboard** and the worker **Clock In / Out** page carry a small **`1 USD = ₱62.63`** chip on the title row, and the Dashboard's two earnings cards show the peso figure under the dollar one (`≈ ₱7,516`).
+
+- **Only for USD workspaces.** The chip and the sub-lines render *only* when **Settings → Currency** is `USD`. A workspace billing in PHP, EUR or anything else sees exactly what it saw before — nothing is rendered, not even an empty slot.
+- **One sync a day, server-side.** `netlify/functions/sync-fx-rate.ts` runs on a daily Netlify schedule, fetches the ECB reference rate from [Frankfurter](https://www.frankfurter.dev) (no API key, no quota) and writes it to the `settings` row. Clients never call the rate provider, so no key is ever in the browser bundle.
+- **Zero extra database queries.** The rate rides along on the `settings` read every tab already makes about once a minute — see *Performance & egress* below. Nothing is fetched per view, per worker or per tick.
+- **A fallback is honest about itself.** Until the first sync has run — a fresh database, or demo mode, which has no server at all — the app shows the bundled `FALLBACK_USD_PHP_RATE` from `src/lib/fx.ts` with a **`≈`** instead of `=`, and its tooltip says so. A synced rate reads `=` and names the day it was fetched.
+- **Indicative, not a quote.** These are rounded whole-peso reference conversions off a once-a-day rate; the tooltip says so. Earnings are still *stored and paid* in the workspace currency — nothing in the ledger is converted.
+
+Setup: run `supabase/RUN-THIS-fx-rate.sql` once on an existing database (fresh installs get the columns from `schema.sql`), then deploy — the schedule is already in `netlify.toml`. Until the migration is applied the app still runs on the fallback rate, and the function's log says exactly which file to run.
+
 ### Performance & egress (why many tabs at once don't slow it down)
 The app is built to stay inside Supabase's and Netlify's free-tier bandwidth even with a whole team signed in at once.
 
@@ -138,6 +149,7 @@ The app is built to stay inside Supabase's and Netlify's free-tier bandwidth eve
 - Every visible tab keeps a **bounded window** of the database in memory (1200 newest entries for the admin, 300 for a worker) — per-tab load stays flat as history grows.
 - The 15 s background poll fetches only what changed: entries sync as a **delta** (`since` the last sync), and the unread badge is a **HEAD count** that ships no rows at all.
 - Heavy-but-rarely-changing lists — **workers, payments, settings, tasks and the notification dropdown** — are skipped on "light" ticks and refresh roughly **once a minute** instead of every 15 s. Anything you change yourself refreshes immediately, so this is invisible in use.
+- The **USD → PHP rate** is two columns on that same `settings` row, so it costs **no extra query at all** — about 75 bytes on a request the app already makes. It is deliberately *not* a separate `exchange_rates` table and *not* a per-client call to a rate API: polling a value that moves once per business day every 15 s would mean ~5,760 requests per open tab per day. The single daily fetch happens server-side in `sync-fx-rate`.
 - Queries name their **columns explicitly** rather than `select('*')`, so the workspace-owner `user_id` (identical on every row, never displayed) never goes over the wire.
 - Background refreshes never stack: focus/visibility events fire in bursts, and a refresh already in flight suppresses the rest.
 
@@ -226,6 +238,8 @@ This creates the `workers`, `time_entries`, `active_timers`, `settings`, `paymen
 > For **reference numbers on paid settlements**, run **`supabase/payment-reference-number.sql`** once on an **existing** database. It adds `payments.reference_number`, which stores the GCash / Maya / bank reference (or receipt number) the admin types when marking a payment paid, and shows it under **Paid via**. Fresh installs get it from `schema.sql`. Safe to re-run. Until it is applied the app still works — the payment is marked paid, only the reference is dropped (and the app warns when that happens).
 >
 > For the **Personal Tracker** (account menu → "Switch to Personal Tracker"), run **`supabase/personal-finance.sql`** once. It creates the `personal_finance_data` table — one strictly private row per account (RLS: owner only). Fresh installs get it from `schema.sql`. Until it is applied the tracker still works from browser storage, but saving reports that the table is missing.
+>
+> For the **USD → PHP reference rate** (the chip on the Dashboard and Clock In title rows), run **`supabase/RUN-THIS-fx-rate.sql`** once. It adds `settings.usd_php_rate` and `settings.usd_php_rate_updated_at`, which the daily `sync-fx-rate` function writes. **No RLS change** — the existing settings policies already cover new columns, and clients only ever read it. Fresh installs get them from `schema.sql`. Safe to re-run. Until it is applied the app still runs: the UI shows the bundled fallback rate marked `≈`, and the function's log names this file.
 
 ---
 
@@ -311,6 +325,15 @@ Free-tier Supabase projects are **paused after ~7 days of no API/database activi
 - You can verify each run in **Netlify → Logs → supabase-keepalive**, or trigger it manually at `/.netlify/functions/supabase-keepalive`.
 - If you deploy somewhere without scheduled functions (e.g. Vercel free tier), point any external cron service (cron-job.org, GitHub Actions, UptimeRobot) at `https://YOUR-PROJECT.supabase.co/rest/v1/settings?select=id&limit=1` with your publishable key in the `apikey` header, once a day.
 
+#### USD → PHP rate sync
+
+The same schedule mechanism ships a second function, **`netlify/functions/sync-fx-rate.ts`**, which refreshes the **USD → PHP reference rate** shown on the Dashboard and Clock In pages (see *USD → PHP reference rate* under Features).
+
+- **No setup needed** — `netlify.toml` already schedules it `@daily` (00:00 UTC = 8:00 AM PHT), and it uses the `SUPABASE_SECRET_KEY` you set for the other functions, because a scheduled run has no user token and `settings` is RLS-locked to the admin.
+- One call a day to the rate provider, one write to the `settings` row. Run **`supabase/RUN-THIS-fx-rate.sql`** first on an existing database; until then the function returns a 500 whose message names that file, and the UI shows the bundled fallback rate.
+- Check a run in **Netlify → Logs → sync-fx-rate**, or trigger it manually at `/.netlify/functions/sync-fx-rate` to refresh right after a deploy.
+- It fails closed: if the provider errors or answers without a usable PHP rate, the function returns 502 and **leaves the stored rate untouched** rather than writing junk.
+
 ### Deploy to Vercel (free)
 
 1. Import the repo on Vercel.
@@ -383,12 +406,15 @@ time-tracker/
 ├─ supabase/RUN-THIS-clients-and-permissions.sql   # Copy-paste bundle of the two migrations above
 ├─ supabase/RUN-THIS-reports-view-sees-all-entries.sql  # Copy-paste migration: Reports = the whole team's entries (+ backfill)
 ├─ supabase/payment-reference-number.sql  # One-time migration: reference number on paid settlements
+├─ supabase/RUN-THIS-fx-rate.sql  # One-time migration: USD → PHP rate columns on settings
 ├─ src/
 │  ├─ lib/                      # types, utils, stats, backend (local + supabase), store, theme
 │  │                          # + platform.ts (shell detection), native.ts (Capacitor bootstrap), useInstallPrompt.ts
 │  │                          # + personalFinance.ts (Personal Tracker data layer — owner-only)
+│  │                          # + fx.ts (USD → PHP rate: fallback, formatting, who sees it)
 │  ├─ components/               # shared UI + app components (shadcn-style), incl. AvatarBubble
 │  │                          # + PaymentsPanel.tsx (Finance → Payroll) + InstallAppCard.tsx (Settings → “Get the app”)
+│  │                          # + RateChip.tsx (the “1 USD = ₱62.63” title-row chip)
 │  ├─ pages/                    # Dashboard, Tracker, Entries, Tasks, Workers, Reports, Settings, Finance, Auth
 │  │                          # + PersonalFinancePage.tsx (the private Personal Tracker)
 │  ├─ App.tsx                   # Routing + auth gate (HashRouter inside native shells)

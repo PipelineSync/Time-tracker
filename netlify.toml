@@ -14,3 +14,9 @@
 # (Netlify cron runs in UTC; "@daily" = 00:00 UTC = 8:00 AM PHT).
 [functions."supabase-keepalive"]
   schedule = "@daily"
+
+# Daily USD -> PHP reference-rate sync, same 8:00 AM PHT slot. One call a day
+# to the rate provider, one write to the settings row; every tab then reads it
+# on the settings fetch it already makes, so it adds no client queries.
+[functions."sync-fx-rate"]
+  schedule = "@daily"
