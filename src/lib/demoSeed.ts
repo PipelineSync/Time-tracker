@@ -200,6 +200,10 @@ export function buildDemoSeed() {
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
     default_hourly_rate: 20,
     avatar_url: null,
+    // Demo mode has no server, so nothing ever writes a live rate here — the
+    // UI falls back to FALLBACK_USD_PHP_RATE and says so with a "≈".
+    usd_php_rate: null,
+    usd_php_rate_updated_at: null,
   }
 
   // Finance: a couple of subscriptions, a paid + an unpaid payroll run per

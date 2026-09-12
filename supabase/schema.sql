@@ -221,6 +221,17 @@ create table if not exists public.settings (
   currency            text not null default 'USD',
   timezone            text not null default 'UTC',
   default_hourly_rate numeric(10,2) not null default 20 check (default_hourly_rate >= 0),
+  -- Latest USD -> PHP reference rate, written once a day by the `sync-fx-rate`
+  -- Netlify Function (see netlify.toml). Null until the first run — the app
+  -- falls back to FALLBACK_USD_PHP_RATE in src/lib/fx.ts. Rides along with the
+  -- settings read every tab already makes, so it costs no extra queries.
+  -- Existing databases get these from RUN-THIS-fx-rate.sql.
+  -- Named explicitly (not left for Postgres to auto-name) so that running
+  -- RUN-THIS-fx-rate.sql afterwards finds THIS constraint to drop-and-replace
+  -- instead of stacking a second, duplicate check beside an auto-named one.
+  usd_php_rate            numeric(12,4)
+    constraint settings_usd_php_rate_sane check (usd_php_rate is null or usd_php_rate > 0),
+  usd_php_rate_updated_at timestamptz,
   updated_at          timestamptz not null default now()
 );
 

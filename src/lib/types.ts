@@ -107,6 +107,16 @@ export interface Settings {
   timezone: string
   default_hourly_rate: number
   avatar_url: string | null
+  /**
+   * Latest USD → PHP reference rate, written once a day by the `sync-fx-rate`
+   * Netlify Function. Null until the first run on a Supabase workspace, or
+   * always null in demo mode — both fall back to FALLBACK_USD_PHP_RATE.
+   * Rides along with the settings read every tab already makes, so showing it
+   * costs no extra database query. See supabase/RUN-THIS-fx-rate.sql.
+   */
+  usd_php_rate: number | null
+  /** When `usd_php_rate` was last written. Null when it never was. */
+  usd_php_rate_updated_at: string | null
 }
 
 // ---- Worker permissions ----------------------------------------------------
