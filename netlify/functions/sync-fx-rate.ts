@@ -2,19 +2,32 @@
 //
 // WHY THIS IS SERVER-SIDE AND DAILY
 // ---------------------------------
-// The rate comes from the ECB's reference rates via Frankfurter, which
-// republishes once per business day (~16:00 CET, weekdays only). Fetching it
-// from the browser on the app's 15-second poll would mean ~5,760 requests per
-// open tab per day for a value that changes ~250 times a year — and would put
-// an API key in the client bundle. So: one server-side call a day, written to
-// the `settings` row, and every tab picks it up on the settings read it
-// already makes (see the tick-budget comment in src/lib/store.tsx). Net cost
-// to the database: one write per day, zero extra client queries.
+// Fetching the rate from the browser on the app's 15-second poll would mean
+// ~5,760 requests per open tab per day for a value that only needs refreshing
+// once a day. So: one server-side call a day, written to the `settings` row,
+// and every tab picks it up on the settings read it already makes (see the
+// tick-budget comment in src/lib/store.tsx). Net cost to the database: one
+// write per day, zero extra client queries.
+//
+// WHY A CALENDAR-DAILY PROVIDER (this was the bug)
+// ------------------------------------------------
+// This job used to read the ECB's reference rates via Frankfurter. The ECB
+// only publishes on BUSINESS DAYS (~16:00 CET, weekdays), so that value does
+// not move on weekends or holidays — and because this job runs at 00:00 UTC,
+// even Monday morning still saw Friday's number (Monday's ECB rate isn't out
+// until Monday afternoon). The result was a rate that visibly sat still from
+// Saturday through Monday, i.e. "not updating every day".
+//
+// The fix: read from a provider that refreshes EVERY calendar day. The
+// primary is ExchangeRate-API's open endpoint (open.er-api.com): no API key,
+// no quota for a once-a-day call, PHP included, and it re-publishes every 24h
+// (see its `time_next_update_utc`). Frankfurter is kept as a fallback so a
+// provider outage still leaves us with a recent rate rather than none.
 //
 // Netlify runs this on a schedule — see [functions."sync-fx-rate"] in
-// netlify.toml ("@daily" = 00:00 UTC = 8:00 AM PHT, the same slot the
-// supabase-keepalive ping already uses). Hitting the function's URL by hand
-// also works, for an immediate refresh after a deploy.
+// netlify.toml. It runs at 00:30 UTC, just after open.er-api.com's ~00:00 UTC
+// daily refresh, so each run picks up that day's fresh value. Hitting the
+// function's URL by hand also works, for an immediate refresh after a deploy.
 //
 // Writes with SUPABASE_SECRET_KEY (via adminClient), because a scheduled run
 // has no user token and the settings table is RLS-locked to the admin. The
@@ -23,41 +36,84 @@
 
 import { adminClient } from './lib/supabase'
 
-const FX_URL = 'https://api.frankfurter.dev/v1/latest?base=USD&symbols=PHP'
+/** A resolved rate plus a human-readable "as of" date for the log line. */
+type ProviderResult = { rate: number; date: string }
 
-/** Frankfurter answers with the ECB's ~30-currency basket; PHP is in it. */
-type FrankfurterLatest = {
-  base?: string
-  date?: string
-  rates?: Record<string, number | undefined>
-}
+/**
+ * Rate providers, tried in order until one yields a usable PHP rate. Ordered
+ * primary-first: a source that updates every calendar day, then the ECB feed
+ * as a fallback for when the primary is unreachable.
+ */
+const PROVIDERS: {
+  name: string
+  url: string
+  parse: (payload: unknown) => ProviderResult | undefined
+}[] = [
+  {
+    // ExchangeRate-API open endpoint. Refreshes once every 24h, every day of
+    // the week — no key required. Shape: { rates: { PHP: number, ... },
+    // time_last_update_utc: string, result: "success" }.
+    name: 'exchangerate-api',
+    url: 'https://open.er-api.com/v6/latest/USD',
+    parse: (payload) => {
+      const p = payload as {
+        result?: string
+        rates?: Record<string, number | undefined>
+        time_last_update_utc?: string
+      }
+      if (p?.result && p.result !== 'success') return undefined
+      const rate = p?.rates?.PHP
+      if (typeof rate !== 'number') return undefined
+      return { rate, date: p.time_last_update_utc ?? 'unknown' }
+    },
+  },
+  {
+    // Frankfurter republishes the ECB's ~30-currency basket (PHP is in it).
+    // Business-day-only, so it is the fallback, not the primary — but a recent
+    // weekday rate still beats writing nothing when the primary is down.
+    name: 'frankfurter',
+    url: 'https://api.frankfurter.dev/v1/latest?base=USD&symbols=PHP',
+    parse: (payload) => {
+      const p = payload as { date?: string; rates?: Record<string, number | undefined> }
+      const rate = p?.rates?.PHP
+      if (typeof rate !== 'number') return undefined
+      return { rate, date: p.date ?? 'unknown' }
+    },
+  },
+]
 
 export default async function handler(_request: Request) {
-  let rate: number | undefined
-  let rateDate: string | undefined
+  let result: ProviderResult | undefined
+  const failures: string[] = []
 
-  try {
-    const response = await fetch(FX_URL, { headers: { accept: 'application/json' } })
-    if (!response.ok) {
-      return new Response(`Rate provider returned HTTP ${response.status}.`, { status: 502 })
+  for (const provider of PROVIDERS) {
+    try {
+      const response = await fetch(provider.url, { headers: { accept: 'application/json' } })
+      if (!response.ok) {
+        failures.push(`${provider.name}: HTTP ${response.status}`)
+        continue
+      }
+      const parsed = provider.parse(await response.json())
+      // A missing or non-finite PHP rate is a provider problem — move on to the
+      // next provider rather than writing junk.
+      if (!parsed || !Number.isFinite(parsed.rate) || parsed.rate <= 0) {
+        failures.push(`${provider.name}: no usable PHP rate`)
+        continue
+      }
+      result = parsed
+      break
+    } catch (error) {
+      failures.push(`${provider.name}: ${error instanceof Error ? error.message : 'unknown error'}`)
     }
-    const payload = (await response.json()) as FrankfurterLatest
-    rate = payload.rates?.PHP
-    rateDate = payload.date
-  } catch (error) {
-    return new Response(
-      `Could not reach the rate provider: ${error instanceof Error ? error.message : 'unknown error'}.`,
-      { status: 502 },
-    )
   }
 
-  // A missing or non-finite PHP rate is a provider problem, not a reason to
-  // write junk. Leave the previous rate in place rather than nulling it.
-  if (typeof rate !== 'number' || !Number.isFinite(rate) || rate <= 0) {
-    return new Response(`Rate provider returned no usable PHP rate (got ${String(rate)}).`, {
-      status: 502,
-    })
+  // Every provider failed. Leave the previous rate in place rather than nulling
+  // it, and say which providers failed and how.
+  if (!result) {
+    return new Response(`Could not fetch a USD -> PHP rate. ${failures.join('; ')}.`, { status: 502 })
   }
+
+  const { rate, date: rateDate } = result
 
   try {
     const sb = adminClient()
@@ -80,7 +136,7 @@ export default async function handler(_request: Request) {
     }
 
     const updated = Array.isArray(data) ? data.length : 0
-    const summary = `USD -> PHP = ${rate} (provider date ${rateDate ?? 'unknown'}) written to ${updated} workspace${updated === 1 ? '' : 's'}.`
+    const summary = `USD -> PHP = ${rate} (provider date ${rateDate}) written to ${updated} workspace${updated === 1 ? '' : 's'}.`
     console.log(`sync-fx-rate: ${summary}`)
     return new Response(summary)
   } catch (error) {

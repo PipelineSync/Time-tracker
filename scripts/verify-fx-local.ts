@@ -186,11 +186,19 @@ class StubSupabase {
 async function checkSyncFunction() {
   const realFetch = globalThis.fetch
 
+  // The function tries providers in order (open.er-api.com first, then
+  // Frankfurter). These stub the primary's response shape; a stubbed failure
+  // (non-200, or no PHP) makes the function fall through to the next provider,
+  // so a stub that fails BOTH providers is what exercises the "provider
+  // failure must not write junk" path below.
+  const PRIMARY = 'https://open.er-api.com'
+  const FALLBACK = 'https://api.frankfurter.dev'
+
   /** Route the provider call to a canned answer; let Supabase reach the stub. */
   const stubProvider = (answer: { status: number; body: unknown }) => {
     globalThis.fetch = (async (input: any, init?: any) => {
       const url = typeof input === 'string' ? input : String(input?.url ?? input)
-      if (url.startsWith('https://api.frankfurter.dev')) {
+      if (url.startsWith(PRIMARY) || url.startsWith(FALLBACK)) {
         return new Response(JSON.stringify(answer.body), {
           status: answer.status,
           headers: { 'Content-Type': 'application/json' },
@@ -206,7 +214,15 @@ async function checkSyncFunction() {
   try {
     // --- happy path --------------------------------------------------------
     stub.setResponse(() => ({ status: 200, body: '[{"id":"settings-1"}]' }))
-    stubProvider({ status: 200, body: { base: 'USD', date: '2026-09-11', rates: { PHP: 62.629 } } })
+    stubProvider({
+      status: 200,
+      body: {
+        result: 'success',
+        base_code: 'USD',
+        time_last_update_utc: 'Mon, 14 Sep 2026 00:02:31 +0000',
+        rates: { PHP: 62.629 },
+      },
+    })
     const { default: handler } = await import('../netlify/functions/sync-fx-rate')
 
     let res = await handler(new Request(url))
