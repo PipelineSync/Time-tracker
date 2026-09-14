@@ -80,15 +80,40 @@ export function hoursByWorker(entries: TimeEntry[], workers: Worker[]) {
     cur.sessions += 1
     map.set(e.worker_id, cur)
   }
-  return workers
-    .map((w) => ({
-      worker: w,
-      hours: map.get(w.id)?.hours || 0,
-      earnings: map.get(w.id)?.earnings || 0,
-      sessions: map.get(w.id)?.sessions || 0,
-    }))
-    .filter((x) => x.sessions > 0)
-    .sort((a, b) => b.hours - a.hours)
+  const byId = new Map(workers.map((w) => [w.id, w] as const))
+  // Always list every active worker (and anyone with time in range, including
+  // inactive / deleted rows) so a granted Reports view is the whole team —
+  // not just whoever happened to clock in this week.
+  const ids = new Set<string>()
+  for (const w of workers) {
+    if (w.status !== 'inactive' || map.has(w.id)) ids.add(w.id)
+  }
+  for (const id of map.keys()) ids.add(id)
+  return [...ids]
+    .map((id) => {
+      const worker = byId.get(id) ?? ({
+        id,
+        name: 'Unknown worker',
+        email: null,
+        hourly_rate: 0,
+        status: 'inactive',
+        position: null,
+        avatar_url: null,
+        payment_methods: [],
+        qr_code_url: null,
+        permissions: [],
+        created_at: '',
+        updated_at: '',
+      } as Worker)
+      const cur = map.get(id)
+      return {
+        worker,
+        hours: cur?.hours || 0,
+        earnings: cur?.earnings || 0,
+        sessions: cur?.sessions || 0,
+      }
+    })
+    .sort((a, b) => b.hours - a.hours || a.worker.name.localeCompare(b.worker.name))
 }
 
 /**

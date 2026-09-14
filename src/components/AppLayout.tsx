@@ -66,47 +66,50 @@ const NAV = {
   settings: { to: '/settings', label: 'Settings', shortLabel: 'Settings', icon: Settings },
 } satisfies Record<string, NavItem>
 
+interface NavSection {
+  /** Heading shown above the group. Empty = no heading (admin / default block). */
+  title: string
+  items: NavItem[]
+}
+
 /**
- * The destinations this account can reach. The admin gets everything; a worker
- * gets their own screens plus whatever the admin granted them, in the same
- * order as the admin's menu so the two look alike.
+ * Worker accounts always see their own tools first. Extra admin screens the
+ * owner granted them sit under an "Access Granted" divider so the two kinds
+ * of access are obvious.
  */
-function buildNav(isAdmin: boolean, can: (p: Permission) => boolean): NavItem[] {
+function buildNavSections(isAdmin: boolean, can: (p: Permission) => boolean): NavSection[] {
   if (isAdmin) {
-    return [NAV.dashboard, NAV.entriesAll, NAV.tasksAll, NAV.priorityBoard, NAV.meetings, NAV.invoicing, NAV.notepad, NAV.finance, NAV.workers, NAV.reports, NAV.settings]
+    return [{
+      title: '',
+      items: [NAV.dashboard, NAV.entriesAll, NAV.tasksAll, NAV.priorityBoard, NAV.meetings, NAV.invoicing, NAV.notepad, NAV.finance, NAV.workers, NAV.reports, NAV.settings],
+    }]
   }
-  const items: NavItem[] = []
-  if (can('dashboard.view')) items.push(NAV.dashboard)
-  // Only real workers clock in, so this stays first among their own screens.
-  items.push(NAV.tracker)
-  items.push(can('entries.view_all') ? NAV.entriesAll : NAV.entriesMine)
-  items.push(can('tasks.view_all') ? NAV.tasksAll : NAV.tasksMine)
-  // The client priority board is admin-only until the admin grants it.
-  if (can('priority_board.view')) items.push(NAV.priorityBoard)
-  // Same for the meetings schedule (`meetings.view`).
-  if (can('meetings.view')) items.push(NAV.meetings)
-  // Same for the client invoicing board (`invoices.view`).
-  if (can('invoices.view')) items.push(NAV.invoicing)
-  // The notepad is each worker's own private scratchpad — every account has
-  // one, so there is nothing to grant.
-  items.push(NAV.notepad)
-  // Payments now live in Finance → Payroll. Workers always get in (their own
-  // payment history sits in the Payroll tab); the extra tabs and the ledger
-  // appear only once the admin grants Finance access (off by default).
-  // The full Finance item appears for anyone the admin gave a Finance view —
-  // finance.view (the whole ledger, which also covers finance.manage because
-  // the store normalizes manage → view) or the granular subscription/payroll
-  // keys. Everyone else gets the honest "Payroll" item (their own payments).
+
+  const defaults: NavItem[] = [
+    NAV.tracker,
+    NAV.tasksMine,
+    NAV.notepad,
+    NAV.payroll,
+    NAV.settings,
+  ]
+
+  const granted: NavItem[] = []
+  if (can('dashboard.view')) granted.push(NAV.dashboard)
+  if (can('entries.view_all')) granted.push(NAV.entriesAll)
+  if (can('tasks.view_all')) granted.push(NAV.tasksAll)
+  if (can('priority_board.view')) granted.push(NAV.priorityBoard)
+  if (can('meetings.view')) granted.push(NAV.meetings)
+  if (can('invoices.view')) granted.push(NAV.invoicing)
   const hasFinance = can('finance.view') || can('finance.subscription') || can('finance.payroll')
-  if (hasFinance) {
-    items.push(NAV.finance)
-  } else {
-    items.push(NAV.payroll)
+  if (hasFinance) granted.push(NAV.finance)
+  if (can('workers.view')) granted.push(NAV.workers)
+  if (can('reports.view')) granted.push(NAV.reports)
+
+  const sections: NavSection[] = [{ title: '', items: defaults }]
+  if (granted.length > 0) {
+    sections.push({ title: 'Access Granted', items: granted })
   }
-  if (can('workers.view')) items.push(NAV.workers)
-  if (can('reports.view')) items.push(NAV.reports)
-  items.push(NAV.settings)
-  return items
+  return sections
 }
 
 /**
@@ -133,7 +136,8 @@ export function AppLayout() {
   const isDemo = backend.kind === 'local'
   const { setTheme } = useTheme()
   const navigate = useNavigate()
-  const navItems = useMemo(() => buildNav(isAdmin, can), [isAdmin, can])
+  const navSections = useMemo(() => buildNavSections(isAdmin, can), [isAdmin, can])
+  const navItems = useMemo(() => navSections.flatMap((s) => s.items), [navSections])
   const [changePwOpen, setChangePwOpen] = useState(false)
 
   // The signed-in user's avatar, if they have uploaded one. Workers see their
@@ -207,24 +211,37 @@ export function AppLayout() {
         <div className="flex h-16 items-center border-b border-white/10 px-6">
           <BrandLogo onNavy />
         </div>
-        <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
-          {navItems.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.to === '/'}
-              className={({ isActive }) =>
-                cn(
-                  'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
-                  isActive
-                    ? 'bg-white/15 text-white'
-                    : 'text-white/70 hover:bg-white/10 hover:text-white'
-                )
-              }
-            >
-              <item.icon className="h-5 w-5" />
-              <span className="flex-1">{item.label}</span>
-            </NavLink>
+        <nav className="flex-1 space-y-4 overflow-y-auto px-3 py-4">
+          {navSections.map((section, si) => (
+            <div key={section.title || `nav-${si}`} className="space-y-1">
+              {section.title ? (
+                <div className="flex items-center gap-2 px-3 pb-1 pt-2">
+                  <div className="h-px flex-1 bg-white/15" />
+                  <p className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/45">
+                    {section.title}
+                  </p>
+                  <div className="h-px flex-1 bg-white/15" />
+                </div>
+              ) : null}
+              {section.items.map((item) => (
+                <NavLink
+                  key={`${item.to}-${item.label}`}
+                  to={item.to}
+                  end={item.to === '/'}
+                  className={({ isActive }) =>
+                    cn(
+                      'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+                      isActive
+                        ? 'bg-white/15 text-white'
+                        : 'text-white/70 hover:bg-white/10 hover:text-white'
+                    )
+                  }
+                >
+                  <item.icon className="h-5 w-5" />
+                  <span className="flex-1">{item.label}</span>
+                </NavLink>
+              ))}
+            </div>
           ))}
         </nav>
         <div className="border-t border-white/10 px-4 py-3">
@@ -272,7 +289,7 @@ export function AppLayout() {
         <div className="grid" style={{ gridTemplateColumns: `repeat(${navItems.length}, minmax(0,1fr))` }}>
           {navItems.map((item) => (
             <NavLink
-              key={item.to}
+              key={`${item.to}-${item.label}`}
               to={item.to}
               end={item.to === '/'}
               className={({ isActive }) =>
