@@ -20,6 +20,7 @@ const PERMISSIONS = [
   'tasks.manage_all',
   'priority_board.view',
   'meetings.view',
+  'invoices.view',
   'payments.view_all',
   'payments.manage',
   'finance.view',

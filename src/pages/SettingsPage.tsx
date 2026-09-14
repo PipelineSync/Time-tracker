@@ -15,7 +15,7 @@ import { SlackSettingsCard } from '@/components/SlackSettingsCard'
 import { toast } from 'sonner'
 import { Sun, Moon, Monitor, Download, Trash2, Loader2, Upload, X, Banknote, QrCode } from 'lucide-react'
 import { initials } from '@/lib/utils'
-import { imageFileToDataUrl, isImageFile } from '@/lib/image'
+import { imageFileToDataUrl, validateImageFile } from '@/lib/image'
 import type { PaymentMethod } from '@/lib/types'
 
 export function SettingsPage() {
@@ -37,8 +37,9 @@ export function SettingsPage() {
   // pictures/QR codes so a huge photo can't bloat the settings row.
   function onPickAvatar(file?: File | null) {
     if (!file) return
-    if (!isImageFile(file)) {
-      toast.error('Please choose an image file.')
+    const err = validateImageFile(file)
+    if (err) {
+      toast.error(err)
       return
     }
     imageFileToDataUrl(file)
@@ -91,8 +92,9 @@ export function SettingsPage() {
 
   function onPickQr(file?: File | null) {
     if (!file) return
-    if (!isImageFile(file)) {
-      toast.error('Please choose an image file.')
+    const err = validateImageFile(file)
+    if (err) {
+      toast.error(err)
       return
     }
     imageFileToDataUrl(file)
@@ -160,13 +162,14 @@ export function SettingsPage() {
 
   function onPickPicture(file?: File | null) {
     if (!file) return
-    if (!file.type.startsWith('image/')) {
-      toast.error('Please choose an image file.')
+    const err = validateImageFile(file)
+    if (err) {
+      toast.error(err)
       return
     }
-    const reader = new FileReader()
-    reader.onload = () => setProfileAvatar(String(reader.result))
-    reader.readAsDataURL(file)
+    imageFileToDataUrl(file)
+      .then((url) => setProfileAvatar(url))
+      .catch(() => toast.error('That image could not be read. Please try another file.'))
   }
 
   async function handleSaveProfile() {

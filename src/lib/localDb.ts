@@ -2184,6 +2184,9 @@ export const localBackend: DataBackend = {
     if (!c) return { data: null, error: 'Not signed in.' }
     if (c.user.role !== 'admin') return { data: null, error: 'Only the admin can delete data.' }
     save(emptyData())
+    // Slack settings survive main blob deletion by design, so clear it explicitly on full reset.
+    storage.removeItem(slackKey(c.admin.id))
+    // Personal finance data is per-auth-user and strictly private — do NOT delete it on workspace reset.
     // Worker login accounts are gone along with their worker rows — drop them
     // so reset workers cannot sign in again. The admin account is kept.
     writeUsers(readUsers().filter((u) => u.role !== 'worker'))

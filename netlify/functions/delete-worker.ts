@@ -59,27 +59,78 @@ export default async function handler(request: Request) {
 
   try {
     // Full reset (Settings → delete all data): remove every worker's login
-    // account and all worker data.
+    // account and all workspace data scoped to this admin.
     if (body.all === true) {
+      const ownerId = auth.userId
       const { data: workerProfiles, error: profileError } = await sb
         .from('profiles')
         .select('user_id, worker_id')
         .eq('role', 'worker')
       if (profileError) return json(400, { error: profileError.message })
 
+      // Only delete worker logins that belong to this workspace (user_id = owner or profile linked to owner's workers).
+      // Fetch owner's worker ids to filter.
+      const { data: ownerWorkers } = await sb.from('workers').select('id').eq('user_id', ownerId)
+      const ownerWorkerIds = new Set((ownerWorkers as Array<{ id: string }> | null)?.map((w) => w.id) ?? [])
+      const toDelete = (workerProfiles || []).filter((p) => !p.worker_id || ownerWorkerIds.has(p.worker_id as string))
+
       // Delete the logins first (auth user → profile row cascades).
-      for (const p of workerProfiles || []) {
+      for (const p of toDelete) {
         await deleteAuthAccountForWorker(sb, p.user_id ?? null, null)
       }
-      // Then the data. Worker-row cascades cover entries, timers, payments,
-      // comments and entry notifications; the remaining tables are cleared
-      // explicitly in case of orphan rows.
-      await sb.from('workers').delete().not('id', 'is', null)
-      await sb.from('time_entries').delete().not('id', 'is', null)
-      await sb.from('active_timers').delete().not('id', 'is', null)
-      await sb.from('payments').delete().not('id', 'is', null)
-      await sb.from('time_entry_comments').delete().not('id', 'is', null)
-      await sb.from('notifications').delete().not('id', 'is', null)
+
+      // Helper: delete workspace rows scoped to ownerId, ignoring missing tables (migration not applied).
+      async function deleteOwned(table: string) {
+        try {
+          const res = await sb.from(table).delete().eq('user_id', ownerId)
+          if (res.error && !/does not exist|not found in schema/i.test(res.error.message)) {
+            console.warn(`[delete-worker] could not clear ${table}:`, res.error.message)
+          }
+        } catch (e) {
+          console.warn(`[delete-worker] could not clear ${table}:`, e)
+        }
+      }
+
+      // Workspace-owned tables (same set as localDb emptyData + chat + slack + invoices etc)
+      // Order matters for FKs: delete children before parents where cascade not guaranteed.
+      const workspaceTables = [
+        'chat_reactions',
+        'chat_messages',
+        'time_entry_comments',
+        'notifications',
+        'active_timers',
+        'time_entries',
+        'payments',
+        'tasks',
+        'invoices',
+        'meetings',
+        'client_priorities',
+        'finance_items',
+        'clients',
+        'slack_settings',
+        'workers', // last among workspace tables
+      ]
+      for (const t of workspaceTables) {
+        await deleteOwned(t)
+      }
+
+      // Notepad and personal finance are per-auth-user, not workspace-owned.
+      // For a full workspace reset, clear the admin's own notepad/slack (already via user_id) and
+      // also clear notepad rows for workers whose logins we just deleted.
+      // Best-effort: delete notepad_notes for admin + deleted worker user_ids.
+      try {
+        const adminAndWorkerUserIds = [ownerId, ...toDelete.map((p) => p.user_id).filter(Boolean)] as string[]
+        if (adminAndWorkerUserIds.length > 0) {
+          await sb.from('notepad_notes').delete().in('user_id', adminAndWorkerUserIds)
+        }
+      } catch {
+        // table may not exist yet
+      }
+
+      // Keep settings row? Local demo wipes settings (emptyData). For Supabase we preserve settings
+      // to avoid orphaning workspace, but clear heavy columns? Original behavior kept settings.
+      // We'll keep settings for now to match previous prod behavior.
+
       return json(200, { ok: true })
     }
 
