@@ -17,6 +17,7 @@ import { ClientSelect } from '@/components/ClientSelect'
 import { toast } from 'sonner'
 import { Plus, ListChecks, Pencil, Trash2, Copy, Search, X, MessageSquare } from 'lucide-react'
 import type { TimeEntry } from '@/lib/types'
+import { canViewAllEntries } from '@/lib/types'
 import { money, formatMinutes, formatDate, formatTime } from '@/lib/utils'
 import { startOfWeek, startOfMonth } from '@/lib/stats'
 
@@ -24,10 +25,15 @@ type SortKey = 'date' | 'worker' | 'hours' | 'earnings'
 type SortDir = 'asc' | 'desc'
 
 export function EntriesPage() {
-  const { workers, entries, clients, deleteEntry, duplicateEntry, settings, dataLoading, can } = useStore()
+  const { workers, entries, clients, deleteEntry, duplicateEntry, settings, dataLoading, can, permissions } = useStore()
   // Adding, editing and deleting time is an admin capability the admin can
   // also hand to a worker; without it this page is read-only.
   const canManage = can('entries.manage')
+  // Everyone reads their own time; the whole team's rows need the team-wide
+  // read (`entries.view_all` — or `reports.view`, which implies it, exactly as
+  // the backends and the RLS policies treat them). Without it this is the
+  // worker's "My Time": their own rows, and none of the team-only controls.
+  const seesAllEntries = canViewAllEntries(permissions)
   const [params, setParams] = useSearchParams()
   const [editing, setEditing] = useState<TimeEntry | null>(null)
   const [formOpen, setFormOpen] = useState(false)
@@ -119,16 +125,19 @@ export function EntriesPage() {
       )
     }
     const sorted = [...list]
+    // A worker who may not read the team's time cannot sort by a worker
+    // column that isn't there — fall back to the date.
+    const key: SortKey = sortKey === 'worker' && !seesAllEntries ? 'date' : sortKey
     sorted.sort((a, b) => {
       let cmp = 0
-      if (sortKey === 'date') cmp = a.start_time.localeCompare(b.start_time)
-      else if (sortKey === 'worker') cmp = workerName(a.worker_id).localeCompare(workerName(b.worker_id))
-      else if (sortKey === 'hours') cmp = a.total_minutes - b.total_minutes
-      else if (sortKey === 'earnings') cmp = a.earnings - b.earnings
+      if (key === 'date') cmp = a.start_time.localeCompare(b.start_time)
+      else if (key === 'worker') cmp = workerName(a.worker_id).localeCompare(workerName(b.worker_id))
+      else if (key === 'hours') cmp = a.total_minutes - b.total_minutes
+      else if (key === 'earnings') cmp = a.earnings - b.earnings
       return sortDir === 'asc' ? cmp : -cmp
     })
     return sorted
-  }, [entries, workerFilter, clientFilter, settleFilter, dateFilter, fromDate, toDate, search, sortKey, sortDir]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [entries, workerFilter, clientFilter, settleFilter, dateFilter, fromDate, toDate, search, sortKey, sortDir, seesAllEntries]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // A new filter means a new list — start it at the first page again.
   useEffect(() => {
@@ -176,18 +185,32 @@ export function EntriesPage() {
 
   const TableRow = ({ e }: { e: TimeEntry }) => (
     <>
-      <td className="px-4 py-3 align-middle">{formatDate(e.start_time)}</td>
-      <td className="px-4 py-3 align-middle font-medium">
+      <td className="px-4 py-3 align-middle">
         <span className="flex flex-wrap items-center gap-1.5">
-          {workerName(e.worker_id)}
-          {/* Settling keeps the entry — the badge says it has been paid out. */}
-          {e.settled_at && (
+          {formatDate(e.start_time)}
+          {/* Settling keeps the entry — the badge says it has been paid out.
+              Team view: it rides next to the worker's name (below). Own view:
+              the name column is gone, so it rides next to the date. */}
+          {!seesAllEntries && e.settled_at && (
             <Badge variant="muted" className="px-1.5 py-0 text-[10px]" title={`Settled ${formatDate(e.settled_at)}`}>
               Settled
             </Badge>
           )}
         </span>
       </td>
+      {/* Own-time view: every row is theirs, so the name column is noise. */}
+      {seesAllEntries && (
+        <td className="px-4 py-3 align-middle font-medium">
+          <span className="flex flex-wrap items-center gap-1.5">
+            {workerName(e.worker_id)}
+            {e.settled_at && (
+              <Badge variant="muted" className="px-1.5 py-0 text-[10px]" title={`Settled ${formatDate(e.settled_at)}`}>
+                Settled
+              </Badge>
+            )}
+          </span>
+        </td>
+      )}
       <td className="px-4 py-3 align-middle">
         {e.client_id ? (
           <ClientBadge client={clientOf(e.client_id)} showInactive={false} />
@@ -220,7 +243,14 @@ export function EntriesPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Time Entries" description="Review and manage all recorded time.">
+      <PageHeader
+        title={seesAllEntries ? 'Time Entries' : 'My Time'}
+        description={
+          seesAllEntries
+            ? 'Review and manage all recorded time.'
+            : 'Your own recorded time — the hours you have clocked in and out.'
+        }
+      >
         {canManage && (
           <Button onClick={() => { setEditing(null); setFormOpen(true); }}>
             <Plus className="mr-1" /> Manual entry
@@ -235,16 +265,20 @@ export function EntriesPage() {
             <div className="lg:col-span-2">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <Input className="pl-9" placeholder="Search worker, client, notes…" value={search} onChange={(e) => setSearch(e.target.value)} />
+                <Input className="pl-9" placeholder={seesAllEntries ? 'Search worker, client, notes…' : 'Search client, notes…'} value={search} onChange={(e) => setSearch(e.target.value)} />
               </div>
             </div>
-            <Select value={workerFilter} onValueChange={setWorkerFilter}>
-              <SelectTrigger aria-label="Filter by worker"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All workers</SelectItem>
-                {workers.map((w) => <SelectItem key={w.id} value={w.id}>{w.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
+            {/* Team-only: without the team-wide read the list is just their
+                own rows, so there is nothing to filter by worker. */}
+            {seesAllEntries && (
+              <Select value={workerFilter} onValueChange={setWorkerFilter}>
+                <SelectTrigger aria-label="Filter by worker"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All workers</SelectItem>
+                  {workers.map((w) => <SelectItem key={w.id} value={w.id}>{w.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            )}
             <ClientSelect value={clientFilter} onValueChange={setClientFilter} includeAll ariaLabel="Filter by client" />
             <Select value={dateFilter} onValueChange={setDateFilter}>
               <SelectTrigger aria-label="Filter by date"><SelectValue /></SelectTrigger>
@@ -267,7 +301,7 @@ export function EntriesPage() {
               <SelectTrigger aria-label="Sort entries by"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="date">Sort: Date</SelectItem>
-                <SelectItem value="worker">Sort: Worker</SelectItem>
+                {seesAllEntries && <SelectItem value="worker">Sort: Worker</SelectItem>}
                 <SelectItem value="hours">Sort: Hours</SelectItem>
                 <SelectItem value="earnings">Sort: Earnings</SelectItem>
               </SelectContent>
@@ -309,8 +343,14 @@ export function EntriesPage() {
       ) : filtered.length === 0 ? (
         <EmptyState
           icon={ListChecks}
-          title="No time entries"
-          description={hasFilters ? 'No entries match your filters.' : 'Track time with the timer or add a manual entry.'}
+          title={seesAllEntries ? 'No time entries' : 'No time recorded yet'}
+          description={
+            hasFilters
+              ? 'No entries match your filters.'
+              : seesAllEntries
+                ? 'Track time with the timer or add a manual entry.'
+                : 'Clock in on the Clock In / Out page and your time will show up here.'
+          }
           action={!hasFilters && canManage ? <Button onClick={() => { setEditing(null); setFormOpen(true); }}><Plus className="mr-1" /> Add entry</Button> : undefined}
         />
       ) : (
@@ -322,7 +362,7 @@ export function EntriesPage() {
                 <thead className="bg-muted/60 text-left text-xs uppercase tracking-wide text-muted-foreground">
                   <tr>
                     <th className="px-4 py-3 font-medium">Date</th>
-                    <th className="px-4 py-3 font-medium">Worker</th>
+                    {seesAllEntries && <th className="px-4 py-3 font-medium">Worker</th>}
                     <th className="px-4 py-3 font-medium">Client</th>
                     <th className="px-4 py-3 font-medium">Start</th>
                     <th className="px-4 py-3 font-medium">End</th>
@@ -351,14 +391,19 @@ export function EntriesPage() {
                   <div className="flex items-start justify-between">
                     <div>
                       <p className="flex flex-wrap items-center gap-1.5 font-semibold">
-                        {workerName(e.worker_id)}
+                        {/* Own time: the date is the headline — every card is
+                            the signed-in worker's own. */}
+                        {seesAllEntries ? workerName(e.worker_id) : formatDate(e.start_time)}
                         {e.settled_at && (
                           <Badge variant="muted" className="px-1.5 py-0 text-[10px]" title={`Settled ${formatDate(e.settled_at)}`}>
                             Settled
                           </Badge>
                         )}
                       </p>
-                      <p className="text-xs text-muted-foreground">{formatDate(e.start_time)} · {formatTime(e.start_time)}–{formatTime(e.end_time)}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {seesAllEntries && `${formatDate(e.start_time)} · `}
+                        {formatTime(e.start_time)}–{formatTime(e.end_time)}
+                      </p>
                     </div>
                     <span className="font-semibold">{money(e.earnings, currency)}</span>
                   </div>
