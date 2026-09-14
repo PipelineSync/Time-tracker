@@ -153,7 +153,10 @@ export function ReportsPage() {
   )
 
   const workerChartData = useMemo(
-    () => byWorker.map((w) => ({ name: w.worker.name.split(' ')[0], hours: Math.round(w.hours * 100) / 100, earnings: Math.round(w.earnings * 100) / 100 })),
+    () =>
+      byWorker
+        .filter((w) => w.hours > 0)
+        .map((w) => ({ name: w.worker.name.split(' ')[0], hours: Math.round(w.hours * 100) / 100, earnings: Math.round(w.earnings * 100) / 100 })),
     [byWorker]
   )
 
