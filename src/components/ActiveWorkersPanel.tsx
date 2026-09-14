@@ -5,8 +5,9 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Coffee, Radio, UserRound } from 'lucide-react'
+import { Coffee, Radio, UserRound, Volume2, VolumeX } from 'lucide-react'
 import { cn, formatDateTime, formatMsShort, initials, timerBreakMs, timerElapsedMs, timerSessionStart } from '@/lib/utils'
+import { playCue } from '@/lib/sounds'
 import type { ActiveTimer, Worker } from '@/lib/types'
 
 interface Row {
@@ -23,13 +24,25 @@ interface Row {
  * running timer, whether they are working or on a break, and for how long.
  */
 export function ActiveWorkersPanel() {
-  const { activeTimers, workers, clients, dataLoading } = useStore()
+  const { activeTimers, workers, clients, dataLoading, isAdmin, teamSoundsEnabled, setTeamSoundsEnabled } = useStore()
   const [now, setNow] = useState(Date.now())
 
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(t)
   }, [])
+
+  /**
+   * The chime is a per-device preference (nobody else's clock-in should make
+   * noise on a shared laptop by accident), so toggling it never hits the
+   * database. Enabling plays one cue straight away — a click is a real user
+   * gesture, which is also what unlocks audio on iOS and Android.
+   */
+  function toggleChime() {
+    const next = !teamSoundsEnabled
+    setTeamSoundsEnabled(next)
+    if (next) playCue('clock_in', { minGapMs: 0 })
+  }
 
   const rows: Row[] = useMemo(() => {
     const d = new Date(now)
@@ -71,6 +84,23 @@ export function ActiveWorkersPanel() {
             <Badge className="gap-1 border-transparent bg-[#36B7C9] text-white">
               <Coffee className="h-3 w-3" /> {breakCount} on break
             </Badge>
+          )}
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={toggleChime}
+              aria-pressed={teamSoundsEnabled}
+              title={teamSoundsEnabled ? 'Chime when the team clocks in or out: on' : 'Chime when the team clocks in or out: off'}
+              className={cn(
+                'flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors',
+                teamSoundsEnabled
+                  ? 'border-[#F77A0A]/40 bg-[#F77A0A]/10 text-[#b85c05] dark:text-[#ffb066]'
+                  : 'text-muted-foreground hover:bg-muted'
+              )}
+            >
+              {teamSoundsEnabled ? <Volume2 className="h-3.5 w-3.5" /> : <VolumeX className="h-3.5 w-3.5" />}
+              <span className="hidden sm:inline">{teamSoundsEnabled ? 'Chime on' : 'Chime off'}</span>
+            </button>
           )}
         </div>
       </CardHeader>
@@ -136,6 +166,15 @@ export function ActiveWorkersPanel() {
       {rows.length > 0 && (
         <CardContent className="pt-0">
           <Link to="/workers"><Button variant="outline" size="sm">Manage workers</Button></Link>
+        </CardContent>
+      )}
+      {isAdmin && (
+        <CardContent className="pt-0">
+          <p className="text-xs text-muted-foreground">
+            {teamSoundsEnabled
+              ? "You'll hear a cue in this tab when someone clocks in or out, or starts or ends a break. The list refreshes about every 15 seconds, so a chime can follow the moment rather than land on it."
+              : "Turn the chime on to hear a cue in this tab whenever the team's clock moves — a clock-in, a clock-out, a break starting or ending."}
+          </p>
         </CardContent>
       )}
     </Card>

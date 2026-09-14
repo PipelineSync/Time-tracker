@@ -119,6 +119,33 @@ A notification bell (with an unread badge) appears for both roles. The admin is 
 
 All entries **snapshot the hourly rate** at record time, so historical earnings don't change when a worker's rate changes later. Sessions that cross midnight are handled correctly.
 
+### Clock sounds 🔊
+Every clock action answers with a **short cue**, so a worker knows their tap landed without staring at the screen:
+
+| Action | What it sounds like |
+|---|---|
+| **Clock in** | three rising notes (C–E–G) — the shift opened |
+| **Clock out** | the same three, descending (G–E–C) — the shift closed |
+| **Break started** | two soft low blips |
+| **Back to work** | two short bright ticks |
+
+The tones are **synthesised with the Web Audio API** (`src/lib/sounds.ts`) — there are no audio files to ship, so nothing was added to the PWA precache, the cues work offline, and the identical code runs in the browser, the installed PWA, the Capacitor iOS/Android WebView and the Tauri desktop app. A cue is **~0.3–0.5 s at half master volume**: confirmable, never startling. A failed action (no client picked, network down) stays **silent** — the error toast is the feedback there.
+
+There is deliberately **no mute switch for your own clock-in**: the point is a confirmation you do not have to look for. Two details make that safe on every platform:
+
+- **Autoplay**: browsers and WebViews refuse to let a page make noise before a real interaction, so `installAudioUnlock()` (called once from `main.tsx`) opens the audio context on the first tap or keypress — which is the same tap that clocks someone in, so the very **first cue of a session is never swallowed**.
+- **The OS still decides**: inside the native shells the audio route is the system's — an iOS silent switch does what an iOS silent switch does. The success **toast** and the notifications bell stay as the visual confirmation either way.
+- **Never in the way**: playback is fire-and-forget on the success path, next to the Slack mirror. If a webview will not give up an audio context, `playCue` returns `false` and the clock-in finishes exactly as it would have — sound can never break the timer.
+
+**Admins get their own opt-in.** The **"On the clock now"** panel on the Dashboard carries a **Chime** pill: with it on, that tab makes a sound when **the team's** clock moves — someone clocking in or out, a break starting or ending. It is **off by default** and stored **per device and per account** (never in the database), because it is noise about *other* people's actions. Three consequences of it being driven by the live list rather than by events:
+
+- the panel refreshes about every **15 s** (and on tab focus), so a chime can follow the moment rather than land on it; a worker who clocks in *and* out between two refreshes is correctly never announced;
+- a **client switch** stays **silent** — the timer row is replaced under a new id, which is not a clock-out plus a clock-in (`src/lib/teamSounds.ts` matches the two lists per worker before deciding);
+- four workers clocking in at the top of the hour produce **one** tone, not four: the burst collapses to one cue per kind.
+
+Check it: `npm run verify:sounds` (cue shapes, the snapshot diff, the switch/cancel edge cases, and a full clock-in → break → resume → clock-out against the real backend rows).
+
+### Slack notifications
 ### Slack notifications
 Every workspace event can also be mirrored into a **Slack channel** automatically: when someone **clocks in**, **clocks out**, **starts a break**, **comes back from a break**, or when a payment is **marked paid** (amount, worker, period and payment method included). Each event type can be toggled on/off in **Settings → Slack**, and a **Send test message** button verifies the setup end to end.
 
