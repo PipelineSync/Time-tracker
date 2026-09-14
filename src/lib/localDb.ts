@@ -671,6 +671,48 @@ function findTimer(c: { user: AuthUser; data: UserData }, timerId?: string): Act
   return ownTimer(c)
 }
 
+/**
+ * Re-adopt a running timer left on a STALE worker row.
+ *
+ * A worker login is tied to a `workers` row. When the admin re-creates that
+ * row mid-shift (delete + re-add re-links the login to a new id), the timer
+ * keeps ticking on the OLD row while the account — and every ownership check
+ * — now point at the NEW one: break, switch client and clock out all die on
+ * "Not your timer." and the timer never closes. This mirrors
+ * `reclaim_my_timers()` in the Supabase backend: the stale timer is moved to
+ * the caller's current worker row only when it is provably theirs (the old
+ * row carries the same login email and no other account claims it). If the
+ * current row already runs a timer, the leftover duplicate is dropped, the
+ * same rule the Supabase reclaim applies.
+ */
+function reclaimStaleTimers(c: { user: AuthUser; data: UserData }): void {
+  const u = c.user
+  if (u.role !== 'worker' || !u.workerId) return
+  const myEmail = (u.email || '').toLowerCase()
+  if (!myEmail) return
+  const claimedElsewhere = new Set(
+    readUsers()
+      .filter((x) => x.id !== u.id && x.workerId)
+      .map((x) => x.workerId as string)
+  )
+  let mineTaken = c.data.activeTimers.some((t) => t.worker_id === u.workerId)
+  let moved = false
+  for (const t of [...c.data.activeTimers]) {
+    if (t.worker_id === u.workerId) continue
+    const w = c.data.workers.find((x) => x.id === t.worker_id)
+    if (!w || (w.email || '').toLowerCase() !== myEmail) continue
+    if (claimedElsewhere.has(t.worker_id)) continue
+    if (mineTaken) {
+      c.data.activeTimers = c.data.activeTimers.filter((x) => x.id !== t.id)
+    } else {
+      t.worker_id = u.workerId
+      mineTaken = true
+    }
+    moved = true
+  }
+  if (moved) save(c.data)
+}
+
 function workerName(data: UserData, workerId: string): string {
   return data.workers.find((w) => w.id === workerId)?.name || 'A worker'
 }
@@ -1062,6 +1104,10 @@ export const localBackend: DataBackend = {
   async getActiveTimer() {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
+    // A worker re-linked mid-shift may own a stale timer — adopt it before the
+    // "which timer is mine" lookup so the on-screen clock never resets on the
+    // person until their own action (or this read) closes the shift properly.
+    reclaimStaleTimers(c)
     return { data: ownTimer(c), error: null }
   },
 
@@ -1080,6 +1126,7 @@ export const localBackend: DataBackend = {
   async startTimer(input) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
+    reclaimStaleTimers(c)
     let workerId = input.worker_id
     let rate = input.hourly_rate
     if (c.user.role === 'worker') {
@@ -1143,6 +1190,7 @@ export const localBackend: DataBackend = {
   async pauseTimer(timerId) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
+    reclaimStaleTimers(c)
     const t = findTimer(c, timerId)
     if (!t) return { data: null, error: 'No active timer.' }
     if (c.user.role === 'worker' && t.worker_id !== c.user.workerId) return { data: null, error: 'Not your timer.' }
@@ -1164,6 +1212,7 @@ export const localBackend: DataBackend = {
   async resumeTimer(timerId) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
+    reclaimStaleTimers(c)
     const t = findTimer(c, timerId)
     if (!t) return { data: null, error: 'No active timer.' }
     if (c.user.role === 'worker' && t.worker_id !== c.user.workerId) return { data: null, error: 'Not your timer.' }
@@ -1187,6 +1236,7 @@ export const localBackend: DataBackend = {
   async stopTimer(timerId, note) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
+    reclaimStaleTimers(c)
     const timer = c.data.activeTimers.find((t) => t.id === timerId)
     if (!timer) return { data: null, error: 'No active timer found.' }
     if (c.user.role === 'worker' && timer.worker_id !== c.user.workerId) return { data: null, error: 'Not your timer.' }
@@ -1237,6 +1287,7 @@ export const localBackend: DataBackend = {
   async switchClient(input) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
+    reclaimStaleTimers(c)
     if (c.user.role !== 'worker') return { data: null, error: 'Only workers can switch the client they are working for.' }
     const workerId = c.user.workerId
     if (!workerId) return { data: null, error: 'No worker profile linked to this account.' }
@@ -1304,6 +1355,7 @@ export const localBackend: DataBackend = {
   async deleteTimer(timerId) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
+    reclaimStaleTimers(c)
     const t = c.data.activeTimers.find((x) => x.id === timerId)
     if (!t) return { data: null, error: null }
     if (c.user.role === 'worker' && t.worker_id !== c.user.workerId) return { data: null, error: 'Not your timer.' }

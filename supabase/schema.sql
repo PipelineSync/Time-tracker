@@ -297,6 +297,71 @@ as $$
   );
 $$;
 
+-- Re-adopt a running timer left on a STALE worker record. A worker login is
+-- linked to a workers row through their profile; if the admin re-creates that
+-- record mid-shift, the timer keeps ticking on the old row while every
+-- ownership check — and RLS itself — now point at the new one, and the worker
+-- can no longer break, switch client, or clock out ("Not your timer.").
+-- This definer function moves such a timer back onto the caller's current
+-- worker row, but only when it is provably theirs: same login email on the
+-- timer's worker row, inside the caller's workspace, and that old row claimed
+-- by no profile. The newest stale timer wins; older leftovers of the same
+-- person are dropped (one running timer per worker is a unique index). The
+-- app calls it at the start of every timer action. Existing databases:
+-- supabase/RUN-THIS-stale-timer-reclaim.sql (also repairs stuck rows).
+create or replace function public.reclaim_my_timers()
+returns setof public.active_timers
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  me_id     uuid := auth.uid();
+  my_email  text;
+  my_worker uuid;
+  owner_id  uuid;
+  victim_id uuid;
+begin
+  if me_id is null then
+    return;
+  end if;
+
+  select lower(au.email) into my_email from auth.users au where au.id = me_id;
+  select p.worker_id into my_worker from public.profiles p
+   where p.user_id = me_id and p.role = 'worker';
+  if my_worker is null or my_email is null then
+    return;
+  end if;
+
+  owner_id := public.workspace_owner_id();
+  if owner_id is null then
+    return;
+  end if;
+
+  select t.id into victim_id
+  from public.active_timers t
+  join public.workers w on w.id = t.worker_id
+  where t.worker_id <> my_worker
+    and w.user_id = owner_id
+    and lower(coalesce(w.email, '')) = my_email
+    and not exists (select 1 from public.profiles p where p.worker_id = t.worker_id)
+  order by t.start_time desc
+  limit 1;
+
+  if victim_id is null then
+    return;
+  end if;
+
+  if exists (select 1 from public.active_timers x where x.worker_id = my_worker) then
+    delete from public.active_timers where id = victim_id;
+    return;
+  end if;
+
+  update public.active_timers set worker_id = my_worker where id = victim_id;
+  return query select * from public.active_timers where id = victim_id;
+end;
+$$;
+
 -- profiles policies (users read their own profile; admin can read all)
 drop policy if exists "profiles_select" on public.profiles;
 create policy "profiles_select" on public.profiles
