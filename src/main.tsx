@@ -16,6 +16,7 @@ import { ThemeProvider } from '@/lib/theme'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { initNativeShell } from '@/lib/native'
 import { isNativeShell } from '@/lib/platform'
+import { installAudioUnlock } from '@/lib/sounds'
 import { isChristmasTheme } from '@/lib/christmas'
 import { Snowfall } from '@/components/Snowfall'
 import './index.css'
@@ -49,3 +50,8 @@ if (import.meta.env.PROD && !isNativeShell()) {
 // Capacitor no-ops outside its WebView; hides the native splash once React is
 // mounted and wires the status bar / Android back button.
 void initNativeShell()
+
+// Clock-in cues are synthesised, but no browser or WebView lets a page make a
+// sound before the first real interaction. Arm the audio context on it, so the
+// very first clock-in of a session is not silently swallowed.
+installAudioUnlock()

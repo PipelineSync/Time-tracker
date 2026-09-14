@@ -37,6 +37,8 @@ import { localBackend } from './localDb'
 import { supabaseBackend, isSupabaseConfigured, ACCOUNT_DEACTIVATED_MESSAGE } from './supabaseDb'
 import { toast } from 'sonner'
 import { notifySlack } from './slack'
+import { playCue, playCues, readTeamSoundsPref, writeTeamSoundsPref } from './sounds'
+import { diffTimerSnapshots, snapshotsEqual, timerSnapshots, type TimerSnapshot } from './teamSounds'
 import { formatMinutes } from './utils'
 import type { SlackSettings } from './types'
 
@@ -55,6 +57,10 @@ const NOTIF_WINDOW = 20              // notifications the bell dropdown shows
 const PAYMENT_WINDOW = 100           // payments the list shows (~years of history)
 const FULL_EVERY_TICKS = 20          // full entry re-sync every 5 min reconciles deletions
 const FOCUS_FULL_MIN_MS = 90_000     // a refocus re-loads the full window at most once per 90 s
+// How long a timer id this device just acted on stays excluded from the team
+// clock chime: long enough to outlive the poll that picks the change up, short
+// enough that an id is never ignored forever.
+const LOCAL_ACTION_TTL_MS = 30_000
 
 // ---- FX rate self-healing --------------------------------------------------
 // The daily sync-fx-rate Netlify Function is the primary mechanism that writes
@@ -214,6 +220,14 @@ interface StoreValue {
    */
   switchClient: (clientId: string, notes?: string) => Promise<BackendResult<ActiveTimer>>
   cancelTimer: () => Promise<void>
+  /**
+   * Admin only, and per device: chime when the *team's* clock changes — someone
+   * clocking in or out, or a break starting or ending. Opt-in (off by default),
+   * because it makes noise for other people's actions. A worker's own cues are
+   * always on and are not governed by this.
+   */
+  teamSoundsEnabled: boolean
+  setTeamSoundsEnabled: (enabled: boolean) => void
 
   saveSettings: (patch: Partial<Settings>) => Promise<Settings | null>
   /** Slack integration config — admin only (Settings → Slack). */
@@ -781,11 +795,37 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     })
   }, [])
 
+  /**
+   * Timer ids this device just changed, with the moment it happened. The team
+   * watcher below skips them: the action that caused the change already played
+   * its cue, and a cancel should not be mistaken for a clock-out. See
+   * `LOCAL_ACTION_TTL_MS` for how long an id stays on the list.
+   */
+  const localTimerActions = useRef(new Map<string, number>())
+  const noteLocalTimerAction = useCallback((...ids: Array<string | null | undefined>) => {
+    const at = Date.now()
+    for (const id of ids) if (id) localTimerActions.current.set(id, at)
+  }, [])
+  const freshLocalTimerActions = useCallback(() => {
+    const now = Date.now()
+    const ids = new Set<string>()
+    for (const [id, at] of localTimerActions.current) {
+      if (now - at > LOCAL_ACTION_TTL_MS) localTimerActions.current.delete(id)
+      else ids.add(id)
+    }
+    return ids
+  }, [])
+
   const startTimer = useCallback(async (input: { worker_id: string; client_id?: string | null; project?: string; notes?: string; hourly_rate?: number }) => {
     const res = await backend.startTimer(input)
     if (res.error || !res.data) return { data: null, error: res.error }
     if (!userRef.current || userRef.current.role === 'worker') setActiveTimer(res.data)
     upsertActiveTimer(res.data)
+    // The cue fires here rather than in the button handler so every surface that
+    // can clock someone in plays it; `noteLocalTimerAction` stops the team
+    // watcher below from playing the same cue a second time.
+    noteLocalTimerAction(res.data.id)
+    playCue('clock_in')
     // Mirror to Slack (fire-and-forget; failures are logged, never thrown).
     const workerName = workers.find((w) => w.id === input.worker_id)?.name || 'Someone'
     const scope = clientsRef.current.find((c) => c.id === input.client_id)?.name || input.project
@@ -794,7 +834,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       demoText: `🟢 ${workerName} just clocked in${scope ? ` — ${scope}` : ''}.`,
     })
     return { data: res.data, error: null }
-  }, [backend, upsertActiveTimer, workers])
+  }, [backend, upsertActiveTimer, workers, noteLocalTimerAction])
 
   const pauseTimer = useCallback(async (timerId?: string) => {
     // Break is clicked without an id: always act on THIS account's own
@@ -805,10 +845,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (res.error || !res.data) return { data: null, error: res.error }
     setActiveTimer((prev) => (prev && prev.id === res.data!.id ? res.data : prev))
     upsertActiveTimer(res.data)
+    noteLocalTimerAction(res.data.id)
+    playCue('break_start')
     const workerName = workers.find((w) => w.id === res.data!.worker_id)?.name || 'Someone'
     notifySlack('break_start', { timer_id: res.data.id, demoText: `☕ ${workerName} started a break.` })
     return { data: res.data, error: null }
-  }, [backend, activeTimer, upsertActiveTimer, workers])
+  }, [backend, activeTimer, upsertActiveTimer, workers, noteLocalTimerAction])
 
   const resumeTimer = useCallback(async (timerId?: string) => {
     // See pauseTimer: resume must target the signed-in worker's own timer.
@@ -816,10 +858,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (res.error || !res.data) return { data: null, error: res.error }
     setActiveTimer((prev) => (prev && prev.id === res.data!.id ? res.data : prev))
     upsertActiveTimer(res.data)
+    noteLocalTimerAction(res.data.id)
+    playCue('break_end')
     const workerName = workers.find((w) => w.id === res.data!.worker_id)?.name || 'Someone'
     notifySlack('break_end', { timer_id: res.data.id, demoText: `▶️ ${workerName} is back from break.` })
     return { data: res.data, error: null }
-  }, [backend, activeTimer, upsertActiveTimer, workers])
+  }, [backend, activeTimer, upsertActiveTimer, workers, noteLocalTimerAction])
 
   const stopTimer = useCallback(async (note?: string) => {
     const current = activeTimer
@@ -828,6 +872,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (res.error || !res.data) return { data: null, error: res.error }
     setActiveTimer(null)
     setActiveTimers((prev) => prev.filter((t) => t.id !== current.id))
+    noteLocalTimerAction(current.id)
+    playCue('clock_out')
     const workerName = workers.find((w) => w.id === res.data!.worker_id)?.name || 'Someone'
     notifySlack('clock_out', {
       entry_id: res.data.id,
@@ -836,7 +882,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     await refreshTimer()
     await refreshData()
     return { data: res.data, error: null }
-  }, [backend, activeTimer, refreshData, refreshTimer, workers])
+  }, [backend, activeTimer, refreshData, refreshTimer, workers, noteLocalTimerAction])
 
   const switchClient = useCallback(async (clientId: string, notes?: string) => {
     const current = activeTimer
@@ -852,9 +898,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     // finished split entry + new running timer with the backend.
     setActiveTimer(nextTimer)
     setActiveTimers((prev) => [nextTimer, ...prev.filter((t) => t.id !== current.id)])
+    // No cue: switching client is neither a start, a stop or a break. Both ids
+    // are marked so the watcher does not read the replaced row as a
+    // clock-out followed by a clock-in.
+    noteLocalTimerAction(current.id, nextTimer.id)
     await refreshData()
     return { data: nextTimer, error: null }
-  }, [backend, activeTimer, refreshData])
+  }, [backend, activeTimer, refreshData, noteLocalTimerAction])
 
   const cancelTimer = useCallback(async () => {
     const current = activeTimer
@@ -862,8 +912,58 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       await backend.deleteTimer(current.id)
       setActiveTimer(null)
       setActiveTimers((prev) => prev.filter((t) => t.id !== current.id))
+      // A cancelled shift never became time, so it must not chime at the admin
+      // as if someone had clocked out.
+      noteLocalTimerAction(current.id)
     }
-  }, [backend, activeTimer])
+  }, [backend, activeTimer, noteLocalTimerAction])
+
+  // ---- Team clock sounds (admin only, opt-in per device) ------------------
+  //
+  // An admin has no clock of their own, so the only way they hear about the
+  // clock is from the team's live timer list. That list is refetched by the
+  // poll above, so there is no event stream to subscribe to: each time it
+  // arrives, compare it with the previous one and chime for what changed
+  // (src/lib/teamSounds.ts holds the rules, including why a client switch is
+  // silent). Consequence of polling: a chime can land up to ~15 s late, and a
+  // clock-in and clock-out between two polls are invisible.
+  const [teamSoundsEnabled, setTeamSoundsEnabledState] = useState(false)
+  useEffect(() => {
+    // The preference is per device *and* per account, so two people sharing a
+    // laptop do not inherit each other's noise settings.
+    setTeamSoundsEnabledState(isAdmin && readTeamSoundsPref(user?.id))
+  }, [isAdmin, user?.id])
+  const setTeamSoundsEnabled = useCallback((enabled: boolean) => {
+    writeTeamSoundsPref(userRef.current?.id ?? null, enabled)
+    setTeamSoundsEnabledState(enabled)
+  }, [])
+
+  const teamSoundBaseline = useRef<TimerSnapshot[] | null>(null)
+  const teamSoundPrimed = useRef(false)
+  // A different account signing in, or the switch being flicked, starts from a
+  // clean slate: the next list read records the current state, it never chimes.
+  useEffect(() => {
+    teamSoundPrimed.current = false
+    teamSoundBaseline.current = null
+  }, [user?.id, teamSoundsEnabled])
+  useEffect(() => {
+    if (!teamSoundsEnabled || !user) return
+    const snap = timerSnapshots(activeTimers)
+    if (!teamSoundPrimed.current) {
+      // Do not prime off a list that is still the empty one from before the
+      // first fetch — otherwise every worker already on the clock would be
+      // announced as a fresh clock-in.
+      if (dataLoading) return
+      teamSoundPrimed.current = true
+      teamSoundBaseline.current = snap
+      return
+    }
+    const prev = teamSoundBaseline.current
+    teamSoundBaseline.current = snap
+    if (!prev || snapshotsEqual(prev, snap)) return
+    const events = diffTimerSnapshots(prev, snap, { ignoreTimerIds: freshLocalTimerActions() })
+    if (events.length > 0) playCues(events.map((event) => event.cue))
+  }, [teamSoundsEnabled, user, activeTimers, dataLoading, freshLocalTimerActions])
 
   const saveSettings = useCallback(async (patch: Partial<Settings>) => {
     const res = await backend.saveSettings(patch)
@@ -1385,6 +1485,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     stopTimer,
     switchClient,
     cancelTimer,
+    teamSoundsEnabled,
+    setTeamSoundsEnabled,
     saveSettings,
     getSlackSettings,
     saveSlackSettings,
