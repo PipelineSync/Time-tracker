@@ -143,6 +143,8 @@ There is deliberately **no mute switch for your own clock-in**: the point is a c
 - a **client switch** stays **silent** — the timer row is replaced under a new id, which is not a clock-out plus a clock-in (`src/lib/teamSounds.ts` matches the two lists per worker before deciding);
 - four workers clocking in at the top of the hour produce **one** tone, not four: the burst collapses to one cue per kind.
 
+**Nothing to install.** The cues add no table, column or policy, and the admin's chime preference lives in the device's own storage — so there is no migration to run in Supabase (`supabase/clock-sounds-check.sql` is a read-only check that a live database has the three things the cues do depend on, if you want it in writing).
+
 Check it: `npm run verify:sounds` (cue shapes, the snapshot diff, the switch/cancel edge cases, and a full clock-in → break → resume → clock-out against the real backend rows).
 
 ### Slack notifications
