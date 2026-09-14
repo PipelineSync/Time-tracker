@@ -491,10 +491,56 @@ function normalizeReferenceNumber(value: unknown): string | null {
   return trimmed ? trimmed.slice(0, 64) : null
 }
 
-async function requireUser(): Promise<BackendResult<AuthUser>> {
-  const lookup = await getAuthUser()
+async function requireUser(opts?: { force?: boolean }): Promise<BackendResult<AuthUser>> {
+  const lookup = await getAuthUser(opts)
   if (lookup.status !== 'authenticated') return fail('Not signed in.')
   return ok(lookup.user)
+}
+
+/**
+ * Re-adopt a running timer that was left on a STALE worker row.
+ *
+ * A worker's login is tied to a `workers` row through their profile. When an
+ * admin re-creates that worker record (or the email-based repair re-links the
+ * login) mid-shift, the running timer stays on the OLD row while the profile —
+ * and every ownership check below, and RLS itself — now point at the NEW one.
+ * The worker can no longer pause, take a break, switch client, or clock out:
+ * every action dies on "Not your timer.", and the timer never gets closed.
+ *
+ * `reclaim_my_timers()` (supabase/RUN-THIS-stale-timer-reclaim.sql) is a
+ * SECURITY DEFINER function that moves such a timer back onto the caller's CURRENT
+ * worker row — only when it is provably theirs (same login email, the old row
+ * claimed by nobody else) — so the normal ownership checks pass again. Best
+ * effort: on a database without the function, or with nothing to reclaim, this
+ * changes nothing.
+ *
+ * Returns true when the database actually moved a timer.
+ */
+async function reclaimStaleTimers(): Promise<boolean> {
+  try {
+    const { data, error } = await client().rpc('reclaim_my_timers')
+    return !error && Array.isArray(data) && data.length > 0
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Identity for timer actions (clock in, break, clock out, switch client,
+ * cancel). Same as `requireUser()`, except that a worker first gets any
+ * stale-linked timer re-adopted; and when one moved, the identity is re-read
+ * (cache bypassed) so the ownership checks compare against the same link the
+ * reclaim function used, not the up-to-30s-stale cached one.
+ */
+async function timerActor(): Promise<BackendResult<AuthUser>> {
+  const me = await requireUser()
+  if (me.error) return fail(me.error)
+  const user = me.data!
+  if (user.role === 'worker' && user.workerId && (await reclaimStaleTimers())) {
+    const fresh = await requireUser({ force: true })
+    if (!fresh.error && fresh.data) return ok(fresh.data)
+  }
+  return ok(user)
 }
 
 /** The workspace admin's auth user id for the signed-in user's workspace. */
@@ -1213,9 +1259,23 @@ export const supabaseBackend: DataBackend = {
   },
 
   async getActiveTimer() {
+    // Worker actors first get any stale-linked timer re-adopted, so this read
+    // (and the id-less break/resume fallback that resolves through it) sees
+    // the timer on its CURRENT row instead of reporting "no timer".
+    const me = await timerActor()
     const res = await this.listActiveTimers()
     if (res.error) return fail(res.error)
-    return ok((res.data || [])[0] ?? null)
+    const timers = res.data || []
+    // Workers take THEIR timer. A worker with team-wide access (a project
+    // manager granted `entries.view_all`) receives every running timer, so
+    // blindly taking the first — the most recently started in the whole
+    // workspace — handed a coworker's timer to anyone who clocked in, paused,
+    // or stopped without an explicit id, and their own actions then died on
+    // "Not your timer." whenever theirs was not the newest row.
+    if (!me.error && me.data!.role === 'worker' && me.data!.workerId) {
+      return ok(timers.find((t) => t.worker_id === me.data!.workerId) ?? null)
+    }
+    return ok(timers[0] ?? null)
   },
 
   async listActiveTimers() {
@@ -1254,7 +1314,7 @@ export const supabaseBackend: DataBackend = {
   },
 
   async startTimer(input) {
-    const me = await requireUser()
+    const me = await timerActor()
     if (me.error) return fail(me.error)
     let workerId = input.worker_id
     let rate = input.hourly_rate
@@ -1336,7 +1396,7 @@ export const supabaseBackend: DataBackend = {
   },
 
   async pauseTimer(timerId) {
-    const me = await requireUser()
+    const me = await timerActor()
     if (me.error) return fail(me.error)
     const t = await resolveTimer(this, timerId)
     if (!t) return fail('No active timer.')
@@ -1353,7 +1413,7 @@ export const supabaseBackend: DataBackend = {
   },
 
   async resumeTimer(timerId) {
-    const me = await requireUser()
+    const me = await timerActor()
     if (me.error) return fail(me.error)
     const t = await resolveTimer(this, timerId)
     if (!t) return fail('No active timer.')
@@ -1370,7 +1430,7 @@ export const supabaseBackend: DataBackend = {
   },
 
   async stopTimer(timerId, note) {
-    const me = await requireUser()
+    const me = await timerActor()
     if (me.error) return fail(me.error)
     const { data: timer } = await client().from('active_timers').select('*').eq('id', timerId).single()
     if (!timer) return fail('No active timer found.')
@@ -1428,7 +1488,7 @@ export const supabaseBackend: DataBackend = {
   },
 
   async switchClient(input) {
-    const me = await requireUser()
+    const me = await timerActor()
     if (me.error) return fail(me.error)
     if (me.data!.role !== 'worker') return fail('Only workers can switch the client they are working for.')
     if (!me.data!.workerId) return fail('Your account is not linked to a worker profile yet. Please ask your administrator to fix this.')
@@ -1515,9 +1575,17 @@ export const supabaseBackend: DataBackend = {
   },
 
   async deleteTimer(timerId) {
-    const me = await requireUser()
+    const me = await timerActor()
     if (me.error) return fail(me.error)
-    await client().from('active_timers').delete().eq('id', timerId)
+    // A worker may only cancel their own timer. Without this check a worker
+    // holding `entries.view_all` (whose RLS read covers every timer) could
+    // delete a coworker's running timer by id.
+    if (me.data!.role === 'worker') {
+      const { data: row } = await client().from('active_timers').select('id, worker_id').eq('id', timerId).maybeSingle()
+      if (row && row.worker_id !== me.data!.workerId) return fail('Not your timer.')
+    }
+    const { error } = await client().from('active_timers').delete().eq('id', timerId)
+    if (error) return fail(error.message)
     return ok(null)
   },
 

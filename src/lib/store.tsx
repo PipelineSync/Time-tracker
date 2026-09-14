@@ -576,7 +576,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           if (stopped) return
           if (!userRef.current) return
           if (session.data) {
-            if (session.data.id !== userRef.current.id) setUser(session.data)
+            // Update the store user when the account itself changes OR when
+            // the account's WORKER LINK changed underneath it (the admin
+            // re-created / re-linked the worker record while they were signed
+            // in). The timer filter below matches on user.workerId — without
+            // this, a re-linked worker kept looking at their timer through the
+            // old link while the backend compared against the new one, and
+            // every clock action failed with "Not your timer."
+            if (
+              session.data.id !== userRef.current.id ||
+              session.data.role !== userRef.current.role ||
+              session.data.workerId !== userRef.current.workerId
+            ) setUser(session.data)
             ticks += 1
             const due = Date.now() - lastFullEntrySyncAt.current > FOCUS_FULL_MIN_MS
             const entrySync: 'delta' | 'full' =
@@ -786,24 +797,29 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [backend, upsertActiveTimer, workers])
 
   const pauseTimer = useCallback(async (timerId?: string) => {
-    const res = await backend.pauseTimer(timerId)
+    // Break is clicked without an id: always act on THIS account's own
+    // running timer, never on the first entry of the team-wide timer list
+    // (a worker with `entries.view_all`, e.g. a project manager, receives
+    // every running timer, and the "first" one may well be a coworker's).
+    const res = await backend.pauseTimer(timerId ?? activeTimer?.id)
     if (res.error || !res.data) return { data: null, error: res.error }
     setActiveTimer((prev) => (prev && prev.id === res.data!.id ? res.data : prev))
     upsertActiveTimer(res.data)
     const workerName = workers.find((w) => w.id === res.data!.worker_id)?.name || 'Someone'
     notifySlack('break_start', { timer_id: res.data.id, demoText: `☕ ${workerName} started a break.` })
     return { data: res.data, error: null }
-  }, [backend, upsertActiveTimer, workers])
+  }, [backend, activeTimer, upsertActiveTimer, workers])
 
   const resumeTimer = useCallback(async (timerId?: string) => {
-    const res = await backend.resumeTimer(timerId)
+    // See pauseTimer: resume must target the signed-in worker's own timer.
+    const res = await backend.resumeTimer(timerId ?? activeTimer?.id)
     if (res.error || !res.data) return { data: null, error: res.error }
     setActiveTimer((prev) => (prev && prev.id === res.data!.id ? res.data : prev))
     upsertActiveTimer(res.data)
     const workerName = workers.find((w) => w.id === res.data!.worker_id)?.name || 'Someone'
     notifySlack('break_end', { timer_id: res.data.id, demoText: `▶️ ${workerName} is back from break.` })
     return { data: res.data, error: null }
-  }, [backend, upsertActiveTimer, workers])
+  }, [backend, activeTimer, upsertActiveTimer, workers])
 
   const stopTimer = useCallback(async (note?: string) => {
     const current = activeTimer

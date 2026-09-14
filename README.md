@@ -221,6 +221,8 @@ This creates the `workers`, `time_entries`, `active_timers`, `settings`, `paymen
 >
 > For **Reports that cover the whole team**, run **`supabase/RUN-THIS-reports-view-sees-all-entries.sql`** once on an **existing** database. It widens the `time_entries` read policy so a worker the admin granted **Reports** (`reports.view`) reads **everyone's** entries — reports are computed from them, so without it their Reports page is only a report of themselves — and adds `entries.view_all` to any worker row that already had Reports ticked. Fresh installs get the same policy from `schema.sql`. Safe to re-run.
 >
+> For the **"Not your timer." clock-in fix**, run **`supabase/RUN-THIS-stale-timer-reclaim.sql`** once on an **existing** database. If a worker is re-created or re-linked (delete + re-add, or the email-based profile repair) while they are on the clock, their running timer stays on the old `workers` row and every action — break, switch client, clock out — fails with *"Not your timer."* until it is fixed by hand. This migration creates the `reclaim_my_timers()` function the app now calls at the start of every timer action (it re-adopts a stale timer onto the worker's current row, only when it is provably theirs) **and** repairs all currently stuck timers in one pass, so a worker who is frozen mid-shift right now can clock out immediately after it runs. Fresh installs get the function from `schema.sql`. Safe to re-run.
+>
 > For the **Tasks** kanban board, run **`supabase/RUN-THIS-tasks.sql`** once (a copy-paste-ready version of `supabase/tasks.sql`, with a verification query at the end). It creates the `tasks` table (stage, priority, due date, board position) with RLS policies that let a **worker see and manage only their own cards** while the **admin has access to every worker's tasks**. Fresh installs get this automatically from `schema.sql`. It is safe to re-run: if you applied an earlier version with only three stages, re-running it widens the stage constraint to include **Waiting** and **Approval**.
 >
 > For **Slack notifications** (clock in / out, breaks, payments posted to a Slack channel), run `supabase/slack-notifications.sql` once. It creates the admin-only `slack_settings` table (webhook URL + per-event toggles). Then connect the webhook in **Settings → Slack** — see the *Slack notifications* section under Features. Fresh installs get this automatically from `schema.sql`.
@@ -405,6 +407,7 @@ time-tracker/
 ├─ supabase/personal-finance.sql        # One-time migration: Personal Tracker (owner-only row)
 ├─ supabase/RUN-THIS-clients-and-permissions.sql   # Copy-paste bundle of the two migrations above
 ├─ supabase/RUN-THIS-reports-view-sees-all-entries.sql  # Copy-paste migration: Reports = the whole team's entries (+ backfill)
+├─ supabase/RUN-THIS-stale-timer-reclaim.sql  # One-time migration: re-adopt timers stranded on a stale worker row (+ repairs stuck rows)
 ├─ supabase/payment-reference-number.sql  # One-time migration: reference number on paid settlements
 ├─ supabase/RUN-THIS-fx-rate.sql  # One-time migration: USD → PHP rate columns on settings
 ├─ src/
