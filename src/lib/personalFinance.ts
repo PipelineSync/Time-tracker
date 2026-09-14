@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import { storage } from './storage'
 
 export type PFAccount = { id: string; name: string; purpose: string; startingBalance: number; archived: boolean }
 export type PFCategory = { id: string; name: string }
@@ -120,7 +121,7 @@ export interface PFLoadResult {
   data: PFData
   /**
    * True when the cloud copy could not be read (network failure, auth blip —
-   * anything except "the table does not exist") and the caller is looking at
+   * anything except \"the table does not exist\") and the caller is looking at
    * the last locally-saved copy instead. Callers should say so, not silently
    * present stale balances as current.
    */
@@ -136,16 +137,16 @@ export async function loadPersonalFinance(userId: string): Promise<PFLoadResult>
     const missingTable = error?.code === '42P01'
     if (error) console.warn('[personal-finance] Cloud load failed', error.message)
     // Fall back to the local copy, but flag it: silently serving a stale
-    // balance during an outage is how "the tracker says I have X" goes wrong.
+    // balance during an outage is how \"the tracker says I have X\" goes wrong.
     try {
       return {
-        data: normalizePFData(JSON.parse(localStorage.getItem(localKey(userId)) || '{}')),
+        data: normalizePFData(JSON.parse(storage.getItem(localKey(userId)) || '{}')),
         stale: !missingTable,
         cloudError: error?.message ?? null,
       }
     } catch { return { data: emptyPFData(), stale: false, cloudError: error?.message ?? null } }
   }
-  try { return { data: normalizePFData(JSON.parse(localStorage.getItem(localKey(userId)) || '{}')), stale: false, cloudError: null } }
+  try { return { data: normalizePFData(JSON.parse(storage.getItem(localKey(userId)) || '{}')), stale: false, cloudError: null } }
   catch { return { data: emptyPFData(), stale: false, cloudError: null } }
 }
 
@@ -155,7 +156,7 @@ export async function savePersonalFinance(userId: string, data: PFData) {
   if (serialized.length > MAX_PF_BYTES) {
     throw new Error('Personal tracker data is too large to save. Archive old accounts or delete transactions you no longer need.')
   }
-  localStorage.setItem(localKey(userId), serialized)
+  storage.setItem(localKey(userId), serialized)
   if (cloud) {
     const { error } = await cloud.from('personal_finance_data').upsert({ user_id: userId, data: normalized, updated_at: new Date().toISOString() })
     if (error) throw new Error(error.code === '42P01' ? 'Personal Tracker database is not installed. Run supabase/personal-finance.sql.' : error.message)

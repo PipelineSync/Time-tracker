@@ -8,9 +8,25 @@
 
 const MAX_DIMENSION = 720
 const JPEG_QUALITY = 0.88
+/** 5 MB max — prevents OOM / huge base64 rows in Supabase / localStorage. */
+const MAX_FILE_BYTES = 5 * 1024 * 1024
+const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif']
 
 export function isImageFile(file: File | null | undefined): boolean {
-  return !!file && file.type.startsWith('image/')
+  return !!file && file.type.startsWith('image/') && ALLOWED_TYPES.includes(file.type)
+}
+
+export function validateImageFile(file: File | null | undefined): string | null {
+  if (!file) return 'No file selected.'
+  if (!file.type.startsWith('image/')) return 'Please choose an image file.'
+  if (!ALLOWED_TYPES.includes(file.type)) return 'Only JPG, PNG, WebP or GIF images are allowed.'
+  if (file.size > MAX_FILE_BYTES) return `Image is too large (max ${MAX_FILE_BYTES / (1024 * 1024)} MB).`
+  if (file.size === 0) return 'Image file is empty.'
+  return null
+}
+
+export function getMaxImageBytes(): number {
+  return MAX_FILE_BYTES
 }
 
 export function fileToImage(file: File): Promise<HTMLImageElement> {
