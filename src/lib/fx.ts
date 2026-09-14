@@ -4,9 +4,10 @@ import type { Settings } from './types'
  * USD → PHP reference rate — the single source of truth for the whole app.
  *
  * The live value is refreshed once a day into `settings.usd_php_rate` by the
- * `sync-fx-rate` Netlify Function (see netlify.toml). This constant is only
- * the fallback for when that value is absent: a fresh Supabase database whose
- * cron has not run yet, or demo mode, which has no server to run it at all.
+ * `sync-fx-rate` Netlify Function (see netlify.toml), which reads a provider
+ * that republishes every calendar day. This constant is only the fallback for
+ * when that value is absent: a fresh Supabase database whose cron has not run
+ * yet, or demo mode, which has no server to run it at all.
  *
  * It is deliberately a round, obviously-approximate number rather than a
  * plausible-looking precise one, so a stale fallback never reads as a live

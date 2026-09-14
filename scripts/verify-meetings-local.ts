@@ -57,8 +57,14 @@ async function main() {
   assert(upcoming[0]?.id === created.id, 'the soonest upcoming meeting sorts first')
   assert(upcoming.every((m, i) => i === 0 || m.start_time.localeCompare(upcoming[i - 1].start_time) >= 0), 'upcoming sorts ascending')
 
+  // Reschedule to *just* in the past (a second ago) rather than a rounded
+  // "30 minutes ago": the demo seed can schedule a meeting for earlier today
+  // (e.g. the 16:00 stand-up), which — when this test runs shortly after that
+  // hour — would be more recent than a 30-minutes-ago slot and would sort
+  // ahead of it, making the "most recently past" assertion below flaky by
+  // time of day. One second ago is unambiguously the latest past moment.
   const rescheduled = (await localBackend.updateMeeting(created.id, {
-    start_time: new Date(now - 30 * 60 * 1000).toISOString(),
+    start_time: new Date(now - 1000).toISOString(),
   })).data!
   assert(new Date(rescheduled.start_time).getTime() < now, 'rescheduling into the past moves it to the past half')
   const afterReschedule = (await localBackend.listMeetings()).data || []
