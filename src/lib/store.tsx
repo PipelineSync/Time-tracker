@@ -56,6 +56,30 @@ const PAYMENT_WINDOW = 100           // payments the list shows (~years of histo
 const FULL_EVERY_TICKS = 20          // full entry re-sync every 5 min reconciles deletions
 const FOCUS_FULL_MIN_MS = 90_000     // a refocus re-loads the full window at most once per 90 s
 
+// ---- FX rate self-healing --------------------------------------------------
+// The daily sync-fx-rate Netlify Function is the primary mechanism that writes
+// the USD → PHP rate. If the cron misses a day (scheduling gaps, env-var
+// misconfiguration, network error), the rate goes stale and never self-heals
+// until the cron fires again — which could be 48+ hours later.
+//
+// Fix: whenever the app loads settings and the stored rate is > 23 h old, call
+// the Netlify function endpoint from the browser (fire-and-forget). The
+// function fetches a fresh rate from the provider and writes it to the database
+// using its server-side secret key; the next settings poll (≤ 60 s later) picks
+// it up. We only do this once per page-load and only on Supabase deployments
+// (the local/demo backend has no server to write to). In dev or non-Netlify
+// environments the request will 404 — the catch silently ignores it.
+const fxSyncTriggered = { value: false }
+
+function triggerFxSyncIfStale(settings: Settings): void {
+  if (fxSyncTriggered.value) return
+  const updatedAt = settings.usd_php_rate_updated_at
+  const ageMs = updatedAt ? Date.now() - new Date(updatedAt).getTime() : Infinity
+  if (ageMs <= 23 * 3_600_000) return
+  fxSyncTriggered.value = true
+  fetch('/.netlify/functions/sync-fx-rate').catch(() => undefined)
+}
+
 function sortEntriesDesc(rows: TimeEntry[]): TimeEntry[] {
   return [...rows].sort((a, b) => b.start_time.localeCompare(a.start_time))
 }
@@ -434,7 +458,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
         lastEntrySyncAt.current = syncTime
       }
-      if (s.data) setSettings(s.data)
+      if (s.data) {
+        setSettings(s.data)
+        if (isSupabaseConfigured()) triggerFxSyncIfStale(s.data)
+      }
       // Clear on a clean empty result (someone clocked out elsewhere); keep the
       // previous value when the backend errored so a blip doesn't hide a timer.
       if (!at.error) {
