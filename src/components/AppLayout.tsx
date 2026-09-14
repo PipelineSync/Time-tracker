@@ -22,7 +22,7 @@ import {
   Monitor,
 } from 'lucide-react'
 import { useStore } from '@/lib/store'
-import type { Permission } from '@/lib/types'
+import { buildNavPlan, type NavKey } from '@/lib/nav'
 import { useTheme } from '@/lib/theme'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -45,10 +45,16 @@ interface NavItem {
   icon: typeof LayoutDashboard
 }
 
-const NAV = {
+/**
+ * Every destination the nav can show, keyed the way `buildNavPlan` names it
+ * (`@/lib/nav`). Typed as a complete map, so adding a key to the plan without
+ * giving it an icon + label here breaks `npm run typecheck`.
+ */
+const NAV: Record<NavKey, NavItem> = {
   dashboard: { to: '/', label: 'Dashboard', shortLabel: 'Home', icon: LayoutDashboard },
   tracker: { to: '/tracker', label: 'Clock In / Out', shortLabel: 'Clock', icon: Timer },
   entriesAll: { to: '/entries', label: 'Time Entries', shortLabel: 'Time', icon: ListChecks },
+  // The same page in its own-rows mode — what a worker gets with no grant.
   entriesMine: { to: '/entries', label: 'My Time', shortLabel: 'Time', icon: ListChecks },
   tasksAll: { to: '/tasks', label: 'Tasks', shortLabel: 'Tasks', icon: KanbanSquare },
   tasksMine: { to: '/tasks', label: 'My Tasks', shortLabel: 'Tasks', icon: KanbanSquare },
@@ -64,52 +70,6 @@ const NAV = {
   workers: { to: '/workers', label: 'Workers', shortLabel: 'Workers', icon: Users },
   reports: { to: '/reports', label: 'Reports', shortLabel: 'Reports', icon: BarChart3 },
   settings: { to: '/settings', label: 'Settings', shortLabel: 'Settings', icon: Settings },
-} satisfies Record<string, NavItem>
-
-interface NavSection {
-  /** Heading shown above the group. Empty = no heading (admin / default block). */
-  title: string
-  items: NavItem[]
-}
-
-/**
- * Worker accounts always see their own tools first. Extra admin screens the
- * owner granted them sit under an "Access Granted" divider so the two kinds
- * of access are obvious.
- */
-function buildNavSections(isAdmin: boolean, can: (p: Permission) => boolean): NavSection[] {
-  if (isAdmin) {
-    return [{
-      title: '',
-      items: [NAV.dashboard, NAV.entriesAll, NAV.tasksAll, NAV.priorityBoard, NAV.meetings, NAV.invoicing, NAV.notepad, NAV.finance, NAV.workers, NAV.reports, NAV.settings],
-    }]
-  }
-
-  const defaults: NavItem[] = [
-    NAV.tracker,
-    NAV.tasksMine,
-    NAV.notepad,
-    NAV.payroll,
-    NAV.settings,
-  ]
-
-  const granted: NavItem[] = []
-  if (can('dashboard.view')) granted.push(NAV.dashboard)
-  if (can('entries.view_all')) granted.push(NAV.entriesAll)
-  if (can('tasks.view_all')) granted.push(NAV.tasksAll)
-  if (can('priority_board.view')) granted.push(NAV.priorityBoard)
-  if (can('meetings.view')) granted.push(NAV.meetings)
-  if (can('invoices.view')) granted.push(NAV.invoicing)
-  const hasFinance = can('finance.view') || can('finance.subscription') || can('finance.payroll')
-  if (hasFinance) granted.push(NAV.finance)
-  if (can('workers.view')) granted.push(NAV.workers)
-  if (can('reports.view')) granted.push(NAV.reports)
-
-  const sections: NavSection[] = [{ title: '', items: defaults }]
-  if (granted.length > 0) {
-    sections.push({ title: 'Access Granted', items: granted })
-  }
-  return sections
 }
 
 /**
@@ -136,7 +96,15 @@ export function AppLayout() {
   const isDemo = backend.kind === 'local'
   const { setTheme } = useTheme()
   const navigate = useNavigate()
-  const navSections = useMemo(() => buildNavSections(isAdmin, can), [isAdmin, can])
+  // The plan decides who sees what (`@/lib/nav`); here each key just becomes
+  // its icon + label.
+  const navSections = useMemo(
+    () => buildNavPlan(isAdmin, can).map((section) => ({
+      title: section.title,
+      items: section.items.map((key) => NAV[key]),
+    })),
+    [isAdmin, can],
+  )
   const navItems = useMemo(() => navSections.flatMap((s) => s.items), [navSections])
   const [changePwOpen, setChangePwOpen] = useState(false)
 
