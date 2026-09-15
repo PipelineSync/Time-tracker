@@ -262,7 +262,7 @@ function RecurringDialog({open,close,data,commit}:{open:boolean;close:()=>void;d
     </Dialog>
   )
 }
-function RecurringRow({r,installment,data,currency,detailed,onPay,onToggle}:{r:PFData['recurring'][number];installment?:{dueDate:string;number:number};data:PFData;currency:string;detailed?:boolean;onPay:()=>void;onToggle?:(active:boolean)=>void}) {
+function RecurringRow({r,installment,data,currency,detailed,onPay,onToggle}:{r:PFData['recurring'][number];installment?:{id:string;dueDate:string;number:number;paid:boolean};data:PFData;currency:string;detailed?:boolean;onPay:()=>void;onToggle?:(active:boolean)=>void}) {
   // A scheduled row is paid only when that exact installment is paid.
   // Never infer payment from the current month: future installments may be paid early.
   const paid = installment ? installment.paid : data.expenses.some(expense => expense.recurringId === r.id && expense.period === currentPeriod())
