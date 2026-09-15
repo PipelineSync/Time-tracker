@@ -37,6 +37,75 @@ function occurrenceCount(value: unknown): number | null {
   return Number.isInteger(n) && n >= 0 ? n : null
 }
 
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
+
+/**
+ * Add whole months to an ISO date, clamping the day to the length of the
+ * target month (31 Jan + 1 month → 28/29 Feb, never 3 Mar). Plain
+ * `Date#setMonth` overflows, which would silently drift every later due date
+ * of a plan that starts on the 29th, 30th or 31st.
+ */
+export function addMonthsClamped(isoDate: string, months: number): string {
+  if (!ISO_DATE.test(isoDate) || !Number.isInteger(months)) return isoDate
+  const year = Number(isoDate.slice(0, 4))
+  const month = Number(isoDate.slice(5, 7))
+  const day = Number(isoDate.slice(8, 10))
+  const shifted = new Date(Date.UTC(year, month - 1 + months, 1))
+  const lastDayOfTargetMonth = new Date(Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth() + 1, 0)).getUTCDate()
+  const clampedDay = Math.min(day, lastDayOfTargetMonth)
+  return `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, '0')}-${String(clampedDay).padStart(2, '0')}`
+}
+
+/** Whole months between two `YYYY-MM` periods (negative when `to` is earlier). */
+function monthsBetween(fromPeriod: string, toPeriod: string): number {
+  return (Number(toPeriod.slice(0, 4)) - Number(fromPeriod.slice(0, 4))) * 12
+    + (Number(toPeriod.slice(5, 7)) - Number(fromPeriod.slice(5, 7)))
+}
+
+/**
+ * Build the monthly payment rows of a fixed-term plan: `count` payments
+ * starting on `startDate`, one per month — so a 10-month loan yields exactly
+ * 10 dated rows. Ids are fresh; `paid` starts false.
+ */
+export function buildInstallments(startDate: string, count: number): PFInstallment[] {
+  const start = ISO_DATE.test(startDate) ? startDate : today()
+  const total = Number.isInteger(count) && count > 0 ? count : 0
+  return Array.from({ length: total }, (_, index) => ({
+    id: pfId(),
+    dueDate: addMonthsClamped(start, index),
+    number: index + 1,
+    paid: false,
+  }))
+}
+
+/**
+ * The day of the month a recurring item charges on: its explicit due day, or
+ * the day of its start date, clamped to 1–28 so short months always exist.
+ */
+function recurringDueDay(item: PFRecurring): number {
+  const parsedDay = item.startDate ? Number(item.startDate.slice(8, 10)) : 1
+  const dueDay = (item.dueDay ?? parsedDay) || 1
+  return Math.max(1, Math.min(28, dueDay))
+}
+
+/**
+ * Fix the due dates of a machine-generated plan that was saved by an older
+ * client (whose month stepping overflowed on the 29th–31st). Only plans that
+ * still look untouched are repaired: a start date, a run limit, and one
+ * numbered installment per run. Paid flags and ids are preserved.
+ */
+function repairedInstallments(item: PFRecurring): PFInstallment[] | undefined {
+  const installments = item.installments
+  const start = item.startDate
+  if (!installments?.length || !start || !ISO_DATE.test(start)) return installments
+  if (item.maxOccurrences === null || installments.length !== item.maxOccurrences) return installments
+  if (!installments.every((inst, index) => inst.number === index + 1)) return installments
+  return installments.map((inst, index) => {
+    const dueDate = addMonthsClamped(start, index)
+    return dueDate === inst.dueDate ? inst : { ...inst, dueDate }
+  })
+}
+
 /**
  * Bring saved Personal Tracker JSON forward to the current shape. Recurring
  * rows created before run limits existed infer their count from the expenses
@@ -61,7 +130,7 @@ export function normalizePFData(value: unknown): PFData {
   const recurring = savedRecurring.map((item) => {
     const maxOccurrences = occurrenceLimit(item.maxOccurrences)
     const runCount = occurrenceCount(item.runCount) ?? historicalRuns.get(item.id) ?? 0
-    return {
+    const normalized: PFRecurring = {
       ...item,
       maxOccurrences,
       runCount,
@@ -69,6 +138,8 @@ export function normalizePFData(value: unknown): PFData {
       // stale active flag after its final payment.
       active: Boolean(item.active) && (maxOccurrences === null || runCount < maxOccurrences),
     }
+    const installments = repairedInstallments(normalized)
+    return installments && installments !== item.installments ? { ...normalized, installments } : normalized
   })
 
   return { ...input, accounts, categories, sources, incomes, expenses, transfers, recurring }
@@ -210,6 +281,175 @@ export function getOverdueRecurringPayments(data: PFData, asOfDate: string = tod
   // Sort earliest due date first (most overdue on top)
   return overdue.sort((a, b) => a.dueDate.localeCompare(b.dueDate))
 }
+
+export type PFScheduleStatus = 'overdue' | 'due-today' | 'upcoming' | 'paid'
+
+/** One dated payment row in the schedule — a single installment of one bill. */
+export type PFScheduledPayment = {
+  /** Stable key for lists: the installment id, or a derived one for projected rows. */
+  key: string
+  recurring: PFRecurring
+  recurringId: string
+  recurringName: string
+  /** Absent for projected rows of an open-ended bill (nothing is stored yet). */
+  installmentId?: string
+  installmentNumber: number
+  dueDate: string
+  period: string
+  amount: number | null
+  paid: boolean
+  /** The date the payment was actually recorded, when it is paid. */
+  paidOn: string | null
+  status: PFScheduleStatus
+  /** Days from the reference date to the due date — negative once it has passed. */
+  daysFromReference: number
+  /** True when the row was projected for an open-ended bill with no stored schedule. */
+  projected: boolean
+}
+
+/**
+ * How far an open-ended bill ("until switched off") is projected into the
+ * future and back into the past when it has no stored installments. A
+ * fixed-term plan needs neither: its rows were generated when it was added.
+ */
+export const SCHEDULE_HORIZON_MONTHS = 6
+export const SCHEDULE_LOOKBACK_MONTHS = 12
+
+/** The expense that settled a stored installment, if any. */
+function paidExpenseForInstallment(data: PFData, recurringId: string, inst: PFInstallment): PFExpense | undefined {
+  return data.expenses.find(
+    (e) => e.recurringId === recurringId && (e.installmentNumber === inst.number || (e.dueDate === inst.dueDate && e.paid)),
+  )
+}
+
+/** The expense that settled a projected month of an open-ended bill, if any. */
+function paidExpenseForPeriod(data: PFData, recurringId: string, period: string, dueDate: string): PFExpense | undefined {
+  return data.expenses.find(
+    (e) => e.recurringId === recurringId && e.paid && (e.period === period || e.dueDate === dueDate),
+  )
+}
+
+function scheduleStatus(paid: boolean, daysFromReference: number): PFScheduleStatus {
+  if (paid) return 'paid'
+  if (daysFromReference < 0) return 'overdue'
+  return daysFromReference === 0 ? 'due-today' : 'upcoming'
+}
+
+/**
+ * Order the schedule strictly by payment date, nearest first — paid rows keep
+ * their place in the calendar instead of sinking, exactly like a paper
+ * payment calendar. Ties (two bills charging on the same day) break by bill
+ * name then installment number, so the list is stable.
+ */
+export function compareScheduledPayments(a: PFScheduledPayment, b: PFScheduledPayment): number {
+  if (a.dueDate !== b.dueDate) return a.dueDate.localeCompare(b.dueDate)
+  const byName = a.recurringName.localeCompare(b.recurringName)
+  return byName !== 0 ? byName : a.installmentNumber - b.installmentNumber
+}
+
+/**
+ * Every dated payment row of every recurring bill in one flat list, nearest
+ * date first. A 10-month plan contributes all 10 of its dated rows; adding
+ * another bill simply merges its rows into the same ordering, so the list
+ * re-adjusts around whatever is due next.
+ *
+ * Switched-off and completed bills contribute their paid history only —
+ * their remaining dates are no longer scheduled.
+ */
+export function getScheduledPayments(data: PFData, asOfDate: string = today()): PFScheduledPayment[] {
+  const reference = ISO_DATE.test(asOfDate) ? asOfDate : today()
+  const rows: PFScheduledPayment[] = []
+
+  const push = (row: {
+    recurring: PFRecurring
+    installmentNumber: number
+    dueDate: string
+    installmentId?: string
+    paid: boolean
+    paidOn: string | null
+    projected: boolean
+  }) => {
+    const { recurring, installmentNumber, dueDate, installmentId, paid, paidOn, projected } = row
+    const daysFromReference = daysDifference(reference, dueDate)
+    rows.push({
+      key: installmentId || `${recurring.id}:${dueDate}`,
+      recurring,
+      recurringId: recurring.id,
+      recurringName: recurring.name,
+      installmentId,
+      installmentNumber,
+      dueDate,
+      period: dueDate.slice(0, 7),
+      amount: recurring.expectedAmount,
+      paid,
+      paidOn,
+      status: scheduleStatus(paid, daysFromReference),
+      daysFromReference,
+      projected,
+    })
+  }
+
+  const lookbackPeriod = addMonthsClamped(reference, -SCHEDULE_LOOKBACK_MONTHS).slice(0, 7)
+  const horizonPeriod = addMonthsClamped(reference, SCHEDULE_HORIZON_MONTHS).slice(0, 7)
+
+  for (const r of data.recurring) {
+    const finished = r.maxOccurrences !== null && r.runCount >= r.maxOccurrences
+    const schedulesUnpaid = r.active && !finished
+
+    if (r.installments && r.installments.length > 0) {
+      for (const inst of r.installments) {
+        const expense = paidExpenseForInstallment(data, r.id, inst)
+        const paid = inst.paid || Boolean(expense)
+        // A switched-off bill keeps its paid history and drops its open dates.
+        if (!paid && !schedulesUnpaid) continue
+        push({ recurring: r, installmentNumber: inst.number, dueDate: inst.dueDate, installmentId: inst.id, paid, paidOn: expense?.date ?? null, projected: false })
+      }
+      continue
+    }
+
+    // Open-ended bill with no stored schedule: project its monthly dates from
+    // the start (bounded by the lookback) to the horizon, and read each
+    // month's paid state from the expenses it generated.
+    const startPeriod = r.startDate && ISO_DATE.test(r.startDate) ? r.startDate.slice(0, 7) : reference.slice(0, 7)
+    const firstPeriod = startPeriod < lookbackPeriod ? lookbackPeriod : startPeriod
+    const dueDay = String(recurringDueDay(r)).padStart(2, '0')
+
+    let [year, month] = firstPeriod.split('-').map(Number)
+    const [endYear, endMonth] = horizonPeriod.split('-').map(Number)
+    while (year < endYear || (year === endYear && month <= endMonth)) {
+      const period = `${year}-${String(month).padStart(2, '0')}`
+      const dueDate = `${period}-${dueDay}`
+      const expense = paidExpenseForPeriod(data, r.id, period, dueDate)
+      const paid = Boolean(expense)
+      if (paid || schedulesUnpaid) {
+        push({ recurring: r, installmentNumber: Math.max(1, monthsBetween(startPeriod, period) + 1), dueDate, paid, paidOn: expense?.date ?? null, projected: true })
+      }
+      month++
+      if (month > 12) {
+        month = 1
+        year++
+      }
+    }
+  }
+
+  return rows.sort(compareScheduledPayments)
+}
+
+/** `2026-10-05` → `Oct 5, 2026`, read as a local day so the date never shifts by timezone. */
+export const formatShortDate = (iso: string) =>
+  ISO_DATE.test(iso) ? new Date(`${iso}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : iso
+
+/** Human wording for a schedule row's due date, relative to the reference day. */
+export function scheduledPaymentLabel(row: PFScheduledPayment): string {
+  const days = row.daysFromReference
+  if (row.paid) return row.paidOn ? `Paid ${formatShortDate(row.paidOn)}` : 'Paid'
+  if (days === 0) return 'Due today'
+  if (days === 1) return 'Due tomorrow'
+  if (days > 1) return `Due in ${days} days`
+  if (days === -1) return '1 day overdue'
+  return `${Math.abs(days)} days overdue`
+}
+
 export const pfId = () => crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`
 export const today = () => new Date().toISOString().slice(0, 10)
 export const currentPeriod = () => new Date().toISOString().slice(0, 7)
