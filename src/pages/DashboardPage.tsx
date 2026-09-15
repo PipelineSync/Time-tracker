@@ -7,6 +7,8 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/EmptyState'
 import { ActiveWorkersPanel } from '@/components/ActiveWorkersPanel'
+import { FaqButton } from '@/components/FaqButton'
+import { PageHeader } from '@/components/PageHeader'
 import {
   Clock, DollarSign, CalendarRange, Wallet, Plus, Users, ListChecks,
 } from 'lucide-react'
@@ -37,10 +39,13 @@ export function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <div className="space-y-1">
-        <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Dashboard</h1>
-        <p className="text-sm text-muted-foreground">Overview of your team’s time and earnings.</p>
-      </div>
+      {/* Same title row as every other page (`PageHeader`) — the FAQ button
+          takes the upper-left slot. */}
+      <PageHeader
+        title="Dashboard"
+        description="Overview of your team’s time and earnings."
+        leading={<FaqButton />}
+      />
 
       {/* Everyone currently on the clock (working or on break) */}
       <ActiveWorkersPanel />

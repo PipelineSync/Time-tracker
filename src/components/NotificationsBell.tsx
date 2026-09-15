@@ -10,7 +10,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { AlertTriangle, Bell, BellOff, Check, Clock, Coffee, LogIn, LogOut, MessageSquare, Play, Plus, Wallet, type LucideIcon } from 'lucide-react'
+import { AlertTriangle, Bell, BellOff, Check, Clock, Coffee, Headset, LogIn, LogOut, MessageSquare, Play, Plus, Wallet, type LucideIcon } from 'lucide-react'
 import { formatDateTime } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import type { NotificationType } from '@/lib/types'
@@ -23,6 +23,8 @@ const typeMeta: Record<NotificationType, { icon: LucideIcon; color: string }> = 
   payment: { icon: Wallet, color: 'text-emerald-600' },
   break_start: { icon: Coffee, color: 'text-[#36B7C9]' },
   break_end: { icon: Play, color: 'text-[#F77A0A]' },
+  // IT Support tickets — a submission or a reply waiting on someone.
+  ticket: { icon: Headset, color: 'text-violet-600' },
 }
 
 export function NotificationsBell({ onNavy }: { onNavy?: boolean }) {
@@ -82,9 +84,14 @@ export function NotificationsBell({ onNavy }: { onNavy?: boolean }) {
                       : 'border-l-[#F77A0A] bg-[#F77A0A]/5'
                   )}
                   onClick={() => {
-                    // A note opens its entry; overdue/recurring opens personal tracker; other notifications just dismiss.
+                    // A note opens its entry; a ticket notification opens that
+                    // ticket (the desk lands on the queue with it selected, the
+                    // requester on their own thread); overdue/recurring opens
+                    // the personal tracker; anything else just dismisses.
                     if (n.entry_id) {
                       navigate(`/entries?entry=${n.entry_id}`)
+                    } else if (n.ticket_id) {
+                      navigate(`/it-support?ticket=${n.ticket_id}`)
                     } else if (n.message.toLowerCase().includes('recurring') || n.message.toLowerCase().includes('overdue')) {
                       navigate('/personal')
                     }

@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from 'react'
 import { useStore } from '@/lib/store'
 import { isChristmasTheme } from '@/lib/christmas'
 import { ClaimBonusButton } from '@/components/ClaimBonusButton'
+import { FaqButton } from '@/components/FaqButton'
 import { PageHeader } from '@/components/PageHeader'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -145,7 +146,7 @@ export function TrackerPage() {
   if (dataLoading && workers.length === 0 && !user?.workerId) {
     return (
       <div className="space-y-6">
-        <PageHeader title="Clock In / Out" />
+        <PageHeader title="Clock In / Out" leading={<FaqButton audience="worker" />} />
         <Card><CardContent className="flex h-64 items-center justify-center text-muted-foreground">Loading…</CardContent></Card>
       </div>
     )
@@ -161,7 +162,11 @@ export function TrackerPage() {
 
   return (
     <div ref={sectionRef} className="relative space-y-6">
-      <PageHeader title="Clock In / Out" description="Clock in, take breaks, and clock out." />
+      <PageHeader
+        title="Clock In / Out"
+        description="Clock in, take breaks, and clock out."
+        leading={<FaqButton audience="worker" />}
+      />
 
       {myTimer ? (
         <Card className="border-primary/40">

@@ -11,6 +11,16 @@ import type { Permission } from './types'
  * (`scripts/verify-nav-local.ts`). `AppLayout` turns each key into its
  * icon + label; its `Record<NavKey, NavItem>` map makes a key added here fail
  * `npm run typecheck` until it is given one.
+ *
+ * `itSupport` is the exception that proves the rule: it is the only destination
+ * the admin does not hold automatically, so it is passed in separately
+ * (`isItSupport`) rather than read through `can()`, which answers `true` for
+ * every permission when the account is an admin.
+ *
+ * There is deliberately **no** "Submit a Ticket" destination here. Reporting a
+ * problem is help, not a section: the entry point lives in the FAQs dialog
+ * (`FaqButton`), which every account already has in the upper-left of the
+ * screen it is reading.
  */
 export type NavKey =
   | 'dashboard'
@@ -28,6 +38,7 @@ export type NavKey =
   | 'workers'
   | 'reports'
   | 'settings'
+  | 'itSupport'
 
 export interface NavPlanSection {
   /** Heading shown above the group. Empty = no heading (admin / default block). */
@@ -54,7 +65,14 @@ const TEAM_TWIN: Partial<Record<NavKey, NavKey>> = {
  * sits in the default block. Extra admin screens the owner granted them sit
  * under an "Access Granted" divider so the two kinds of access stay obvious.
  */
-export function buildNavPlan(isAdmin: boolean, can: (permission: Permission) => boolean): NavPlanSection[] {
+export function buildNavPlan(
+  isAdmin: boolean,
+  can: (permission: Permission) => boolean,
+  isItSupport = false
+): NavPlanSection[] {
+  // IT Support is the one section the admin does NOT get automatically: the
+  // grant is worker-only (see `isItSupport()` in ./tickets), so the admin's nav
+  // is exactly what it always was and only a granted worker sees the queue.
   if (isAdmin) {
     return [{
       title: '',
@@ -97,6 +115,10 @@ export function buildNavPlan(isAdmin: boolean, can: (permission: Permission) => 
   if (can('reports.view')) granted.push('reports')
 
   const items = defaults.filter((key) => !granted.some((g) => TEAM_TWIN[g] === key))
+
+  // Running support is an extra job, not a personal tool, so it sits with the
+  // other granted screens rather than in the default block.
+  if (isItSupport) granted.push('itSupport')
 
   const sections: NavPlanSection[] = [{ title: '', items }]
   if (granted.length > 0) sections.push({ title: 'Access Granted', items: granted })

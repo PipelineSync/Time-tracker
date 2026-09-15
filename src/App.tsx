@@ -23,6 +23,7 @@ const NotepadPage = lazy(() => import('@/pages/NotepadPage').then((m) => ({ defa
 const ClientInvoicingPage = lazy(() => import('@/pages/ClientInvoicingPage').then((m) => ({ default: m.ClientInvoicingPage })))
 const FinancePage = lazy(() => import('@/pages/FinancePage').then((m) => ({ default: m.FinancePage })))
 const PersonalFinancePage = lazy(() => import('@/pages/PersonalFinancePage').then((m) => ({ default: m.PersonalFinancePage })))
+const ItSupportPage = lazy(() => import('@/pages/ItSupportPage').then((m) => ({ default: m.ItSupportPage })))
 
 export function App() {
   const { user, authLoading, isAdmin, can } = useStore()
@@ -73,6 +74,14 @@ export function App() {
               every worker reach it, there is no permission to gate. */}
           <Route path="/notepad" element={<NotepadPage />} />
           <Route path="/settings" element={<SettingsPage />} />
+          {/* IT Support. The route is open to everyone on purpose, because the
+              section does two jobs: it is the support desk's queue for the
+              accounts the admin granted it to, and it is where your OWN ticket
+              opens from a notification. An ungranted account sees no queue —
+              just their ticket, plus the Submit a Ticket button. `can()` cannot
+              express this: the admin holds every capability, and the admin is
+              exactly who must not have the desk. */}
+          <Route path="/it-support" element={<ItSupportPage />} />
 
           {/* The standalone Payments section now lives inside Finance → Payroll;
               old links and PWA shortcuts follow it there. */}
