@@ -5,7 +5,8 @@ export type PFAccount = { id: string; name: string; purpose: string; startingBal
 export type PFCategory = { id: string; name: string }
 export type PFSource = { id: string; name: string }
 export type PFIncome = { id: string; date: string; sourceId: string; amount: number; accountId: string; note: string }
-export type PFExpense = { id: string; date: string; name: string; categoryId: string; amount: number; accountId: string; paid: boolean; note: string; recurringId?: string; period?: string }
+export type PFExpense = { id: string; date: string; name: string; categoryId: string; amount: number; accountId: string; paid: boolean; note: string; recurringId?: string; period?: string; dueDate?: string; installmentNumber?: number }
+export type PFInstallment = { id: string; dueDate: string; number: number; paid: boolean }
 export type PFTransfer = { id: string; date: string; fromId: string; toId: string; amount: number; note: string }
 export type PFRecurring = {
   id: string
@@ -19,6 +20,8 @@ export type PFRecurring = {
   maxOccurrences: number | null
   /** Number of payments recorded from this recurring item. */
   runCount: number
+  startDate?: string
+  installments?: PFInstallment[]
 }
 export type PFData = { accounts: PFAccount[]; categories: PFCategory[]; sources: PFSource[]; incomes: PFIncome[]; expenses: PFExpense[]; transfers: PFTransfer[]; recurring: PFRecurring[] }
 
