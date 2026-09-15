@@ -7,6 +7,10 @@
  *  - a grant ADDS the team-wide screen under "Access Granted" and *replaces*
  *    its "my own" twin, instead of leaving two links to the same route
  *  - the admin keeps the single, full, heading-less section
+ *  - "Submit a Ticket" is everyone's (the admin included) while the IT Support
+ *    *desk* is the granted worker's alone — the admin never gets it, even if
+ *    the flag is passed in, and the desk replaces the standalone ticket entry
+ *    so a support worker does not see the same thing twice
  *
  * The keys are what `AppLayout` turns into icons + labels; its
  * `Record<NavKey, NavItem>` map means a key the plan emits without a matching
@@ -109,6 +113,25 @@ function main() {
     workerAdminScreens.every((k) => !plainKeys.includes(k)),
     'a worker with no grants sees no admin-only destination',
   )
+
+  // ---- 6. Submit a Ticket for everyone; the IT Support desk for the desk --
+  assert(plainKeys.includes('submitTicket'), 'a worker with no grants can still submit a ticket')
+  assert(!plainKeys.includes('itSupport'), 'a worker with no grants gets no IT Support desk')
+  assert(
+    plain.find((s) => s.items.includes('submitTicket'))?.title === '',
+    'Submit a Ticket sits with the worker\'s own tools, not under "Access Granted"',
+  )
+
+  const desk = buildNavPlan(false, canFor(['it_support.manage']), true)
+  const deskKeys = keysOf(desk)
+  assert(deskKeys.includes('itSupport'), 'the IT Support grant adds the desk')
+  assert(!!desk.find((s) => s.title === 'Access Granted')?.items.includes('itSupport'), 'the desk sits under "Access Granted" — it is a granted job, not a personal tool')
+  assert(!deskKeys.includes('submitTicket'), 'the desk replaces the standalone Submit a Ticket entry (it submits from there)')
+
+  const adminQ = buildNavPlan(true, () => true, true)
+  const adminQKeys = keysOf(adminQ)
+  assert(!adminQKeys.includes('itSupport'), 'the admin gets NO IT Support desk, even when the flag is passed in')
+  assert(adminQKeys.includes('submitTicket'), 'the admin can still submit a ticket like anyone else')
 
   console.log(process.exitCode ? '\nSome navigation checks FAILED.' : '\nAll navigation checks passed.')
 }

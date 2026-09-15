@@ -10,7 +10,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { Bell, BellOff, Check, Clock, Coffee, LogIn, LogOut, MessageSquare, Play, Plus, Wallet, type LucideIcon } from 'lucide-react'
+import { Bell, BellOff, Check, Clock, Coffee, Headset, LogIn, LogOut, MessageSquare, Play, Plus, Wallet, type LucideIcon } from 'lucide-react'
 import { formatDateTime } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import type { NotificationType } from '@/lib/types'
@@ -23,6 +23,8 @@ const typeMeta: Record<NotificationType, { icon: LucideIcon; color: string }> = 
   payment: { icon: Wallet, color: 'text-emerald-600' },
   break_start: { icon: Coffee, color: 'text-[#36B7C9]' },
   break_end: { icon: Play, color: 'text-[#F77A0A]' },
+  // IT Support tickets — a submission or a reply waiting on someone.
+  ticket: { icon: Headset, color: 'text-violet-600' },
 }
 
 export function NotificationsBell({ onNavy }: { onNavy?: boolean }) {
@@ -76,8 +78,15 @@ export function NotificationsBell({ onNavy }: { onNavy?: boolean }) {
                     n.read ? 'border-l-transparent' : 'border-l-[#F77A0A] bg-[#F77A0A]/5'
                   )}
                   onClick={() => {
-                    // A note opens its entry; other notifications just dismiss.
-                    if (n.entry_id) navigate(`/entries?entry=${n.entry_id}`)
+                    if (n.entry_id) {
+                      // A note opens its entry.
+                      navigate(`/entries?entry=${n.entry_id}`)
+                    } else if (n.ticket_id) {
+                      // A ticket notification opens that ticket: IT Support lands
+                      // on the queue with it selected, and everyone else (the
+                      // requester, whose ticket it is) on their own thread.
+                      navigate(`/it-support?ticket=${n.ticket_id}`)
+                    }
                   }}
                 >
                   <Icon className={cn('mt-0.5 h-4 w-4 shrink-0', meta.color)} />

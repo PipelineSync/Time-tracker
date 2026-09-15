@@ -112,6 +112,12 @@ export const FAQ_SECTIONS: Record<FaqAudience, FaqSection[]> = {
             'Settings → Profile. Your picture shows up next to your name for your administrator — on the Workers page, the Dashboard and the "On the clock now" panel — instead of just your initials.',
         },
         {
+          id: 'worker-ticket',
+          question: 'My computer is playing up — who do I tell?',
+          answer:
+            'Use Submit a Ticket in the menu: a subject, what happened, how urgent it is and up to three screenshots. It goes to whoever is running IT Support — you never need their queue, and they never see your time or pay. You get a bell notification when they reply or move the ticket, and clicking it opens the thread.',
+        },
+        {
           id: 'worker-notepad',
           question: 'Is anything I write private?',
           answer:
@@ -136,6 +142,12 @@ export const FAQ_SECTIONS: Record<FaqAudience, FaqSection[]> = {
           question: 'How do I give a worker access to the admin screens?',
           answer:
             'Workers → edit → Access. Granted screens appear in that worker’s nav under "Access Granted" on their next sync — no sign-out needed. The access is real, not just hidden buttons: both backends and the database policies check the same permissions.',
+        },
+        {
+          id: 'admin-it-support',
+          question: 'Who sees the IT Support tickets?',
+          answer:
+            'Nobody by default — not even you. Tick IT Support when you add or edit a worker (it has its own switch above Access) and that worker gets the desk: every submitted ticket, with triage, assignment and replies, plus a bell alert the moment one arrives. Untick it and the section closes again. You can still submit a ticket yourself.',
         },
         {
           id: 'admin-worker-cannot-sign-in',

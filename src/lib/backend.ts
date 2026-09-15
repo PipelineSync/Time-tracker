@@ -7,6 +7,12 @@ import type {
   AuthUser,
   TimeEntryComment,
   AppNotification,
+  CreateTicketInput,
+  Ticket,
+  TicketAssignee,
+  TicketReply,
+  TicketThread,
+  UpdateTicketInput,
   Payment,
   PaymentStatus,
   PaymentMethod,
@@ -226,6 +232,26 @@ export interface DataBackend {
    */
   getSlackSettings(): Promise<BackendResult<SlackSettings>>
   saveSlackSettings(patch: Partial<SlackSettings>): Promise<BackendResult<SlackSettings>>
+
+  // IT Support tickets
+  /**
+   * The ticket queue. Sent to **IT Support only** — the grant is worker-only, so
+   * an admin calling this gets the permission error, and a worker without the
+   * grant gets only the tickets they submitted themselves (which is how the
+   * requester's own ticket is found from a notification). Attachments are left
+   * out of the list read and fetched with `getTicket` so the queue stays light.
+   */
+  listTickets(): Promise<BackendResult<Ticket[]>>
+  /** One ticket with its attachments and every reply — IT Support, or the requester. */
+  getTicket(ticketId: string): Promise<BackendResult<TicketThread>>
+  /** Submit a ticket. Anyone signed in, including the admin (who cannot read it back). */
+  createTicket(input: CreateTicketInput): Promise<BackendResult<Ticket>>
+  /** Status / assignee changes. IT Support only. */
+  updateTicket(ticketId: string, patch: UpdateTicketInput): Promise<BackendResult<Ticket>>
+  /** Reply on a ticket — IT Support, or the requester on their own ticket. */
+  addTicketReply(ticketId: string, body: string): Promise<BackendResult<TicketReply>>
+  /** Who can be assigned: the accounts currently holding the IT Support grant. */
+  listItSupportAssignees(): Promise<BackendResult<TicketAssignee[]>>
 
   // Notes / chat on entries
   listEntryComments(entryId: string): Promise<BackendResult<TimeEntryComment[]>>

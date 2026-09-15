@@ -30,6 +30,10 @@ const PERMISSIONS = [
   'reports.view',
   'clients.manage',
   'settings.manage',
+  // The support desk. Unlike the others this one is NOT part of the admin's
+  // own capability set (the queue belongs to whoever runs support), but it is
+  // still a key the admin may hand to a worker.
+  'it_support.manage',
 ] as const
 
 /** Never trust the client with the grant list — keep only known keys. */
