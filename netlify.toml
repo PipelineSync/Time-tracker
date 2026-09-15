@@ -14,14 +14,3 @@
 # (Netlify cron runs in UTC; "@daily" = 00:00 UTC = 8:00 AM PHT).
 [functions."supabase-keepalive"]
   schedule = "@daily"
-
-# USD -> PHP reference-rate sync, twice a day: 00:30 and 12:30 UTC
-# = 8:30 AM and 8:30 PM in Manila. The 00:30 run lands just after the primary
-# provider (CurrencyFreaks) refreshes its data at 00:00 UTC, so it picks up the
-# day's fresh value; the 12:30 run re-checks it, which is what recovers a
-# missed or failed morning run within 12 hours instead of 24. Two calls a day
-# to the provider (60 of the free plan's 1,000 a month) and one write to the
-# settings row per run; every tab then reads it on the settings fetch it already
-# makes, so it adds no client queries.
-[functions."sync-fx-rate"]
-  schedule = "30 0,12 * * *"

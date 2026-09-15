@@ -63,38 +63,6 @@ const FOCUS_FULL_MIN_MS = 90_000     // a refocus re-loads the full window at mo
 // enough that an id is never ignored forever.
 const LOCAL_ACTION_TTL_MS = 30_000
 
-// ---- FX rate self-healing --------------------------------------------------
-// The twice-daily sync-fx-rate Netlify Function is the mechanism that writes the
-// USD → PHP rate. If its schedule stops entirely (deploy gap, missing
-// SUPABASE_SECRET_KEY or CURRENCYFREAKS_API_KEY, provider outage), the rate
-// goes stale and never self-heals until someone notices.
-//
-// Fix: whenever the app loads settings and the stored rate is > 23 h old, call
-// the Netlify function endpoint from the browser (fire-and-forget). The
-// function fetches a fresh rate from the provider and writes it to the database
-// using its server-side secret key; the next settings poll (≤ 60 s later) picks
-// it up. We only do this once per page-load and only on Supabase deployments
-// (the local/demo backend has no server to write to). In dev or non-Netlify
-// environments the request will 404 — the catch silently ignores it.
-//
-// The threshold deliberately stays at "a whole day" rather than tracking the
-// 12-hour schedule: the rate provider is metered (1,000 requests a month on the
-// free plan), and a tab that re-triggers on every reload while the rate is
-// legitimately between two scheduled runs would spend that quota for nothing.
-// A rate less than 12 h old is exactly what the schedule is meant to produce.
-// The function also throttles repeat calls on its side, so a trigger that does
-// fire cannot multiply into provider requests.
-const fxSyncTriggered = { value: false }
-
-function triggerFxSyncIfStale(settings: Settings): void {
-  if (fxSyncTriggered.value) return
-  const updatedAt = settings.usd_php_rate_updated_at
-  const ageMs = updatedAt ? Date.now() - new Date(updatedAt).getTime() : Infinity
-  if (ageMs <= 23 * 3_600_000) return
-  fxSyncTriggered.value = true
-  fetch('/.netlify/functions/sync-fx-rate').catch(() => undefined)
-}
-
 function sortEntriesDesc(rows: TimeEntry[]): TimeEntry[] {
   return [...rows].sort((a, b) => b.start_time.localeCompare(a.start_time))
 }
@@ -524,7 +492,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
       if (s.data) {
         setSettings(s.data)
-        if (isSupabaseConfigured()) triggerFxSyncIfStale(s.data)
       }
       // Clear on a clean empty result (someone clocked out elsewhere); keep the
       // previous value when the backend errored so a blip doesn't hide a timer.
