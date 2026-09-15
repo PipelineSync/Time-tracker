@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
-import { accountBalance, currentPeriod, emptyPFData, loadPersonalFinance, money, normalizePFData, pfId, recordRecurringRun, savePersonalFinance, today, type PFData, type PFAccount } from '@/lib/personalFinance'
+import { accountBalance, currentPeriod, emptyPFData, loadPersonalFinance, money, normalizePFData, pfId, savePersonalFinance, today, type PFData, type PFAccount } from '@/lib/personalFinance'
 
 type View = 'dashboard' | 'accounts' | 'activity' | 'recurring' | 'reports' | 'settings'
 type EntryKind = 'income' | 'expense' | 'transfer'
