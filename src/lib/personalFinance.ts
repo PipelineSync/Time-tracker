@@ -336,15 +336,13 @@ function scheduleStatus(paid: boolean, daysFromReference: number): PFScheduleSta
 }
 
 /**
- * Order the schedule so the nearest date sits at the top:
- *   1. unpaid rows first — they are what still needs action,
- *   2. unpaid by due date ascending, so the most overdue / next due leads,
- *   3. paid by due date descending, so the most recent payment heads the paid block,
- *   4. ties broken by bill name then installment number, for a stable list.
+ * Order the schedule strictly by payment date, nearest first — paid rows keep
+ * their place in the calendar instead of sinking, exactly like a paper
+ * payment calendar. Ties (two bills charging on the same day) break by bill
+ * name then installment number, so the list is stable.
  */
 export function compareScheduledPayments(a: PFScheduledPayment, b: PFScheduledPayment): number {
-  if (a.paid !== b.paid) return a.paid ? 1 : -1
-  if (a.dueDate !== b.dueDate) return a.paid ? b.dueDate.localeCompare(a.dueDate) : a.dueDate.localeCompare(b.dueDate)
+  if (a.dueDate !== b.dueDate) return a.dueDate.localeCompare(b.dueDate)
   const byName = a.recurringName.localeCompare(b.recurringName)
   return byName !== 0 ? byName : a.installmentNumber - b.installmentNumber
 }

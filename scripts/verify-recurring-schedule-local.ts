@@ -132,10 +132,14 @@ const partlyPaid: PFData = {
 }
 const withPaid = getScheduledPayments(partlyPaid, '2026-10-20')
 assert(withPaid.length === 6, 'paid payments stay visible as rows in the schedule')
-assert(withPaid[0].dueDate === '2026-11-05' && !withPaid[0].paid, 'the next unpaid date leads once earlier ones are settled')
-assert(withPaid.filter(row => row.paid).every((row, index, rows) => index === 0 || row.dueDate <= rows[index - 1].dueDate), 'paid rows sit at the bottom, most recent first')
-assert(withPaid[4].dueDate === '2026-10-05' && withPaid[4].paidOn === '2026-10-04', 'a paid row keeps the date it was actually paid on')
-assert(scheduledPaymentLabel(withPaid[4]) === `Paid ${formatShortDate('2026-10-04')}`, 'a paid row is labelled with the day it was paid')
+assert(withPaid[0].dueDate === '2026-09-05' && withPaid[0].paid, 'a settled payment keeps its place in the calendar')
+assert(withPaid[1].dueDate === '2026-10-05' && withPaid[1].paidOn === '2026-10-04', 'a paid row keeps the date it was actually paid on')
+assert(scheduledPaymentLabel(withPaid[1]) === `Paid ${formatShortDate('2026-10-04')}`, 'a paid row is labelled with the day it was paid')
+assert(withPaid[2].dueDate === '2026-11-05' && !withPaid[2].paid, 'the next unpaid payment follows the settled ones, still in date order')
+assert(
+  withPaid.every((row, index) => index === 0 || row.dueDate >= withPaid[index - 1].dueDate),
+  'the whole schedule — paid and unpaid — is arranged by date of payment',
+)
 assert(withPaid.every(row => row.status !== 'overdue' || !row.paid), 'no paid row is reported overdue')
 
 // ── Open-ended bills project their dates ────────────────────────────────────
@@ -173,7 +177,7 @@ const completed: PFData = {
 }
 const completedRows = getScheduledPayments(completed, asOf)
 assert(completedRows.length === 10, 'a finished plan still shows all ten of its rows')
-assert(completedRows.every(row => row.paid) && completedRows[0].dueDate === '2027-06-15', 'finished rows are all paid, most recent first')
+assert(completedRows.every(row => row.paid) && completedRows[0].dueDate === '2026-09-15', 'finished rows are all paid, first payment first')
 
 // ── Legacy drifted schedules are repaired on load ───────────────────────────
 const legacy = normalizePFData({

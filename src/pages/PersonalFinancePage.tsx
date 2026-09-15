@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { AlertTriangle, ArrowDownLeft, ArrowLeft, ArrowLeftRight, ArrowUpRight, Building2, Check, Download, LayoutDashboard, List, Plus, RefreshCw, Settings, Trash2, WalletCards } from 'lucide-react'
+import { AlarmClock, AlertTriangle, ArrowDown, ArrowDownLeft, ArrowLeft, ArrowLeftRight, ArrowUp, ArrowUpRight, Building2, Car, Check, ChevronsUpDown, CircleCheck, Clock, CreditCard, Download, Droplet, GraduationCap, Home, Landmark, LayoutDashboard, List, MoreHorizontal, Plus, Receipt, RefreshCw, Settings, Shield, Smartphone, Trash2, Users, WalletCards, Wifi, Zap } from 'lucide-react'
 import { toast } from 'sonner'
 import { useStore } from '@/lib/store'
 import { Button } from '@/components/ui/button'
@@ -12,9 +12,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { NotificationsBell } from '@/components/NotificationsBell'
 import { cn } from '@/lib/utils'
-import { accountBalance, buildInstallments, currentPeriod, daysDifference, deleteRecurringPayment, emptyPFData, formatShortDate, getOverdueRecurringPayments, getScheduledPayments, loadPersonalFinance, money, normalizePFData, pfId, savePersonalFinance, scheduledPaymentLabel, today, type PFData, type PFAccount, type PFOverduePayment, type PFScheduledPayment } from '@/lib/personalFinance'
+import { accountBalance, buildInstallments, compareScheduledPayments, currentPeriod, daysDifference, deleteRecurringPayment, emptyPFData, formatShortDate, getOverdueRecurringPayments, getScheduledPayments, loadPersonalFinance, money, normalizePFData, pfId, savePersonalFinance, scheduledPaymentLabel, today, type PFData, type PFAccount, type PFOverduePayment, type PFScheduledPayment } from '@/lib/personalFinance'
 
 type View = 'dashboard' | 'accounts' | 'activity' | 'recurring' | 'reports' | 'settings'
 type EntryKind = 'income' | 'expense' | 'transfer'
@@ -51,8 +52,9 @@ export function PersonalFinancePage() {
   } | null>(null)
   const [from, setFrom] = useState(monthStart())
   const [to, setTo] = useState(today())
-  const [scheduleBill, setScheduleBill] = useState('all')
-  const [showPaidRows, setShowPaidRows] = useState(true)
+  const [recurringListOpen, setRecurringListOpen] = useState(false)
+  const [sortColumn, setSortColumn] = useState<ScheduleColumn>('date')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [accountFilter, setAccountFilter] = useState('all')
   const [categoryFilter, setCategoryFilter] = useState('all')
   const [kindFilter, setKindFilter] = useState('all')
@@ -90,18 +92,15 @@ export function PersonalFinancePage() {
   // 10-month plan contributes all ten of its rows, and a newly added bill
   // merges its rows into the same ordering.
   const scheduledPayments = useMemo(() => getScheduledPayments(data), [data])
-  const visibleSchedule = scheduledPayments.filter(row =>
-    (scheduleBill === 'all' || row.recurringId === scheduleBill) && (showPaidRows || !row.paid))
   /** The next payment still owed on a bill — its nearest dated row. */
   const nextRowFor = (recurringId: string) => scheduledPayments.find(row => row.recurringId === recurringId && !row.paid)
   const billsByNextDue = activeRecurring.slice().sort((a, b) =>
     (nextRowFor(a.id)?.dueDate ?? '9999-12-31').localeCompare(nextRowFor(b.id)?.dueDate ?? '9999-12-31'))
-  // The schedule is grouped per bill: the bill with the nearest unpaid date
-  // leads, and bills with everything settled follow by name.
+  // The Recurring list section keeps the same order as the table's default:
+  // the bill whose payment falls soonest comes first.
   const scheduleBills = useMemo(() => {
     const nextDue = (id: string) => scheduledPayments.find(row => row.recurringId === id && !row.paid)?.dueDate
     return data.recurring
-      .filter(r => scheduleBill === 'all' || r.id === scheduleBill)
       .slice()
       .sort((a, b) => {
         const an = nextDue(a.id)
@@ -111,7 +110,35 @@ export function PersonalFinancePage() {
         if (bn) return 1
         return a.name.localeCompare(b.name)
       })
-  }, [data.recurring, scheduleBill, scheduledPayments])
+  }, [data.recurring, scheduledPayments])
+  // The table is arranged by date of payment by default; the column headers
+  // only re-sort it when the user asks for something else.
+  const scheduleRows = useMemo(() => {
+    const value = (row: PFScheduledPayment): string | number => {
+      switch (sortColumn) {
+        case 'name': return row.recurringName.toLowerCase()
+        case 'category': return categoryNameOf(data, row.recurring.categoryId).toLowerCase()
+        case 'amount': return row.amount ?? -1
+        case 'account': return accountNameOf(data, row.recurring.accountId).toLowerCase()
+        case 'status': return statusRank(row)
+        default: return row.dueDate
+      }
+    }
+    const dir = sortDir === 'asc' ? 1 : -1
+    return scheduledPayments.slice().sort((a, b) => {
+      const av = value(a)
+      const bv = value(b)
+      if (av !== bv) return (av < bv ? -1 : 1) * dir
+      return compareScheduledPayments(a, b)
+    })
+  }, [data, scheduledPayments, sortColumn, sortDir])
+  const toggleSort = (column: ScheduleColumn) => {
+    if (column === sortColumn) setSortDir(dir => (dir === 'asc' ? 'desc' : 'asc'))
+    else {
+      setSortColumn(column)
+      setSortDir('asc')
+    }
+  }
   const total = activeAccounts.reduce((s, a) => s + accountBalance(data, a.id), 0)
   const filteredIncome = data.incomes.filter(x => x.date >= from && x.date <= to && (accountFilter === 'all' || x.accountId === accountFilter) && (kindFilter === 'all' || kindFilter === 'income'))
   const filteredExpenses = data.expenses.filter(x => x.date >= from && x.date <= to && (accountFilter === 'all' || x.accountId === accountFilter) && (categoryFilter === 'all' || x.categoryId === categoryFilter) && (kindFilter === 'all' || kindFilter === 'expense') && (paidFilter === 'all' || String(x.paid) === paidFilter))
@@ -222,46 +249,153 @@ export function PersonalFinancePage() {
       <Card>
         <CardHeader className="flex-row items-center justify-between gap-3">
           <div>
-            <CardTitle>Payment schedule</CardTitle>
-            <p className="text-sm text-muted-foreground">Every payment of every bill as its own dated row, grouped by bill — nearest date first.</p>
+            <CardTitle>Recurring payments</CardTitle>
+            <p className="text-sm text-muted-foreground">Every dated payment across your bills, arranged by payment date — nearest first.</p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            <Select value={scheduleBill} onValueChange={setScheduleBill}>
-              <SelectTrigger className="w-40" aria-label="Filter the schedule by bill"><SelectValue/></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All bills</SelectItem>
-                {data.recurring.map(r=><SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
-            <Button onClick={()=>setRecurringOpen(true)}><Plus className="mr-2 h-4 w-4"/>Add</Button>
+            <Button variant={recurringListOpen ? 'default' : 'outline'} onClick={() => setRecurringListOpen(open => !open)}>
+              <List className="mr-2 h-4 w-4"/>Recurring list
+            </Button>
+            <Button onClick={() => setRecurringOpen(true)}><Plus className="mr-2 h-4 w-4"/>Add</Button>
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex items-center justify-between text-xs text-muted-foreground">
-            <span>
-              {visibleSchedule.filter(row=>!row.paid).length} payment{visibleSchedule.filter(row=>!row.paid).length===1?'':'s'} still due
-              {showPaidRows && visibleSchedule.length ? ` · ${visibleSchedule.length} rows listed` : ''}
-            </span>
-            <label className="flex cursor-pointer items-center gap-2">
-              <Switch checked={showPaidRows} onCheckedChange={setShowPaidRows} aria-label="Show paid payments in the schedule"/>
-              Show paid
-            </label>
+          {recurringListOpen && (
+            <div className="space-y-2 rounded-lg border bg-muted/40 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm font-medium">Recurring list — switch payments on or off</p>
+                <span className="text-xs text-muted-foreground">{data.recurring.filter(r => r.active).length} of {data.recurring.length} on</span>
+              </div>
+              {scheduleBills.map(r => {
+                const billRows = scheduledPayments.filter(row => row.recurringId === r.id)
+                const paidCount = billRows.filter(row => row.paid).length
+                const nextRow = billRows.find(row => !row.paid)
+                const finished = r.maxOccurrences !== null && r.runCount >= r.maxOccurrences
+                return (
+                  <div key={r.id} className="flex items-center justify-between gap-3 rounded-lg border bg-card px-3 py-2">
+                    <div className="flex min-w-0 items-center gap-2.5">
+                      <CategoryIcon name={categoryNameOf(data, r.categoryId)} className="h-4 w-4 shrink-0 text-muted-foreground"/>
+                      <div className="min-w-0">
+                        <p className="truncate font-medium">{r.name}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {r.expectedAmount ? m(r.expectedAmount) : 'Variable'} a month · {billRows.length} payment{billRows.length === 1 ? '' : 's'} · {paidCount} paid
+                          {nextRow ? ` · next ${formatShortDate(nextRow.dueDate)}` : ' · nothing left due'}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      {r.maxOccurrences !== null && (
+                        <Badge variant="muted" className="whitespace-nowrap text-[10px]">{Math.min(r.runCount, r.maxOccurrences)}/{r.maxOccurrences} paid</Badge>
+                      )}
+                      <Switch
+                        checked={r.active}
+                        disabled={finished}
+                        title={finished ? 'All configured runs are complete.' : undefined}
+                        aria-label={finished ? `${r.name} completed all configured runs` : `${r.active ? 'Switch off' : 'Switch on'} ${r.name}`}
+                        onCheckedChange={active => setRecurringActive(r.id, active)}
+                      />
+                      <Button size="iconSm" variant="ghost" onClick={() => setRecurringDetails(r)} title={`See ${r.name} details`} aria-label={`See ${r.name} details`}>
+                        <List className="h-4 w-4"/>
+                      </Button>
+                      <Button
+                        size="iconSm"
+                        variant="ghost"
+                        className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                        onClick={() => setDeleteRecurring(r)}
+                        title={`Delete ${r.name}`}
+                        aria-label={`Delete ${r.name}`}
+                      >
+                        <Trash2 className="h-4 w-4"/>
+                      </Button>
+                    </div>
+                  </div>
+                )
+              })}
+              {!data.recurring.length && <p className="text-xs text-muted-foreground">No recurring payments yet — add one to build its schedule.</p>}
+            </div>
+          )}
+          <div className="overflow-x-auto rounded-lg border">
+            <table className="w-full min-w-[860px] border-collapse text-sm">
+              <thead>
+                <tr className="bg-muted/60">
+                  {SCHEDULE_COLUMNS.map(col => {
+                    const active = sortColumn === col.id
+                    return (
+                      <th
+                        key={col.id}
+                        scope="col"
+                        aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                        className={cn('px-3 py-2', col.align === 'right' && 'text-right')}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => toggleSort(col.id)}
+                          title={`Sort by ${col.label}`}
+                          className={cn(
+                            'inline-flex items-center gap-1 text-xs font-semibold',
+                            col.align === 'right' && 'flex-row-reverse',
+                            active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+                          )}
+                        >
+                          {col.label}
+                          {active
+                            ? (sortDir === 'asc' ? <ArrowUp className="h-3 w-3"/> : <ArrowDown className="h-3 w-3"/>)
+                            : <ChevronsUpDown className="h-3 w-3"/>}
+                        </button>
+                      </th>
+                    )
+                  })}
+                  <th scope="col" className="px-3 py-2"><span className="sr-only">Actions</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                {scheduleRows.map(row => {
+                  const category = categoryNameOf(data, row.recurring.categoryId)
+                  return (
+                    <tr key={row.key} className="border-t border-border/60 hover:bg-muted/30">
+                      <td className="whitespace-nowrap px-3 py-2.5">{formatShortDate(row.dueDate)}</td>
+                      <td className="px-3 py-2.5">
+                        <span className="font-medium">{row.recurringName}</span>
+                        {row.recurring.maxOccurrences !== null && (
+                          <span className="ml-1.5 text-xs text-muted-foreground">{row.installmentNumber} of {row.recurring.maxOccurrences}</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <span className="flex items-center gap-2 whitespace-nowrap">
+                          <CategoryIcon name={category} className="h-4 w-4 shrink-0 text-muted-foreground"/>
+                          {category}
+                        </span>
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-2.5 text-right font-semibold">{row.amount !== null ? m(row.amount) : 'Variable'}</td>
+                      <td className="whitespace-nowrap px-3 py-2.5">{accountNameOf(data, row.recurring.accountId)}</td>
+                      <td className="whitespace-nowrap px-3 py-2.5"><StatusBadge row={row}/></td>
+                      <td className="px-3 py-2.5 text-right">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button size="iconSm" variant="ghost" aria-label={`Actions for ${row.recurringName}, due ${formatShortDate(row.dueDate)}`}>
+                              <MoreHorizontal className="h-4 w-4"/>
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            {!row.paid && row.recurring.active && (
+                              <DropdownMenuItem onClick={() => setPayRecurring({ r: row.recurring, i: { id: row.installmentId ?? '', dueDate: row.dueDate, number: row.installmentNumber } })}>
+                                Mark paid
+                              </DropdownMenuItem>
+                            )}
+                            <DropdownMenuItem onClick={() => setRecurringDetails(row.recurring)}>View bill schedule</DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => setDeleteRecurring(row.recurring)} className="text-destructive focus:text-destructive">
+                              Delete bill
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+            {!scheduleRows.length && <Empty text="Add bills, loans, and subscriptions you pay regularly."/>}
           </div>
-          {scheduleBills.map(r=>(
-            <BillScheduleGroup
-              key={r.id}
-              r={r}
-              rows={visibleSchedule.filter(row=>row.recurringId===r.id)}
-              overdueCount={overduePayments.filter(op=>op.recurringId===r.id).length}
-              data={data}
-              currency={currency}
-              onPayRow={row=>setPayRecurring({ r, i: { id: row.installmentId ?? '', dueDate: row.dueDate, number: row.installmentNumber } })}
-              onToggle={active=>setRecurringActive(r.id,active)}
-              onDetails={()=>setRecurringDetails(r)}
-              onDelete={()=>setDeleteRecurring(r)}
-            />
-          ))}
-          {!scheduleBills.length && <Empty text="Add bills, loans, and subscriptions you pay regularly."/>}
         </CardContent>
       </Card>
       <Dialog open={!!recurringDetails} onOpenChange={open=>{if(!open)setRecurringDetails(null)}}><DialogContent className="max-h-[85vh] overflow-y-auto"><DialogHeader><DialogTitle>{recurringDetails?.name} payment schedule</DialogTitle><DialogDescription>Paid months, upcoming installments, and the remaining balance.</DialogDescription></DialogHeader>{recurringDetails&&(()=>{
@@ -322,6 +456,58 @@ export function PersonalFinancePage() {
     <ConfirmDialog open={!!deleteRecurring} onOpenChange={v=>{if(!v)setDeleteRecurring(null)}} title={deleteRecurring ? `Delete ${deleteRecurring.name}?` : 'Delete recurring payment?'} description="This recurring payment will be removed from your tracker. Past transactions already recorded will be kept." confirmLabel="Delete" onConfirm={doDeleteRecurring}/>
     {payRecurring && <PayRecurringDialog recurring={payRecurring.r} installment={payRecurring.i} overduePayment={payRecurring.overduePayment} data={data} close={()=>setPayRecurring(null)} commit={commit}/>}
   </main></div>
+}
+
+/** Table columns of the recurring payments schedule, in display order. */
+const SCHEDULE_COLUMNS: { id: 'date' | 'name' | 'category' | 'amount' | 'account' | 'status'; label: string; align?: 'right' }[] = [
+  { id: 'date', label: 'Next Payment' },
+  { id: 'name', label: 'Name' },
+  { id: 'category', label: 'Category' },
+  { id: 'amount', label: 'Amount', align: 'right' },
+  { id: 'account', label: 'Account' },
+  { id: 'status', label: 'Status' },
+]
+type ScheduleColumn = (typeof SCHEDULE_COLUMNS)[number]['id']
+
+const categoryNameOf = (data: PFData, id: string) => data.categories.find(c => c.id === id)?.name ?? 'Uncategorised'
+const accountNameOf = (data: PFData, id: string) => data.accounts.find(a => a.id === id)?.name ?? 'No account'
+
+/** A row due today or within this many days reads as "Due Soon". */
+const DUE_SOON_DAYS = 3
+const statusRank = (row: PFScheduledPayment) =>
+  row.paid ? 3 : row.status === 'overdue' ? 0 : row.daysFromReference <= DUE_SOON_DAYS ? 1 : 2
+
+/** A small glyph per category, picked from its name (Utilities → bolt, Rent → house…). */
+function CategoryIcon({ name, className }: { name: string; className?: string }) {
+  const n = name.toLowerCase()
+  const Icon =
+    /electric|utilit|power|meralco|light/.test(n) ? Zap
+    : /internet|wifi|broadband|fiber/.test(n) ? Wifi
+    : /water/.test(n) ? Droplet
+    : /rent|house|housing/.test(n) ? Home
+    : /subscri|software|saas|streaming/.test(n) ? CreditCard
+    : /mobile|phone|telecom|sim/.test(n) ? Smartphone
+    : /insur/.test(n) ? Shield
+    : /payroll|salary|staff/.test(n) ? Users
+    : /car|vehicle|auto|fuel/.test(n) ? Car
+    : /loan|credit|financ|bank/.test(n) ? Landmark
+    : /school|tuition|education/.test(n) ? GraduationCap
+    : Receipt
+  return <Icon className={className} aria-hidden/>
+}
+
+/** Status pill for a schedule row: Overdue / Due Soon / Upcoming / Paid. */
+function StatusBadge({ row }: { row: PFScheduledPayment }) {
+  if (row.paid) {
+    return <Badge variant="success" className="gap-1 whitespace-nowrap"><CircleCheck className="h-3.5 w-3.5"/>Paid</Badge>
+  }
+  if (row.status === 'overdue') {
+    return <Badge variant="destructive" className="gap-1 whitespace-nowrap"><AlarmClock className="h-3.5 w-3.5"/>Overdue</Badge>
+  }
+  if (row.daysFromReference <= DUE_SOON_DAYS) {
+    return <Badge className="gap-1 whitespace-nowrap border-transparent bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300"><AlarmClock className="h-3.5 w-3.5"/>Due Soon</Badge>
+  }
+  return <Badge className="gap-1 whitespace-nowrap border-transparent bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300"><Clock className="h-3.5 w-3.5"/>Upcoming</Badge>
 }
 
 function Metric({label,value,tone}:{label:string;value:string;tone:string}) { return <Card className={tone==='green'?'border-emerald-200':tone==='orange'?'border-orange-200':'border-blue-200'}><CardContent className="pt-6"><p className="text-sm text-muted-foreground">{label}</p><p className="mt-1 text-2xl font-bold">{value}</p></CardContent></Card> }
@@ -593,108 +779,6 @@ function RecurringDialog({open,close,data,commit}:{open:boolean;close:()=>void;d
     </Dialog>
   )
 }
-/**
- * One bill's block in the payment schedule: a header with its progress and
- * controls, then a row per payment — nearest date first, paid ones below.
- */
-function BillScheduleGroup({
-  r,
-  rows,
-  overdueCount,
-  data,
-  currency,
-  onPayRow,
-  onToggle,
-  onDetails,
-  onDelete,
-}: {
-  r: PFData['recurring'][number]
-  rows: PFScheduledPayment[]
-  overdueCount: number
-  data: PFData
-  currency: string
-  onPayRow: (row: PFScheduledPayment) => void
-  onToggle: (active: boolean) => void
-  onDetails: () => void
-  onDelete: () => void
-}) {
-  const paidCount = rows.filter(row => row.paid).length
-  const nextRow = rows.find(row => !row.paid)
-  const finished = r.maxOccurrences !== null && r.runCount >= r.maxOccurrences
-  return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted/40 px-3 py-2">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <p className="truncate font-semibold">{r.name}</p>
-            {overdueCount > 0 && (
-              <Badge variant="destructive" className="gap-1 whitespace-nowrap text-[10px]">
-                <AlertTriangle className="h-3 w-3"/>
-                {overdueCount} overdue
-              </Badge>
-            )}
-            {r.maxOccurrences !== null && (
-              <Badge variant="muted" className="whitespace-nowrap text-[10px]">
-                {Math.min(r.runCount, r.maxOccurrences)}/{r.maxOccurrences} paid
-              </Badge>
-            )}
-            {!r.active && <Badge variant="muted" className="whitespace-nowrap text-[10px]">Off</Badge>}
-          </div>
-          <p className="text-xs text-muted-foreground">
-            {r.expectedAmount ? `${money(r.expectedAmount, currency)} a month` : 'Variable amount'}
-            {` · ${rows.length} payment${rows.length === 1 ? '' : 's'} listed · ${paidCount} paid`}
-            {nextRow ? ` · next ${formatShortDate(nextRow.dueDate)}` : r.active ? '' : ' · nothing left due'}
-            {r.maxOccurrences === null ? ' · until switched off' : ''}
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
-          <Switch
-            checked={r.active}
-            disabled={finished}
-            title={finished ? 'All configured runs are complete.' : undefined}
-            aria-label={finished ? `${r.name} completed all configured runs` : `${r.active ? 'Switch off' : 'Switch on'} ${r.name}`}
-            onCheckedChange={onToggle}
-          />
-          <Button size="iconSm" variant="ghost" onClick={onDetails} title={`See ${r.name} details`} aria-label={`See ${r.name} details`}>
-            <List className="h-4 w-4"/>
-          </Button>
-          <Button
-            size="iconSm"
-            variant="ghost"
-            className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-            onClick={onDelete}
-            title={`Delete ${r.name}`}
-            aria-label={`Delete ${r.name}`}
-          >
-            <Trash2 className="h-4 w-4"/>
-          </Button>
-        </div>
-      </div>
-      {rows.map(row => (
-        <RecurringRow
-          key={row.key}
-          r={row.recurring}
-          installment={{ id: row.installmentId ?? '', dueDate: row.dueDate, number: row.installmentNumber, paid: row.paid }}
-          isOverdue={row.status === 'overdue'}
-          daysOverdue={row.status === 'overdue' ? Math.abs(row.daysFromReference) : undefined}
-          dueLabel={scheduledPaymentLabel(row)}
-          projected={row.projected}
-          showName={false}
-          showCountBadge={false}
-          data={data}
-          currency={currency}
-          onPay={() => onPayRow(row)}
-        />
-      ))}
-      {!rows.length && (
-        <p className="px-1 text-xs text-muted-foreground">
-          No payments listed here right now — switch &quot;Show paid&quot; on to see the ones already settled.
-        </p>
-      )}
-    </div>
-  )
-}
-
 function RecurringRow({
   r,
   installment,
@@ -703,8 +787,6 @@ function RecurringRow({
   overdueCount,
   dueLabel,
   projected,
-  showName = true,
-  showCountBadge = true,
   data,
   currency,
   onPay,
@@ -718,10 +800,6 @@ function RecurringRow({
   dueLabel?: string
   /** True when the date is projected for an open-ended bill with no stored schedule. */
   projected?: boolean
-  /** Set false when the row sits under a bill header that already names it. */
-  showName?: boolean
-  /** Set false when the bill header already carries the "x/y paid" badge. */
-  showCountBadge?: boolean
   data: PFData
   currency: string
   onPay: () => void
@@ -738,7 +816,7 @@ function RecurringRow({
     )}>
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-1.5">
-          {showName && <p className="font-medium">{r.name}</p>}
+          <p className="font-medium">{r.name}</p>
           {showOverdue && (
             <Badge variant="destructive" className="gap-1 whitespace-nowrap text-[10px]">
               <AlertTriangle className="h-3 w-3" />
@@ -753,7 +831,7 @@ function RecurringRow({
                 : showOverdue && daysOverdue ? ` (${daysOverdue}d overdue)` : ''}
             </p>
           )}
-          {showCountBadge && r.maxOccurrences !== null && (
+          {r.maxOccurrences !== null && (
             <Badge variant="muted" className="whitespace-nowrap text-[10px]">
               {Math.min(r.runCount, r.maxOccurrences)}/{r.maxOccurrences} paid
             </Badge>
