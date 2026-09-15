@@ -29,6 +29,11 @@ import type {
   FinanceItem,
   FinanceKind,
   FinanceStatus,
+  Ticket,
+  TicketReply,
+  TicketAssignee,
+  CreateTicketInput,
+  UpdateTicketInput,
   BillingCycle,
 } from './types'
 import {
@@ -50,6 +55,17 @@ import {
 import type { DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, CreateFinanceItemInput, CreateMeetingInput, CreateNoteInput, CreateInvoiceInput } from './backend'
 import { ACCOUNT_DEACTIVATED_MESSAGE } from './backend'
 import { buildDemoSeed } from './demoSeed'
+import {
+  IT_SUPPORT_PERMISSION,
+  MAX_TICKET_ATTACHMENTS,
+  isItSupport as isItSupportGrant,
+  normalizeTicketCategory,
+  normalizeTicketPriority,
+  normalizeTicketStatus,
+  sortTickets,
+  ticketRef,
+  ticketStatusLabel,
+} from './tickets'
 import { uid, computeEarnings, formatMinutes, formatDate } from './utils'
 import { storage } from './storage'
 
@@ -86,6 +102,10 @@ interface UserData {
   clientPriorities: ClientPriority[]
   /** The meetings schedule (see the Meetings page). */
   meetings: Meeting[]
+  /** IT Support tickets (see the IT Support page). */
+  tickets: Ticket[]
+  /** Replies on those tickets, oldest first per ticket. */
+  ticketReplies: TicketReply[]
   /** Every account's private notepad notes — rows carry `owner_id` (see the Notepad page). */
   notes: Note[]
   /** The client invoicing board's cards (see the Client Invoicing page). */
@@ -122,7 +142,7 @@ function writeUsers(users: StoredUser[]) {
 }
 
 function emptyData(): UserData {
-  return { workers: [], entries: [], activeTimers: [], settings: null, comments: [], notifications: [], payments: [], tasks: [], clients: [], clientPriorities: [], meetings: [], notes: [], invoices: [], financeItems: [] }
+  return { workers: [], entries: [], activeTimers: [], settings: null, comments: [], notifications: [], payments: [], tasks: [], clients: [], clientPriorities: [], meetings: [], notes: [], invoices: [], financeItems: [], tickets: [], ticketReplies: [] }
 }
 
 /** The method the admin paid a settlement with, or null when unknown/invalid. */
@@ -387,6 +407,38 @@ function sortInvoices(rows: Invoice[]): Invoice[] {
   return [...rows].sort((a, b) => a.due_date.localeCompare(b.due_date) || a.created_at.localeCompare(b.created_at))
 }
 
+// ---- IT Support tickets -----------------------------------------------------
+
+/**
+ * Repair a stored ticket (and one written by an older build): unknown
+ * categories/priorities/statuses fall back to the safe value rather than
+ * disappearing from the queue, and `attachments` is always a list.
+ */
+function normalizeTicket(ticket: Ticket): Ticket {
+  const number = Number(ticket.number)
+  return {
+    ...ticket,
+    number: Number.isFinite(number) && number > 0 ? Math.floor(number) : 0,
+    subject: String(ticket.subject ?? ''),
+    description: String(ticket.description ?? ''),
+    category: normalizeTicketCategory(ticket.category),
+    priority: normalizeTicketPriority(ticket.priority),
+    status: normalizeTicketStatus(ticket.status),
+    attachments: Array.isArray(ticket.attachments) ? ticket.attachments.filter((a) => typeof a === 'string') : [],
+    reply_count: Number.isFinite(Number(ticket.reply_count)) ? Math.max(0, Math.floor(Number(ticket.reply_count))) : 0,
+    resolved_at: ticket.resolved_at ?? null,
+  }
+}
+
+function normalizeTicketReply(reply: TicketReply): TicketReply {
+  return {
+    ...reply,
+    body: String(reply.body ?? ''),
+    author_name: String(reply.author_name ?? 'A teammate'),
+    from_support: !!reply.from_support,
+  }
+}
+
 // ---- Finance ledger ---------------------------------------------------------
 // One list of due-dated lines (subscription / payroll / bill). Rows are owned
 // by the admin workspace like everything else; `finance.view` opens the read,
@@ -525,6 +577,11 @@ function readData(userId: string): UserData {
   d.notes = (d.notes || []).map(normalizeNote)
   // Workspaces saved before the invoicing section simply load an empty board.
   d.invoices = (d.invoices || []).map(normalizeInvoice)
+  // Workspaces saved before IT Support simply load an empty ticket queue.
+  d.tickets = (d.tickets || []).map(normalizeTicket)
+  d.ticketReplies = (d.ticketReplies || []).map(normalizeTicketReply)
+  // Notifications written before tickets existed have no ticket target.
+  d.notifications = (d.notifications || []).map((n) => ({ ...n, ticket_id: n.ticket_id ?? null }))
   // A client that was deleted should not keep a phantom place on the board.
   const clientIds = new Set(d.clients.map((c) => c.id))
   const beforePrune = d.clientPriorities.length
@@ -645,16 +702,50 @@ function workerUserId(workerId: string): string | null {
   return readUsers().find((u) => u.workerId === workerId)?.id ?? null
 }
 
-function pushNotification(data: UserData, recipientUserId: string, n: Omit<AppNotification, 'id' | 'user_id' | 'read' | 'created_at'>) {
+function pushNotification(
+  data: UserData,
+  recipientUserId: string,
+  // `ticket_id` is optional here so the many entry/timer notification call
+  // sites stay short; only IT Support notifications carry a ticket.
+  n: Omit<AppNotification, 'id' | 'user_id' | 'read' | 'created_at' | 'ticket_id'> & { ticket_id?: string | null }
+) {
   data.notifications.push({
     id: uid(),
     user_id: recipientUserId,
     entry_id: n.entry_id,
+    ticket_id: n.ticket_id ?? null,
     type: n.type,
     message: n.message,
     read: false,
     created_at: new Date().toISOString(),
   })
+}
+
+// ---- IT Support tickets ----------------------------------------------------
+
+/**
+ * Auth ids of the accounts that run IT Support — the only people who see the
+ * queue. Note what is *missing*: the admin. The grant is worker-only by design
+ * (see `isItSupport()` in ./tickets), so the admin is never a recipient here
+ * unless they were somehow given a worker row with the grant.
+ */
+function itSupportUserIds(data: UserData): string[] {
+  return data.workers
+    .filter((w) => (w.permissions ?? []).includes(IT_SUPPORT_PERMISSION))
+    .map((w) => workerUserId(w.id))
+    .filter((id): id is string => !!id)
+}
+
+/** Display name for the account doing something: the worker's name, else "Admin". */
+function actorName(c: { user: AuthUser; data: UserData }): string {
+  if (c.user.role === 'admin') return 'Admin'
+  return c.data.workers.find((w) => w.id === c.user.workerId)?.name || c.user.email
+}
+
+/** Everyone who should hear about a ticket: the assignee, else all of IT Support. */
+function ticketAudience(data: UserData, ticket: Ticket): string[] {
+  if (ticket.assignee_user_id) return [ticket.assignee_user_id]
+  return itSupportUserIds(data)
 }
 
 /** The signed-in user's own timer (admin: the most recently started one). */
@@ -1377,8 +1468,6 @@ export const localBackend: DataBackend = {
         avatar_url: null,
         // No server in demo mode, so no scheduled sync — the UI uses the bundled
         // fallback rate and marks it approximate.
-        usd_php_rate: null,
-        usd_php_rate_updated_at: null,
       }
       save(c.data)
     }
@@ -1389,7 +1478,7 @@ export const localBackend: DataBackend = {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
     if (!can(c, 'settings.manage')) return denied('change business settings')
-    if (!c.data.settings) c.data.settings = { id: 'settings-1', business_name: 'My Business', currency: 'USD', timezone: 'UTC', default_hourly_rate: 20, avatar_url: null, usd_php_rate: null, usd_php_rate_updated_at: null }
+    if (!c.data.settings) c.data.settings = { id: 'settings-1', business_name: 'My Business', currency: 'USD', timezone: 'UTC', default_hourly_rate: 20, avatar_url: null }
     c.data.settings = { ...c.data.settings, ...patch }
     save(c.data)
     return { data: c.data.settings, error: null }
@@ -1494,13 +1583,14 @@ export const localBackend: DataBackend = {
     return { data: null, error: null }
   },
 
-  async createNotification(recipientUserId: string, n: { entry_id?: string | null; type: AppNotification['type']; message: string }) {
+  async createNotification(recipientUserId: string, n: { entry_id?: string | null; ticket_id?: string | null; type: AppNotification['type']; message: string }) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
     const notif: AppNotification = {
       id: uid(),
       user_id: recipientUserId,
       entry_id: n.entry_id ?? null,
+      ticket_id: n.ticket_id ?? null,
       type: n.type,
       message: n.message,
       read: false,
@@ -2262,6 +2352,175 @@ export const localBackend: DataBackend = {
     return { data: null, error: null }
   },
 
+  // ---- IT Support tickets -------------------------------------------------
+
+  async listTickets() {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    // The queue is for IT Support. Everyone else gets their own submissions
+    // only — which is how a requester's ticket is found from a notification —
+    // and the admin is *not* IT Support (the grant is worker-only).
+    const support = isItSupportGrant(c.user.role, c.user.permissions)
+    const rows = support ? c.data.tickets : c.data.tickets.filter((t) => t.requester_user_id === c.user.id)
+    // Attachments are the heavy column: the list read leaves them out and
+    // `getTicket` brings them for the one ticket being opened.
+    return { data: sortTickets(rows).map((t) => ({ ...t, attachments: [] as string[] })), error: null }
+  },
+
+  async getTicket(ticketId: string) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    const ticket = c.data.tickets.find((t) => t.id === ticketId)
+    if (!ticket) return { data: null, error: 'That ticket no longer exists.' }
+    // Readable by IT Support, and by the person who submitted it.
+    if (!isItSupportGrant(c.user.role, c.user.permissions) && ticket.requester_user_id !== c.user.id) {
+      return denied('read that ticket')
+    }
+    const replies = c.data.ticketReplies
+      .filter((r) => r.ticket_id === ticket.id)
+      .sort((a, b) => a.created_at.localeCompare(b.created_at))
+    return { data: { ticket, replies }, error: null }
+  },
+
+  async createTicket(input: CreateTicketInput) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    const subject = input.subject?.trim()
+    if (!subject) return { data: null, error: 'Give the ticket a subject.' }
+    const description = input.description?.trim()
+    if (!description) return { data: null, error: 'Describe what is going wrong.' }
+    const now = new Date().toISOString()
+    const ticket: Ticket = {
+      id: uid(),
+      number: c.data.tickets.reduce((max, t) => Math.max(max, t.number), 0) + 1,
+      subject,
+      description,
+      category: normalizeTicketCategory(input.category),
+      priority: normalizeTicketPriority(input.priority),
+      status: 'open',
+      requester_user_id: c.user.id,
+      requester_name: actorName(c),
+      assignee_user_id: null,
+      assignee_name: null,
+      attachments: (input.attachments ?? []).slice(0, MAX_TICKET_ATTACHMENTS),
+      reply_count: 0,
+      created_at: now,
+      updated_at: now,
+      resolved_at: null,
+    }
+    c.data.tickets.push(ticket)
+    // Alert the desk. Anyone can submit (including the admin), but the alert
+    // only ever goes to the accounts holding the IT Support grant.
+    for (const userId of itSupportUserIds(c.data)) {
+      if (userId === c.user.id) continue
+      pushNotification(c.data, userId, {
+        entry_id: null,
+        ticket_id: ticket.id,
+        type: 'ticket',
+        message: `${ticket.requester_name} submitted ticket ${ticketRef(ticket)} — ${ticket.subject}`,
+      })
+    }
+    save(c.data)
+    return { data: ticket, error: null }
+  },
+
+  async updateTicket(ticketId: string, patch: UpdateTicketInput) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (!isItSupportGrant(c.user.role, c.user.permissions)) return denied('change a ticket')
+    const ticket = c.data.tickets.find((t) => t.id === ticketId)
+    if (!ticket) return { data: null, error: 'That ticket no longer exists.' }
+    const now = new Date().toISOString()
+
+    if (patch.status !== undefined) {
+      const status = normalizeTicketStatus(patch.status)
+      if (status !== ticket.status) {
+        ticket.status = status
+        ticket.resolved_at = status === 'resolved' ? now : null
+        // Tell the requester their ticket moved — this is the loop closing for
+        // whoever reported the problem.
+        if (ticket.requester_user_id !== c.user.id) {
+          pushNotification(c.data, ticket.requester_user_id, {
+            entry_id: null,
+            ticket_id: ticket.id,
+            type: 'ticket',
+            message: `${ticketRef(ticket)} is now ${ticketStatusLabel(status)} — ${ticket.subject}`,
+          })
+        }
+      }
+    }
+
+    if (patch.assignee_user_id !== undefined) {
+      if (patch.assignee_user_id && !itSupportUserIds(c.data).includes(patch.assignee_user_id)) {
+        return { data: null, error: 'Tickets can only be assigned to someone with IT Support access.' }
+      }
+      ticket.assignee_user_id = patch.assignee_user_id
+      ticket.assignee_name = patch.assignee_user_id ? patch.assignee_name?.trim() || 'IT Support' : null
+    }
+
+    ticket.updated_at = now
+    save(c.data)
+    return { data: ticket, error: null }
+  },
+
+  async addTicketReply(ticketId: string, body: string) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    const text = body?.trim()
+    if (!text) return { data: null, error: 'Write a message first.' }
+    const ticket = c.data.tickets.find((t) => t.id === ticketId)
+    if (!ticket) return { data: null, error: 'That ticket no longer exists.' }
+    const support = isItSupportGrant(c.user.role, c.user.permissions)
+    if (!support && ticket.requester_user_id !== c.user.id) return denied('reply on that ticket')
+
+    const now = new Date().toISOString()
+    const reply: TicketReply = {
+      id: uid(),
+      ticket_id: ticket.id,
+      author_user_id: c.user.id,
+      author_name: actorName(c),
+      from_support: support,
+      body: text,
+      created_at: now,
+    }
+    c.data.ticketReplies.push(reply)
+    ticket.reply_count += 1
+    ticket.updated_at = now
+
+    // The reply goes to the other side: the requester hears from the desk, and
+    // the desk hears from the requester (the assignee when there is one, all of
+    // IT Support while the ticket is still unclaimed).
+    const recipients = support ? [ticket.requester_user_id] : ticketAudience(c.data, ticket)
+    for (const userId of recipients) {
+      if (userId === c.user.id) continue
+      pushNotification(c.data, userId, {
+        entry_id: null,
+        ticket_id: ticket.id,
+        type: 'ticket',
+        message: support
+          ? `IT Support replied on ${ticketRef(ticket)} — ${ticket.subject}`
+          : `${reply.author_name} replied on ${ticketRef(ticket)} — ${ticket.subject}`,
+      })
+    }
+
+    save(c.data)
+    return { data: reply, error: null }
+  },
+
+  async listItSupportAssignees() {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (!isItSupportGrant(c.user.role, c.user.permissions)) return denied('see the IT Support team')
+    const rows: TicketAssignee[] = c.data.workers
+      .filter((w) => (w.permissions ?? []).includes(IT_SUPPORT_PERMISSION))
+      .map((w) => {
+        const userId = workerUserId(w.id)
+        return userId ? { user_id: userId, name: w.name } : null
+      })
+      .filter((r): r is TicketAssignee => r !== null)
+    return { data: rows, error: null }
+  },
+
   async seedDemo() {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
@@ -2310,6 +2569,11 @@ export const localBackend: DataBackend = {
         worker_id: f.worker_id ? idMap.get(f.worker_id) ?? null : null,
         id: uid(),
       })),
+      // Sample data deliberately ships no tickets: a fresh desk is the honest
+      // starting state, and the first ticket anyone submits is what proves the
+      // whole path (submit → notify the grant holder) end to end.
+      tickets: [],
+      ticketReplies: [],
     }
     save(next)
     return { data: null, error: null }

@@ -7,22 +7,18 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/EmptyState'
 import { ActiveWorkersPanel } from '@/components/ActiveWorkersPanel'
-import { RateChip } from '@/components/RateChip'
+import { FaqButton } from '@/components/FaqButton'
+import { PageHeader } from '@/components/PageHeader'
 import {
   Clock, DollarSign, CalendarRange, Wallet, Plus, Users, ListChecks,
 } from 'lucide-react'
 import { money, formatMinutes, formatDate } from '@/lib/utils'
-import { phpEquivalent, usdPhpRate } from '@/lib/fx'
 import { dateRangeFor, filterEntriesInRange, summarizeEntries, hoursByWorker } from '@/lib/stats'
 
 export function DashboardPage() {
   const { entries, workers, clients, settings, dataLoading, can } = useStore()
   const navigate = useNavigate()
   const currency = settings?.currency || 'USD'
-  // Null unless the workspace bills in USD — then phpEquivalent() returns
-  // undefined and the earnings cards render with no sub-line, exactly as
-  // before. Costs nothing to compute; the rate is already on `settings`.
-  const fx = usdPhpRate(settings)
 
   const today = useMemo(() => {
     const { from, to } = dateRangeFor('today')
@@ -43,15 +39,13 @@ export function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      {/* Title row mirrors PageHeader's layout so the rate chip floats
-          top-right on desktop and wraps below the title on phones. */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="space-y-1">
-          <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Dashboard</h1>
-          <p className="text-sm text-muted-foreground">Overview of your team’s time and earnings.</p>
-        </div>
-        <RateChip settings={settings} />
-      </div>
+      {/* Same title row as every other page (`PageHeader`) — the FAQ button
+          takes the upper-left slot. */}
+      <PageHeader
+        title="Dashboard"
+        description="Overview of your team’s time and earnings."
+        leading={<FaqButton />}
+      />
 
       {/* Everyone currently on the clock (working or on break) */}
       <ActiveWorkersPanel />
@@ -59,9 +53,9 @@ export function DashboardPage() {
       {/* Stat cards */}
       <div className="grid grid-cols-2 gap-4">
         <StatCard label="Today's Hours" value={formatMinutes(todaySum.totalMinutes)} icon={Clock} loading={dataLoading} accent />
-        <StatCard label="Today's Earnings" value={money(todaySum.earnings, currency)} sub={phpEquivalent(todaySum.earnings, fx)} icon={DollarSign} loading={dataLoading} accent />
+        <StatCard label="Today's Earnings" value={money(todaySum.earnings, currency)} icon={DollarSign} loading={dataLoading} accent />
         <StatCard label="This Week" value={formatMinutes(weekSum.totalMinutes)} icon={CalendarRange} loading={dataLoading} />
-        <StatCard label="Week's Earnings" value={money(weekSum.earnings, currency)} sub={phpEquivalent(weekSum.earnings, fx)} icon={Wallet} loading={dataLoading} />
+        <StatCard label="Week's Earnings" value={money(weekSum.earnings, currency)} icon={Wallet} loading={dataLoading} />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">

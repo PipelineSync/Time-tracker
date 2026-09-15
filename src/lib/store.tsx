@@ -30,8 +30,15 @@ import type {
   Permission,
   Invoice,
   FinanceItem,
+  Ticket,
+  TicketReply,
+  TicketThread,
+  TicketAssignee,
+  CreateTicketInput,
+  UpdateTicketInput,
 } from './types'
 import { PERMISSIONS, normalizePermissions, canViewAllEntries } from './types'
+import { IT_SUPPORT_PERMISSION, isItSupport as isItSupportGrant } from './tickets'
 import type { DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, BackendResult, CreateFinanceItemInput, CreateMeetingInput, CreateNoteInput, CreateInvoiceInput } from './backend'
 import { localBackend } from './localDb'
 import { supabaseBackend, isSupabaseConfigured, ACCOUNT_DEACTIVATED_MESSAGE } from './supabaseDb'
@@ -62,38 +69,6 @@ const FOCUS_FULL_MIN_MS = 90_000     // a refocus re-loads the full window at mo
 // clock chime: long enough to outlive the poll that picks the change up, short
 // enough that an id is never ignored forever.
 const LOCAL_ACTION_TTL_MS = 30_000
-
-// ---- FX rate self-healing --------------------------------------------------
-// The twice-daily sync-fx-rate Netlify Function is the mechanism that writes the
-// USD → PHP rate. If its schedule stops entirely (deploy gap, missing
-// SUPABASE_SECRET_KEY or CURRENCYFREAKS_API_KEY, provider outage), the rate
-// goes stale and never self-heals until someone notices.
-//
-// Fix: whenever the app loads settings and the stored rate is > 23 h old, call
-// the Netlify function endpoint from the browser (fire-and-forget). The
-// function fetches a fresh rate from the provider and writes it to the database
-// using its server-side secret key; the next settings poll (≤ 60 s later) picks
-// it up. We only do this once per page-load and only on Supabase deployments
-// (the local/demo backend has no server to write to). In dev or non-Netlify
-// environments the request will 404 — the catch silently ignores it.
-//
-// The threshold deliberately stays at "a whole day" rather than tracking the
-// 12-hour schedule: the rate provider is metered (1,000 requests a month on the
-// free plan), and a tab that re-triggers on every reload while the rate is
-// legitimately between two scheduled runs would spend that quota for nothing.
-// A rate less than 12 h old is exactly what the schedule is meant to produce.
-// The function also throttles repeat calls on its side, so a trigger that does
-// fire cannot multiply into provider requests.
-const fxSyncTriggered = { value: false }
-
-function triggerFxSyncIfStale(settings: Settings): void {
-  if (fxSyncTriggered.value) return
-  const updatedAt = settings.usd_php_rate_updated_at
-  const ageMs = updatedAt ? Date.now() - new Date(updatedAt).getTime() : Infinity
-  if (ageMs <= 23 * 3_600_000) return
-  fxSyncTriggered.value = true
-  fetch('/.netlify/functions/sync-fx-rate').catch(() => undefined)
-}
 
 function sortEntriesDesc(rows: TimeEntry[]): TimeEntry[] {
   return [...rows].sort((a, b) => b.start_time.localeCompare(a.start_time))
@@ -185,6 +160,20 @@ interface StoreValue {
    * first. Empty for anyone the admin has not granted `finance.view`.
    */
   financeItems: FinanceItem[]
+  /**
+   * IT Support tickets. For an account running IT Support this is the whole
+   * queue; for anyone else it holds only the tickets they submitted themselves
+   * (so a requester can open their own from a notification). Empty — never an
+   * error — for a workspace whose database has not run the migration yet.
+   */
+  tickets: Ticket[]
+  /**
+   * Does the signed-in account run IT Support? **Worker-only, and the only
+   * gate the IT Support screens may use**: the admin deliberately does not hold
+   * this capability, so `can('it_support.manage')` is false for the admin too.
+   * See `isItSupport()` in `@/lib/tickets`.
+   */
+  isItSupport: boolean
   unreadCount: number
   dataLoading: boolean
   /** Fetch the next page of entries older than everything currently loaded
@@ -278,6 +267,20 @@ interface StoreValue {
   /** Remove one of the signed-in user's notes. */
   deleteNote: (id: string) => Promise<boolean>
 
+  // ---- IT Support tickets (granted workers only — never the admin) ----
+  /** Re-read the ticket queue (IT Support) or your own submissions. */
+  refreshTickets: () => Promise<void>
+  /** Submit a ticket. Open to **everyone**, including the admin. */
+  submitTicket: (input: CreateTicketInput) => Promise<Ticket | null>
+  /** One ticket with its replies and attachments — IT Support, or its requester. */
+  openTicket: (ticketId: string) => Promise<TicketThread | null>
+  /** Status / assignee changes. IT Support only. */
+  updateTicket: (ticketId: string, patch: UpdateTicketInput) => Promise<Ticket | null>
+  /** Reply on a ticket — IT Support, or the requester on their own. */
+  replyToTicket: (ticketId: string, body: string) => Promise<TicketReply | null>
+  /** Who a ticket can be assigned to (the current IT Support holders). */
+  listItSupportAssignees: () => Promise<TicketAssignee[]>
+
   // ---- Client invoicing (admin + granted workers) ----
   /** Raise an invoice on the board. invoices.view. */
   createInvoice: (input: CreateInvoiceInput) => Promise<Invoice | null>
@@ -337,6 +340,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [notes, setNotes] = useState<Note[]>([])
   const [invoices, setInvoices] = useState<Invoice[]>([])
   const [financeItems, setFinanceItems] = useState<FinanceItem[]>([])
+  const [tickets, setTickets] = useState<Ticket[]>([])
   const [dataLoading, setDataLoading] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
   const dataVersion = useRef(0)
@@ -367,7 +371,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // change without the worker having to sign out.
   const myWorker = user?.workerId ? workers.find((w) => w.id === user.workerId) : undefined
   const permissions = useMemo<Permission[]>(() => {
-    if (isAdmin) return [...PERMISSIONS]
+    // The admin holds every capability — except IT Support, which is a worker's
+    // job, not the owner's. Excluding it here (rather than only in the screens)
+    // means `can('it_support.manage')` is honest for the admin as well, so the
+    // whole app agrees with `isItSupport` below and with the SQL policy.
+    if (isAdmin) return PERMISSIONS.filter((p) => p !== IT_SUPPORT_PERMISSION)
     if (myWorker) return normalizePermissions(myWorker.permissions)
     return normalizePermissions(user?.permissions)
   }, [isAdmin, myWorker, user])
@@ -378,6 +386,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // Read inside refreshData: the entry window depends on the grants, but the
   // grants must not become a dependency of refreshData itself (the worker
   // list it refetches feeds them, which would refresh forever).
+  /**
+   * The IT Support gate. Computed from the signed-in account's **role and own
+   * grant list**, not from `can()`: the admin is excluded by construction, so
+   * the queue belongs to whoever the admin granted it to and to nobody else.
+   */
+  const isItSupport = useMemo(
+    () => isItSupportGrant(user?.role, permissions),
+    [user?.role, permissions],
+  )
   const permissionsRef = useRef(permissions)
   useEffect(() => { permissionsRef.current = permissions }, [permissions])
 
@@ -463,7 +480,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // Captured BEFORE the query: rows updated after this instant are picked
       // up by the next delta; duplicates are harmless (merged by id).
       const syncTime = new Date().toISOString()
-      const [w, e, s, at, n, p, u, t, cl, cp, mt, nt, inv, fi] = await Promise.all([
+      const [w, e, s, at, n, p, u, t, cl, cp, mt, nt, inv, fi, tk] = await Promise.all([
         light ? skipped<Worker[]>() : backend.listWorkers(),
         useDelta
           ? backend.listEntries({ since, limit: ENTRY_DELTA_LIMIT })
@@ -500,6 +517,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         // Same for the finance ledger (due dates move only when the app itself
         // advances them). An ungranted worker gets an empty list, not an error.
         light ? skipped<FinanceItem[]>() : backend.listFinanceItems(),
+        // Tickets ride with the same group: the queue only changes when someone
+        // submits or replies, and IT Support sees a fresh one within the tick.
+        light ? skipped<Ticket[]>() : backend.listTickets(),
       ])
       if (token !== dataVersion.current) return
       if (w.data) setWorkers(withAvatars(w.data, avatarsRef.current))
@@ -522,10 +542,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
         lastEntrySyncAt.current = syncTime
       }
-      if (s.data) {
-        setSettings(s.data)
-        if (isSupabaseConfigured()) triggerFxSyncIfStale(s.data)
-      }
+      if (s.data) setSettings(s.data)
       // Clear on a clean empty result (someone clocked out elsewhere); keep the
       // previous value when the backend errored so a blip doesn't hide a timer.
       if (!at.error) {
@@ -556,6 +573,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (nt.data) setNotes(nt.data)
       if (inv.data) setInvoices(inv.data)
       if (fi.data) setFinanceItems(fi.data)
+      if (tk.data) setTickets(tk.data)
     } finally {
       refreshInFlight.current = false
       if (token === dataVersion.current) setDataLoading(false)
@@ -1272,6 +1290,59 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // Meetings). A drag that lands while another device moves the same card
   // simply wins on the next tick — there is no ranking to merge.
 
+  // ---- IT Support ---------------------------------------------------------
+
+  const refreshTickets = useCallback(async () => {
+    const res = await backend.listTickets()
+    if (res.data) setTickets(res.data)
+  }, [backend])
+
+  const submitTicket = useCallback(async (input: CreateTicketInput) => {
+    const res = await backend.createTicket(input)
+    if (res.error || !res.data) {
+      toast.error(res.error || 'Could not submit the ticket.')
+      return null
+    }
+    // The requester is not the desk, so their own list (when they have one)
+    // and the queue both want a refresh.
+    await refreshTickets()
+    return res.data
+  }, [backend, refreshTickets])
+
+  const openTicket = useCallback(async (ticketId: string) => {
+    const res = await backend.getTicket(ticketId)
+    if (res.error || !res.data) {
+      toast.error(res.error || 'Could not open that ticket.')
+      return null
+    }
+    return res.data
+  }, [backend])
+
+  const updateTicket = useCallback(async (ticketId: string, patch: UpdateTicketInput) => {
+    const res = await backend.updateTicket(ticketId, patch)
+    if (res.error || !res.data) {
+      toast.error(res.error || 'Could not update the ticket.')
+      return null
+    }
+    await refreshTickets()
+    return res.data
+  }, [backend, refreshTickets])
+
+  const replyToTicket = useCallback(async (ticketId: string, body: string) => {
+    const res = await backend.addTicketReply(ticketId, body)
+    if (res.error || !res.data) {
+      toast.error(res.error || 'Could not send the reply.')
+      return null
+    }
+    await refreshTickets()
+    return res.data
+  }, [backend, refreshTickets])
+
+  const listItSupportAssignees = useCallback(async () => {
+    const res = await backend.listItSupportAssignees()
+    return res.data ?? []
+  }, [backend])
+
   const refreshInvoices = useCallback(async () => {
     const res = await backend.listInvoices()
     if (res.data) setInvoices(res.data)
@@ -1512,6 +1583,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     notes,
     invoices,
     financeItems,
+    tickets,
+    isItSupport,
     unreadCount,
     dataLoading,
     loadOlderEntries,
@@ -1559,6 +1632,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     createNote,
     updateNote,
     deleteNote,
+    refreshTickets,
+    submitTicket,
+    openTicket,
+    updateTicket,
+    replyToTicket,
+    listItSupportAssignees,
     createInvoice,
     updateInvoice,
     deleteInvoice,

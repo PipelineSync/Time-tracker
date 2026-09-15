@@ -478,6 +478,11 @@ export function SettingsPage() {
             </CardContent>
           </Card>
 
+          {/* The control for the chip on the Dashboard / Clock In title rows.
+              Renders nothing unless this workspace bills in USD. */}
+          <div className="mt-4">
+          </div>
+
           <div className="mt-4">
             <SlackSettingsCard />
           </div>

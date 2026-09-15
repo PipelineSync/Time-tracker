@@ -7,6 +7,10 @@
  *  - a grant ADDS the team-wide screen under "Access Granted" and *replaces*
  *    its "my own" twin, instead of leaving two links to the same route
  *  - the admin keeps the single, full, heading-less section
+ *  - the IT Support *desk* is the granted worker's alone — the admin never gets
+ *    it, even when the flag is passed in — while **Submit a Ticket is not a
+ *    destination at all**: it lives in the FAQs dialog, so no account has a nav
+ *    entry for it (`FaqButton` renders the button)
  *
  * The keys are what `AppLayout` turns into icons + labels; its
  * `Record<NavKey, NavItem>` map means a key the plan emits without a matching
@@ -109,6 +113,28 @@ function main() {
     workerAdminScreens.every((k) => !plainKeys.includes(k)),
     'a worker with no grants sees no admin-only destination',
   )
+
+  // ---- 6. Submit a Ticket for everyone; the IT Support desk for the desk --  // ---- 6. the IT Support desk, and only for the desk --------------------
+  assert(!plainKeys.includes('itSupport'), 'a worker with no grants gets no IT Support desk')
+
+  const desk = buildNavPlan(false, canFor(['it_support.manage']), true)
+  const deskKeys = keysOf(desk)
+  assert(deskKeys.includes('itSupport'), 'the IT Support grant adds the desk')
+  assert(!!desk.find((s) => s.title === 'Access Granted')?.items.includes('itSupport'), 'the desk sits under "Access Granted" — it is a granted job, not a personal tool')
+
+  const adminQ = buildNavPlan(true, () => true, true)
+  const adminQKeys = keysOf(adminQ)
+  assert(!adminQKeys.includes('itSupport'), 'the admin gets NO IT Support desk, even when the flag is passed in')
+
+  // Submitting a ticket is help, not a section: it is rendered by the FAQs
+  // dialog (`FaqButton`), so no plan — worker, admin, desk — may grow a
+  // destination for it.
+  for (const [label, keys] of [['a plain worker', plainKeys], ['the desk', deskKeys], ['the admin', adminQKeys]] as [string, NavKey[]][]) {
+    assert(
+      !keys.some((k) => String(k).toLowerCase().includes('ticket')),
+      `${label} has no Submit a Ticket destination — it lives in the FAQs`,
+    )
+  }
 
   console.log(process.exitCode ? '\nSome navigation checks FAILED.' : '\nAll navigation checks passed.')
 }

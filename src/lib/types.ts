@@ -107,16 +107,6 @@ export interface Settings {
   timezone: string
   default_hourly_rate: number
   avatar_url: string | null
-  /**
-   * Latest USD → PHP reference rate, written twice a day by the `sync-fx-rate`
-   * Netlify Function. Null until the first run on a Supabase workspace, or
-   * always null in demo mode — both fall back to FALLBACK_USD_PHP_RATE.
-   * Rides along with the settings read every tab already makes, so showing it
-   * costs no extra database query. See supabase/RUN-THIS-fx-rate.sql.
-   */
-  usd_php_rate: number | null
-  /** When `usd_php_rate` was last written. Null when it never was. */
-  usd_php_rate_updated_at: string | null
 }
 
 // ---- Worker permissions ----------------------------------------------------
@@ -155,6 +145,7 @@ export type Permission =
   | 'reports.view'
   | 'clients.manage'
   | 'settings.manage'
+  | 'it_support.manage'
 
 export const PERMISSIONS: Permission[] = [
   'dashboard.view',
@@ -176,6 +167,11 @@ export const PERMISSIONS: Permission[] = [
   'reports.view',
   'clients.manage',
   'settings.manage',
+  // IT Support is a worker's job, not a slice of the admin's power — see the
+  // long note in ./tickets. It lives in this list because the admin may hand
+  // it to a worker, and because it is a key the worker's row may carry; every
+  // IT Support gate uses `isItSupport()` instead of `can()`.
+  'it_support.manage',
 ]
 
 /**
@@ -332,6 +328,19 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
       { key: 'settings.manage', label: 'Change business settings', hint: 'Business name, currency, timezone, default rate and the Slack integration.' },
     ],
   },
+  {
+    key: 'it_support',
+    label: 'IT Support',
+    description:
+      'The support desk. Unusual on purpose: the admin does NOT hold this one, so the ticket queue stays with whoever is actually running support. Ticking it here is the only way in.',
+    items: [
+      {
+        key: 'it_support.manage',
+        label: 'Run IT Support',
+        hint: 'See every submitted ticket, triage it (category, priority, status), assign it, reply to the requester and attach screenshots. Workers without it can still submit a ticket — they just never see the queue.',
+      },
+    ],
+  },
 ]
 
 /** Ready-made sets, so the common cases are one click in the worker form. */
@@ -367,7 +376,7 @@ export const PERMISSION_PRESETS: Record<PermissionPreset, { label: string; descr
   },
   full: {
     label: 'Full access',
-    description: 'Everything the admin can do, including worker accounts and settings.',
+    description: 'Everything the admin hands over, the IT Support desk included: worker accounts and settings too.',
     permissions: [...PERMISSIONS],
   },
 }
@@ -462,11 +471,15 @@ export type NotificationType =
   | 'payment'
   | 'break_start'
   | 'break_end'
+  /** An IT Support ticket was submitted, replied to, or moved. */
+  | 'ticket'
 
 export interface AppNotification {
   id: string
   user_id: string // recipient
   entry_id: string | null
+  /** The ticket this notification is about, when it is an IT Support one. */
+  ticket_id: string | null
   type: NotificationType
   message: string
   read: boolean
@@ -765,6 +778,94 @@ export interface Invoice {
   notes: string | null
   created_at: string
   updated_at: string
+}
+
+// ---- IT Support tickets ----------------------------------------------------
+
+/** What kind of problem it is, so the queue can be scanned at a glance. */
+export type TicketCategory = 'hardware' | 'software' | 'account' | 'other'
+
+/** How urgent it is. Set by the requester, changeable by IT Support. */
+export type TicketPriority = 'low' | 'medium' | 'high'
+
+/** Open → In progress → Resolved. A resolved ticket can be reopened. */
+export type TicketStatus = 'open' | 'in_progress' | 'resolved'
+
+/**
+ * One IT Support ticket.
+ *
+ * Submitted by **anyone** (a plain worker, the admin, or IT Support itself);
+ * readable by **IT Support only** — plus the requester themselves, who reaches
+ * their own ticket from the notification it produces rather than from a list.
+ * See `isItSupport()` in `./tickets` for why the admin is not IT Support by
+ * default: the grant is worker-only.
+ *
+ * `requester_name` / `assignee_name` are snapshots taken when the row was
+ * written. A support queue is read by someone who may not have `workers.view`,
+ * so the names travel with the ticket instead of needing the team list.
+ */
+export interface Ticket {
+  id: string
+  /** Human-facing ticket number, unique per workspace — shown as `#12`. */
+  number: number
+  subject: string
+  description: string
+  category: TicketCategory
+  priority: TicketPriority
+  status: TicketStatus
+  /** The account that submitted it (AuthUser.id) — the only other reader. */
+  requester_user_id: string
+  requester_name: string
+  /** Who is handling it (AuthUser.id + name), or null while unclaimed. */
+  assignee_user_id: string | null
+  assignee_name: string | null
+  /** Screenshots, as data URLs. Only sent with the single-ticket read. */
+  attachments: string[]
+  /** Number of replies — carried on the list read so a row can show a count. */
+  reply_count: number
+  created_at: string
+  updated_at: string
+  resolved_at: string | null
+}
+
+/** A message on a ticket, from the requester or from IT Support. */
+export interface TicketReply {
+  id: string
+  ticket_id: string
+  author_user_id: string
+  author_name: string
+  /** True when the author was holding the IT Support grant when they wrote it. */
+  from_support: boolean
+  body: string
+  created_at: string
+}
+
+/** Someone a ticket can be assigned to — an account holding the IT Support grant. */
+export interface TicketAssignee {
+  user_id: string
+  name: string
+}
+
+/** Everything the detail view needs, in one read. */
+export interface TicketThread {
+  ticket: Ticket
+  replies: TicketReply[]
+}
+
+export interface CreateTicketInput {
+  subject: string
+  description: string
+  category: TicketCategory
+  priority: TicketPriority
+  /** Data URLs from `imageFileToDataUrl` — already downscaled by the caller. */
+  attachments?: string[]
+}
+
+export interface UpdateTicketInput {
+  status?: TicketStatus
+  /** Assign to this account, or null to unassign. */
+  assignee_user_id?: string | null
+  assignee_name?: string | null
 }
 
 /**

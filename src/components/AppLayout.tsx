@@ -15,6 +15,7 @@ import {
   Wallet,
   Landmark,
   CircleDollarSign,
+  Headset,
   LogOut,
   KeyRound,
   Moon,
@@ -69,6 +70,9 @@ const NAV: Record<NavKey, NavItem> = {
   finance: { to: '/finance', label: 'Finance', shortLabel: 'Finance', icon: Landmark },
   workers: { to: '/workers', label: 'Workers', shortLabel: 'Workers', icon: Users },
   reports: { to: '/reports', label: 'Reports', shortLabel: 'Reports', icon: BarChart3 },
+  // The support desk. Shown only to a worker the admin granted it to — never
+  // to the admin, who holds every other capability but not this one.
+  itSupport: { to: '/it-support', label: 'IT Support', shortLabel: 'Support', icon: Headset },
   settings: { to: '/settings', label: 'Settings', shortLabel: 'Settings', icon: Settings },
 }
 
@@ -92,18 +96,18 @@ function DemoModeBadge({ onNavy }: { onNavy?: boolean }) {
 }
 
 export function AppLayout() {
-  const { user, signOut, isAdmin, can, workers, settings, backend } = useStore()
+  const { user, signOut, isAdmin, can, isItSupport, workers, settings, backend } = useStore()
   const isDemo = backend.kind === 'local'
   const { setTheme } = useTheme()
   const navigate = useNavigate()
   // The plan decides who sees what (`@/lib/nav`); here each key just becomes
   // its icon + label.
   const navSections = useMemo(
-    () => buildNavPlan(isAdmin, can).map((section) => ({
+    () => buildNavPlan(isAdmin, can, isItSupport).map((section) => ({
       title: section.title,
       items: section.items.map((key) => NAV[key]),
     })),
-    [isAdmin, can],
+    [isAdmin, can, isItSupport],
   )
   const navItems = useMemo(() => navSections.flatMap((s) => s.items), [navSections])
   const [changePwOpen, setChangePwOpen] = useState(false)

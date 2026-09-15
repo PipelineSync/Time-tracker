@@ -23,8 +23,22 @@ import type {
   Invoice,
   InvoiceBasis,
   FinanceItem,
+  Ticket,
+  TicketReply,
+  TicketAssignee,
+  CreateTicketInput,
+  UpdateTicketInput,
 } from './types'
 import { CLIENT_PRIORITY_LANES, DEFAULT_SLACK_SETTINGS, DEFAULT_CLIENT_COLOR, DEFAULT_NOTE_COLOR, NOTE_COLORS, PERMISSIONS, TEAM_VIEW_PERMISSIONS, ALL_ENTRIES_VIEW_PERMISSIONS, normalizePermissions } from './types'
+import {
+  IT_SUPPORT_PERMISSION,
+  MAX_TICKET_ATTACHMENTS,
+  isItSupport as isItSupportGrant,
+  normalizeTicketCategory,
+  normalizeTicketPriority,
+  normalizeTicketStatus,
+  sortTickets,
+} from './tickets'
 import type { BackendResult, DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, CreateFinanceItemInput, CreateMeetingInput, CreateNoteInput, CreateInvoiceInput } from './backend'
 import { ACCOUNT_DEACTIVATED_MESSAGE } from './backend'
 import {
@@ -566,6 +580,21 @@ async function workerName(workerId: string): Promise<string> {
   return data?.name ?? 'A worker'
 }
 
+/**
+ * Display name for the signed-in account, for ticket rows and replies: the
+ * worker's name when there is one, "Admin" for the owner (who has no worker
+ * row). Snapshotted onto the row because the queue is read by someone who may
+ * not have `workers.view`.
+ */
+async function actorDisplayName(user: AuthUser): Promise<string> {
+  if (user.role === 'admin') return 'Admin'
+  if (user.workerId) {
+    const name = await workerName(user.workerId)
+    if (name && name !== 'A worker') return name
+  }
+  return 'A teammate'
+}
+
 /** True when PostgREST says a column is missing (schema not migrated). */
 function isMissingColumn(error: { code?: string; message?: string } | null, column: string): boolean {
   if (!error) return false
@@ -594,6 +623,28 @@ async function clientNameById(clientId: string | null | undefined): Promise<stri
     return null
   }
 }
+
+/**
+ * Defensive defaults for a ticket row. `reply_count`/`attachments` are kept
+ * numeric/list-shaped however the database answered, so the UI can render a row
+ * without re-checking every field.
+ */
+function normalizeTicketRow(t: Ticket): Ticket {
+  return {
+    ...t,
+    number: Number.isFinite(Number(t.number)) ? Number(t.number) : 0,
+    category: normalizeTicketCategory(t.category),
+    priority: normalizeTicketPriority(t.priority),
+    status: normalizeTicketStatus(t.status),
+    attachments: Array.isArray(t.attachments) ? t.attachments.filter((a) => typeof a === 'string') : [],
+    reply_count: Number.isFinite(Number(t.reply_count)) ? Number(t.reply_count) : 0,
+    resolved_at: t.resolved_at ?? null,
+  }
+}
+
+/** Columns the queue read asks for — everything except the heavy attachments. */
+const TICKET_LIST_COLUMNS =
+  'id, number, subject, description, category, priority, status, requester_user_id, requester_name, assignee_user_id, assignee_name, reply_count, created_at, updated_at, resolved_at'
 
 /** Defensive defaults for client rows written before/outside the app. */
 function normalizeClientRow(c: Client): Client {
@@ -1594,13 +1645,27 @@ export const supabaseBackend: DataBackend = {
     if (me.error) return fail(me.error)
     const { data, error } = await client().from('settings').select('*').maybeSingle()
     if (error) return fail(error.message)
+    const normalizeSettings = (row: Settings): Settings => {
+      const raw = row as unknown as { default_hourly_rate?: unknown }
+      const parsedDefault =
+        typeof raw.default_hourly_rate === 'string'
+          ? Number(raw.default_hourly_rate)
+          : raw.default_hourly_rate
+      return {
+        ...row,
+        default_hourly_rate:
+          typeof parsedDefault === 'number' && Number.isFinite(parsedDefault)
+            ? parsedDefault
+            : row.default_hourly_rate,
+      } as Settings
+    }
     if (!data) {
       const def = { business_name: 'My Business', currency: 'USD', timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC', default_hourly_rate: 20 }
       const ins = await client().from('settings').insert(def).select().single()
       if (ins.error) return fail(ins.error.message)
-      return ok(ins.data as Settings)
+      return ok(normalizeSettings(ins.data as Settings))
     }
-    return ok(data as Settings)
+    return ok(normalizeSettings(data as Settings))
   },
 
   async saveSettings(patch) {
@@ -1611,7 +1676,15 @@ export const supabaseBackend: DataBackend = {
     if (!cur.data) return fail('Settings not found.')
     const { data, error } = await client().from('settings').update(patch).eq('id', cur.data.id).select().single()
     if (error) return fail(error.message)
-    return ok(data as Settings)
+    const raw = data as unknown as { default_hourly_rate?: unknown }
+    const normalized = {
+      ...data,
+      default_hourly_rate:
+        typeof raw.default_hourly_rate === 'string'
+          ? Number(raw.default_hourly_rate)
+          : (data as Settings).default_hourly_rate,
+    } as Settings
+    return ok(normalized)
   },
 
   async getSlackSettings() {
@@ -1739,11 +1812,23 @@ export const supabaseBackend: DataBackend = {
     const me = await requireUser()
     if (me.error) return fail(me.error)
     // user_id is the caller's own id (already filtered on) — no need to ship it back.
-    let q = client().from('notifications').select('id, entry_id, type, message, read, created_at').eq('user_id', me.data!.id).order('created_at', { ascending: false })
-    if (limit) q = q.limit(limit)
-    const { data, error } = await q
+    // ticket_id travels with the row so a ticket alert can open its ticket (the
+    // bell treats a notification as a link when it has one). A database that
+    // has not run supabase/ticket-support.sql has no such column — read without
+    // it rather than leaving the bell empty.
+    const columns = 'id, entry_id, ticket_id, type, message, read, created_at'
+    const query = (cols: string) => {
+      let q = client().from('notifications').select(cols).eq('user_id', me.data!.id).order('created_at', { ascending: false })
+      if (limit) q = q.limit(limit)
+      return q
+    }
+    let { data, error } = await query(columns)
+    if (error && isMissingColumn(error, 'ticket_id')) {
+      ;({ data, error } = await query('id, entry_id, type, message, read, created_at'))
+    }
     if (error) return fail(error.message)
-    return ok(data as AppNotification[])
+    // Old rows (and the fallback read) have no ticket target.
+    return ok(((data as unknown as AppNotification[]) ?? []).map((n) => ({ ...n, ticket_id: n.ticket_id ?? null })))
   },
 
   async countUnreadNotifications() {
@@ -2458,6 +2543,163 @@ export const supabaseBackend: DataBackend = {
   // that has not run the migration answers "relation does not exist";
   // listing then reports an empty board instead of an error so the rest of
   // the app degrades, and the writes explain exactly what to run.
+
+  // ---- IT Support tickets -------------------------------------------------
+
+  async listTickets() {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    // The queue is IT Support's. Anyone else gets their own submissions only,
+    // which is how a requester's ticket is found from a notification — and the
+    // admin is deliberately *not* IT Support (the grant is worker-only; the RLS
+    // policy mirrors this with is_it_support(), which ignores the admin flag).
+    const support = isItSupportGrant(me.data!.role, me.data!.permissions)
+    let query = client()
+      .from('tickets')
+      .select(TICKET_LIST_COLUMNS)
+      .order('created_at', { ascending: false })
+    if (!support) query = query.eq('requester_user_id', me.data!.id)
+    const { data, error } = await query
+    if (error) {
+      if (isMissingTable(error, 'tickets')) {
+        console.warn('[work-tracker] the tickets table is missing — run supabase/it-support.sql to enable IT Support.')
+        return ok([] as Ticket[])
+      }
+      return fail(error.message)
+    }
+    // Attachments are the heavy column and are left out of this read; the
+    // single-ticket read (getTicket) is what brings them.
+    const rows = ((data as unknown as Ticket[]) ?? []).map((t) => normalizeTicketRow({ ...t, attachments: [] }))
+    return ok(sortTickets(rows))
+  },
+
+  async getTicket(ticketId: string) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    const { data, error } = await client().from('tickets').select('*').eq('id', ticketId).maybeSingle()
+    if (error) {
+      if (isMissingTable(error, 'tickets')) {
+        return fail('IT Support is not set up on this database yet. Run supabase/it-support.sql in the Supabase SQL editor.')
+      }
+      return fail(error.message)
+    }
+    // RLS decides: null means "does not exist, or is not yours to read".
+    if (!data) return fail('That ticket no longer exists, or you do not have access to it.')
+    const { data: replies, error: replyError } = await client()
+      .from('ticket_replies')
+      .select('id, ticket_id, author_user_id, author_name, from_support, body, created_at')
+      .eq('ticket_id', ticketId)
+      .order('created_at', { ascending: true })
+    if (replyError) return fail(replyError.message)
+    return ok({ ticket: normalizeTicketRow(data as unknown as Ticket), replies: (replies as unknown as TicketReply[]) ?? [] })
+  },
+
+  async createTicket(input: CreateTicketInput) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    const subject = input.subject?.trim()
+    if (!subject) return fail('Give the ticket a subject.')
+    const description = input.description?.trim()
+    if (!description) return fail('Describe what is going wrong.')
+    const { data, error } = await client()
+      .from('tickets')
+      .insert({
+        subject,
+        description,
+        category: normalizeTicketCategory(input.category),
+        priority: normalizeTicketPriority(input.priority),
+        status: 'open',
+        requester_user_id: me.data!.id,
+        requester_name: await actorDisplayName(me.data!),
+        attachments: (input.attachments ?? []).slice(0, MAX_TICKET_ATTACHMENTS),
+      })
+      .select(TICKET_LIST_COLUMNS)
+      .single()
+    if (error) {
+      if (isMissingTable(error, 'tickets')) {
+        return fail('IT Support is not set up on this database yet. Run supabase/it-support.sql in the Supabase SQL editor.')
+      }
+      return fail(error.message)
+    }
+    // No client-side notification here on purpose: who runs IT Support is not
+    // the submitter's business, and a worker cannot write rows for another
+    // user under the notifications policy anyway. The database fans the alert
+    // out to the grant holders (see the trigger in supabase/it-support.sql).
+    return ok(normalizeTicketRow({ ...(data as unknown as Ticket), attachments: (input.attachments ?? []).slice(0, MAX_TICKET_ATTACHMENTS) }))
+  },
+
+  async updateTicket(ticketId: string, patch: UpdateTicketInput) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (!isItSupportGrant(me.data!.role, me.data!.permissions)) return denied('change a ticket')
+    const row: Record<string, unknown> = {}
+    if (patch.status !== undefined) row.status = normalizeTicketStatus(patch.status)
+    if (patch.assignee_user_id !== undefined) {
+      row.assignee_user_id = patch.assignee_user_id
+      row.assignee_name = patch.assignee_user_id ? patch.assignee_name?.trim() || 'IT Support' : null
+    }
+    if (Object.keys(row).length === 0) return fail('Nothing to change.')
+    const { data, error } = await client().from('tickets').update(row).eq('id', ticketId).select('*').maybeSingle()
+    if (error) return fail(error.message)
+    if (!data) return fail('That ticket no longer exists, or you do not have access to it.')
+    // The status change notifies the requester from the database, so the loop
+    // closes even if the person who moved it closes the tab immediately.
+    return ok(normalizeTicketRow(data as unknown as Ticket))
+  },
+
+  async addTicketReply(ticketId: string, body: string) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    const text = body?.trim()
+    if (!text) return fail('Write a message first.')
+    const support = isItSupportGrant(me.data!.role, me.data!.permissions)
+    const { data, error } = await client()
+      .from('ticket_replies')
+      .insert({
+        ticket_id: ticketId,
+        author_user_id: me.data!.id,
+        author_name: await actorDisplayName(me.data!),
+        from_support: support,
+        body: text,
+      })
+      .select('id, ticket_id, author_user_id, author_name, from_support, body, created_at')
+      .single()
+    if (error) {
+      if (isMissingTable(error, 'ticket_replies')) {
+        return fail('IT Support is not set up on this database yet. Run supabase/it-support.sql in the Supabase SQL editor.')
+      }
+      return fail(error.message)
+    }
+    return ok(data as unknown as TicketReply)
+  },
+
+  async listItSupportAssignees() {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (!isItSupportGrant(me.data!.role, me.data!.permissions)) return denied('see the IT Support team')
+
+    // Preferred: the SECURITY DEFINER helper, which can read the profiles and
+    // worker rows regardless of what this account may select directly.
+    const rpc = await client().rpc('it_support_holders')
+    if (!rpc.error && Array.isArray(rpc.data)) {
+      return ok((rpc.data as { user_id: string; name: string }[]).map((r) => ({ user_id: r.user_id, name: r.name })))
+    }
+    // Before the migration: fall back to the team list when this account can
+    // read it, and always offer at least the signed-in person themselves.
+    const rows: TicketAssignee[] = []
+    if (canDo(me.data!, 'workers.view')) {
+      const { data } = await client().from('workers').select('id, name, permissions')
+      for (const w of ((data as { id: string; name: string; permissions: string[] | null }[]) ?? [])) {
+        if (!(w.permissions ?? []).includes(IT_SUPPORT_PERMISSION)) continue
+        const userId = await getWorkerUserId(w.id)
+        if (userId) rows.push({ user_id: userId, name: w.name })
+      }
+    }
+    if (!rows.some((r) => r.user_id === me.data!.id)) {
+      rows.push({ user_id: me.data!.id, name: await actorDisplayName(me.data!) })
+    }
+    return ok(rows)
+  },
 
   async listInvoices() {
     const me = await requireUser()
