@@ -1768,6 +1768,17 @@ export const supabaseBackend: DataBackend = {
     return ok(null)
   },
 
+  async createNotification(recipientUserId: string, n: { entry_id?: string | null; type: AppNotification['type']; message: string }) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    await pushNotification(recipientUserId, {
+      entry_id: n.entry_id ?? null,
+      type: n.type,
+      message: n.message,
+    })
+    return ok(null)
+  },
+
   async listPayments(limit) {
     const me = await requireUser()
     if (me.error) return fail(me.error)

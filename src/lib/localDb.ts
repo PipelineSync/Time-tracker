@@ -1494,6 +1494,23 @@ export const localBackend: DataBackend = {
     return { data: null, error: null }
   },
 
+  async createNotification(recipientUserId: string, n: { entry_id?: string | null; type: AppNotification['type']; message: string }) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    const notif: AppNotification = {
+      id: uid(),
+      user_id: recipientUserId,
+      entry_id: n.entry_id ?? null,
+      type: n.type,
+      message: n.message,
+      read: false,
+      created_at: new Date().toISOString(),
+    }
+    c.data.notifications.push(notif)
+    save(c.data)
+    return { data: notif, error: null }
+  },
+
   async listPayments(limit) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
