@@ -108,7 +108,7 @@ export interface Settings {
   default_hourly_rate: number
   avatar_url: string | null
   /**
-   * Latest USD → PHP reference rate, written once a day by the `sync-fx-rate`
+   * Latest USD → PHP reference rate, written twice a day by the `sync-fx-rate`
    * Netlify Function. Null until the first run on a Supabase workspace, or
    * always null in demo mode — both fall back to FALLBACK_USD_PHP_RATE.
    * Rides along with the settings read every tab already makes, so showing it

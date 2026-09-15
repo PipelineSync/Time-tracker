@@ -164,10 +164,11 @@ Messages are posted server-side by the `slack-notify` Netlify Function, which re
 For teams that bill in USD but live in pesos, the **Dashboard** and the worker **Clock In / Out** page carry a small **`1 USD = ₱62.63`** chip on the title row, and the Dashboard's two earnings cards show the peso figure under the dollar one (`≈ ₱7,516`).
 
 - **Only for USD workspaces.** The chip and the sub-lines render *only* when **Settings → Currency** is `USD`. A workspace billing in PHP, EUR or anything else sees exactly what it saw before — nothing is rendered, not even an empty slot.
-- **One sync a day, server-side.** `netlify/functions/sync-fx-rate.ts` runs on a daily Netlify schedule, fetches the rate from a provider that refreshes **every calendar day** ([ExchangeRate-API's open endpoint](https://open.er-api.com), no API key, no quota; [Frankfurter](https://www.frankfurter.dev)/ECB kept as a fallback) and writes it to the `settings` row. Clients never call the rate provider, so no key is ever in the browser bundle. (The ECB feed alone was the earlier bug: it only publishes on business days, so the rate sat still every weekend and Monday.)
+- **Two syncs a day, server-side.** `netlify/functions/sync-fx-rate.ts` runs on a Netlify schedule at **00:30 and 12:30 UTC — 8:30 AM and 8:30 PM in Manila** — reads the rate from [CurrencyFreaks](https://currencyfreaks.com) and writes it to the `settings` row. The API key lives only in the Netlify environment (`CURRENCYFREAKS_API_KEY`); clients never call the rate provider, so nothing is ever sent to the browser. If the key is missing or its monthly quota is spent, the function falls back to two keyless public feeds ([ExchangeRate-API's open endpoint](https://open.er-api.com) and [Frankfurter](https://www.frankfurter.dev)/ECB), so the chip keeps refreshing either way. (Frankfurter alone was the original bug: the ECB publishes on business days only, so the rate sat still every weekend and Monday.)
+- **What twice a day buys you.** CurrencyFreaks' free plan republishes its own numbers once a day (00:00 UTC), so the morning run is normally the one that changes the figure and the evening run confirms it. The evening run is still what recovers a failed or missed morning run within 12 hours rather than 24 — and if you later move to a paid CurrencyFreaks plan (hourly on Starter, every 10 minutes on Growth), intraday movement arrives with no change to this repo.
 - **Zero extra database queries.** The rate rides along on the `settings` read every tab already makes about once a minute — see *Performance & egress* below. Nothing is fetched per view, per worker or per tick.
 - **A fallback is honest about itself.** Until the first sync has run — a fresh database, or demo mode, which has no server at all — the app shows the bundled `FALLBACK_USD_PHP_RATE` from `src/lib/fx.ts` with a **`≈`** instead of `=`, and its tooltip says so. A synced rate reads `=` and names the day it was fetched.
-- **Indicative, not a quote.** These are rounded whole-peso reference conversions off a once-a-day rate; the tooltip says so. Earnings are still *stored and paid* in the workspace currency — nothing in the ledger is converted.
+- **Indicative, not a quote.** These are rounded whole-peso reference conversions off a twice-a-day rate; the tooltip says so. Earnings are still *stored and paid* in the workspace currency — nothing in the ledger is converted.
 
 Setup: run `supabase/RUN-THIS-fx-rate.sql` once on an existing database (fresh installs get the columns from `schema.sql`), then deploy — the schedule is already in `netlify.toml`. Until the migration is applied the app still runs on the fallback rate, and the function's log says exactly which file to run.
 
@@ -178,7 +179,7 @@ The app is built to stay inside Supabase's and Netlify's free-tier bandwidth eve
 - Every visible tab keeps a **bounded window** of the database in memory (1200 newest entries for the admin, 300 for a worker) — per-tab load stays flat as history grows.
 - The 15 s background poll fetches only what changed: entries sync as a **delta** (`since` the last sync), and the unread badge is a **HEAD count** that ships no rows at all.
 - Heavy-but-rarely-changing lists — **workers, payments, settings, tasks and the notification dropdown** — are skipped on "light" ticks and refresh roughly **once a minute** instead of every 15 s. Anything you change yourself refreshes immediately, so this is invisible in use.
-- The **USD → PHP rate** is two columns on that same `settings` row, so it costs **no extra query at all** — about 75 bytes on a request the app already makes. It is deliberately *not* a separate `exchange_rates` table and *not* a per-client call to a rate API: polling a rate every 15 s would mean ~5,760 requests per open tab per day. The single daily fetch happens server-side in `sync-fx-rate`.
+- The **USD → PHP rate** is two columns on that same `settings` row, so it costs **no extra query at all** — about 75 bytes on a request the app already makes. It is deliberately *not* a separate `exchange_rates` table and *not* a per-client call to a rate API: polling a rate every 15 s would mean ~5,760 requests per open tab per day. The two daily fetches happen server-side in `sync-fx-rate`, and a run that starts within 6 h of the previous one returns without contacting the provider at all — so the endpoint cannot be used to spend the workspace's monthly request quota.
 - Queries name their **columns explicitly** rather than `select('*')`, so the workspace-owner `user_id` (identical on every row, never displayed) never goes over the wire.
 - Background refreshes never stack: focus/visibility events fire in bursts, and a refresh already in flight suppresses the rest.
 
@@ -270,7 +271,7 @@ This creates the `workers`, `time_entries`, `active_timers`, `settings`, `paymen
 >
 > For the **Personal Tracker** (account menu → "Switch to Personal Tracker"), run **`supabase/personal-finance.sql`** once. It creates the `personal_finance_data` table — one strictly private row per account (RLS: owner only). Fresh installs get it from `schema.sql`. Until it is applied the tracker still works from browser storage, but saving reports that the table is missing.
 >
-> For the **USD → PHP reference rate** (the chip on the Dashboard and Clock In title rows), run **`supabase/RUN-THIS-fx-rate.sql`** once. It adds `settings.usd_php_rate` and `settings.usd_php_rate_updated_at`, which the daily `sync-fx-rate` function writes. **No RLS change** — the existing settings policies already cover new columns, and clients only ever read it. Fresh installs get them from `schema.sql`. Safe to re-run. Until it is applied the app still runs: the UI shows the bundled fallback rate marked `≈`, and the function's log names this file.
+> For the **USD → PHP reference rate** (the chip on the Dashboard and Clock In title rows), run **`supabase/RUN-THIS-fx-rate.sql`** once. It adds `settings.usd_php_rate` and `settings.usd_php_rate_updated_at`, which the twice-daily `sync-fx-rate` function writes. **No RLS change** — the existing settings policies already cover new columns, and clients only ever read it. Fresh installs get them from `schema.sql`. Safe to re-run. Until it is applied the app still runs: the UI shows the bundled fallback rate marked `≈`, and the function's log names this file.
 
 ---
 
@@ -345,6 +346,7 @@ This repository already includes `netlify.toml` with `npm run build`, `dist`, No
    - `VITE_SUPABASE_URL` = your Supabase Project URL
    - `VITE_SUPABASE_PUBLISHABLE_KEY` = your Supabase Publishable key
    - `SUPABASE_SECRET_KEY` = your Supabase Secret key (**server-only**)
+   - `CURRENCYFREAKS_API_KEY` = your CurrencyFreaks key (**server-only**, optional — it is what the `sync-fx-rate` function reads the rate from; see *USD → PHP rate sync* below)
 5. Redeploy after saving variables. Netlify exposes environment variables to Functions at runtime; build variables are also available to the site build.
 6. In Supabase **Authentication → URL Configuration**, set the deployed Netlify URL as the **Site URL** and add it to the allowed redirect URLs. Add your custom HTTPS domain too when you connect one.
 
@@ -360,10 +362,12 @@ Free-tier Supabase projects are **paused after ~7 days of no API/database activi
 
 The same schedule mechanism ships a second function, **`netlify/functions/sync-fx-rate.ts`**, which refreshes the **USD → PHP reference rate** shown on the Dashboard and Clock In pages (see *USD → PHP reference rate* under Features).
 
-- **No setup needed** — `netlify.toml` already schedules it for `30 0 * * *` (00:30 UTC = 8:30 AM PHT, just after the provider's daily refresh), and it uses the `SUPABASE_SECRET_KEY` you set for the other functions, because a scheduled run has no user token and `settings` is RLS-locked to the admin.
-- One call a day to the rate provider, one write to the `settings` row. Run **`supabase/RUN-THIS-fx-rate.sql`** first on an existing database; until then the function returns a 500 whose message names that file, and the UI shows the bundled fallback rate.
-- Check a run in **Netlify → Logs → sync-fx-rate**, or trigger it manually at `/.netlify/functions/sync-fx-rate` to refresh right after a deploy.
-- It fails closed: if the provider errors or answers without a usable PHP rate, the function returns 502 and **leaves the stored rate untouched** rather than writing junk.
+- **Set the key once** — add `CURRENCYFREAKS_API_KEY` in the environment-variables list above. A free CurrencyFreaks account is enough: 1,000 requests a month, of which two syncs a day spend 60. Without it the function still works, from the keyless fallback feeds (once a day), and its log says that the key is missing.
+- **Schedule** — `netlify.toml` runs it at `30 0,12 * * *`: 00:30 and 12:30 UTC (8:30 AM and 8:30 PM PHT). The morning run lands just after the provider's own refresh, the evening run catches anything the morning missed.
+- It uses the `SUPABASE_SECRET_KEY` you set for the other functions, because a scheduled run has no user token and `settings` is RLS-locked to the admin. One read, one write to the `settings` row per run, no extra client queries. Run **`supabase/RUN-THIS-fx-rate.sql`** first on an existing database; until then the function returns a 500 whose message names that file, and the UI shows the bundled fallback rate.
+- Check a run in **Netlify → Logs → sync-fx-rate**, or trigger it manually at `/.netlify/functions/sync-fx-rate` to refresh right after a deploy. Each answer names the rate, which feed produced it, and the provider's own as-of date.
+- Repeat triggers are cheap and safe: a run that starts less than 6 hours after the last successful write returns `Already synced N minutes ago` **without calling the provider**, so the endpoint can be left reachable for the app's own stale-rate self-heal without anyone being able to spend the quota through it.
+- It fails closed: if every feed errors or answers without a usable PHP rate, the function returns 502 and **leaves the stored rate untouched** rather than writing junk. A response whose base currency is not USD is rejected too, so a plan change on the provider's side can never silently convert at the wrong rate.
 
 ### Deploy to Vercel (free)
 

@@ -63,10 +63,10 @@ const FOCUS_FULL_MIN_MS = 90_000     // a refocus re-loads the full window at mo
 const LOCAL_ACTION_TTL_MS = 30_000
 
 // ---- FX rate self-healing --------------------------------------------------
-// The daily sync-fx-rate Netlify Function is the primary mechanism that writes
-// the USD → PHP rate. If the cron misses a day (scheduling gaps, env-var
-// misconfiguration, network error), the rate goes stale and never self-heals
-// until the cron fires again — which could be 48+ hours later.
+// The twice-daily sync-fx-rate Netlify Function is the mechanism that writes the
+// USD → PHP rate. If its schedule stops entirely (deploy gap, missing
+// SUPABASE_SECRET_KEY or CURRENCYFREAKS_API_KEY, provider outage), the rate
+// goes stale and never self-heals until someone notices.
 //
 // Fix: whenever the app loads settings and the stored rate is > 23 h old, call
 // the Netlify function endpoint from the browser (fire-and-forget). The
@@ -75,6 +75,14 @@ const LOCAL_ACTION_TTL_MS = 30_000
 // it up. We only do this once per page-load and only on Supabase deployments
 // (the local/demo backend has no server to write to). In dev or non-Netlify
 // environments the request will 404 — the catch silently ignores it.
+//
+// The threshold deliberately stays at "a whole day" rather than tracking the
+// 12-hour schedule: the rate provider is metered (1,000 requests a month on the
+// free plan), and a tab that re-triggers on every reload while the rate is
+// legitimately between two scheduled runs would spend that quota for nothing.
+// A rate less than 12 h old is exactly what the schedule is meant to produce.
+// The function also throttles repeat calls on its side, so a trigger that does
+// fire cannot multiply into provider requests.
 const fxSyncTriggered = { value: false }
 
 function triggerFxSyncIfStale(settings: Settings): void {

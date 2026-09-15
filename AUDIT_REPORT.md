@@ -80,7 +80,7 @@ npm run verify:permissions → ALL CHECKS PASSED
 ## Remaining Notes (P1-P3, not blocking)
 
 - **P1**: `recharts@2.x` deprecated (2.x EOL). Migrate to v3 when convenient.
-- **P2**: `/.netlify/functions/sync-fx-rate` is unauthenticated fire-and-forget from frontend. It uses secret key server-side, but anyone can trigger it to spam the FX provider. Consider admin auth or Netlify signed request + rate limit.
+- **P2 (mitigated)**: `/.netlify/functions/sync-fx-rate` is unauthenticated fire-and-forget from frontend. It must stay reachable without a token (a scheduled run has none), so it is now throttled on the server side: a run starting under 6 h after the last successful write returns before calling the rate provider, which caps what any caller can spend of the workspace's metered CurrencyFreaks quota at 4 provider requests a day regardless of request volume.
 - **P2**: CSP has `style-src 'self' 'unsafe-inline'` (needed for Tailwind). Could tighten with nonce if desired. `X-Frame-Options` intentionally omitted for preview iframes; consider `frame-ancestors 'self'` for prod.
 - **P2**: Demo mode passwords stored plaintext in `wt_users` localStorage. Acceptable for demo, but warn users not to reuse real passwords (or hash).
 - **P3**: `theme-init.js` always adds `christmas` class before paint, even when `VITE_CHRISTMAS_THEME=off`, causing flash. Should respect env flag.
