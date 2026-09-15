@@ -1377,8 +1377,6 @@ export const localBackend: DataBackend = {
         avatar_url: null,
         // No server in demo mode, so no scheduled sync — the UI uses the bundled
         // fallback rate and marks it approximate.
-        usd_php_rate: null,
-        usd_php_rate_updated_at: null,
       }
       save(c.data)
     }
@@ -1389,7 +1387,7 @@ export const localBackend: DataBackend = {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
     if (!can(c, 'settings.manage')) return denied('change business settings')
-    if (!c.data.settings) c.data.settings = { id: 'settings-1', business_name: 'My Business', currency: 'USD', timezone: 'UTC', default_hourly_rate: 20, avatar_url: null, usd_php_rate: null, usd_php_rate_updated_at: null }
+    if (!c.data.settings) c.data.settings = { id: 'settings-1', business_name: 'My Business', currency: 'USD', timezone: 'UTC', default_hourly_rate: 20, avatar_url: null }
     c.data.settings = { ...c.data.settings, ...patch }
     save(c.data)
     return { data: c.data.settings, error: null }
