@@ -12,6 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { InstallAppCard } from '@/components/InstallAppCard'
 import { SlackSettingsCard } from '@/components/SlackSettingsCard'
+import { FxRateCard } from '@/components/FxRateCard'
 import { toast } from 'sonner'
 import { Sun, Moon, Monitor, Download, Trash2, Loader2, Upload, X, Banknote, QrCode } from 'lucide-react'
 import { initials } from '@/lib/utils'
@@ -477,6 +478,12 @@ export function SettingsPage() {
               </form>
             </CardContent>
           </Card>
+
+          {/* The control for the chip on the Dashboard / Clock In title rows.
+              Renders nothing unless this workspace bills in USD. */}
+          <div className="mt-4">
+            <FxRateCard />
+          </div>
 
           <div className="mt-4">
             <SlackSettingsCard />

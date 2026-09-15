@@ -38,11 +38,16 @@
 /*
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
-  # Content-Security-Policy — the app's only external origins are Supabase
-  # (REST/Auth/Storage, *.supabase.co) and hooks.slack.com (demo-mode Slack
+  # Content-Security-Policy — the app's external origins are Supabase
+  # (REST/Auth/Storage, *.supabase.co), hooks.slack.com (demo-mode Slack
   # posts straight from the browser; deployed builds post via the
-  # server-side slack-notify function instead). Fonts are self-hosted
-  # (@fontsource), images are same-origin + data: (avatars, QR codes), and
-  # the pre-paint theme script lives in /theme-init.js so no 'unsafe-inline'
-  # is needed anywhere.
-  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob:; connect-src 'self' https://*.supabase.co https://hooks.slack.com; object-src 'none'; base-uri 'self'; form-action 'self'
+  # server-side slack-notify function instead) and the two keyless USD → PHP
+  # rate providers below. The rate providers have to be allowed here because
+  # the browser fetches a fresh rate directly when the workspace has no
+  # server-side sync to rely on (demo mode, non-Netlify hosts) and when the
+  # admin clicks "Refresh now" in Settings → General — without them the CSP
+  # blocks the request and the chip keeps the bundled fallback for ever.
+  # Fonts are self-hosted (@fontsource), images are same-origin + data:
+  # (avatars, QR codes), and the pre-paint theme script lives in
+  # /theme-init.js so no 'unsafe-inline' is needed anywhere.
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob:; connect-src 'self' https://*.supabase.co https://hooks.slack.com https://open.er-api.com https://api.frankfurter.dev; object-src 'none'; base-uri 'self'; form-action 'self'

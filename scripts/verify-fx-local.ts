@@ -354,6 +354,111 @@ function stripTags(html: string): string {
   return html.replace(/<svg[\s\S]*?<\/svg>/g, '[icon]').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
 }
 
+/**
+ * The browser-side provider client (`src/lib/fxRate`) — the path that makes the
+ * rate update where there is **no server to sync it**: demo mode, the sandbox
+ * preview, any non-Netlify host. The old behaviour (never write a rate in demo
+ * mode) is exactly what the "it is not updating" report was about.
+ */
+async function checkBrowserProviderClient() {
+  const { fetchFreshRate, parseRatePayload, RATE_PROVIDERS } = await import('../src/lib/fxRate')
+
+  // --- payload shapes -------------------------------------------------------
+  const erApi = parseRatePayload({
+    result: 'success',
+    rates: { PHP: 57.83, EUR: 0.86 },
+    time_last_update_utc: 'Tue, 16 Sep 2026 00:02:31 +0000',
+  })
+  assert(erApi?.rate === 57.83, `the open.er-api.com shape parses (got ${erApi?.rate})`)
+  assert(erApi?.date === 'Tue, 16 Sep 2026 00:02:31 +0000', 'and keeps the provider timestamp')
+
+  const frank = parseRatePayload({ date: '2026-09-15', rates: { PHP: 57.9 } })
+  assert(frank?.rate === 57.9, `the Frankfurter shape parses (got ${frank?.rate})`)
+
+  // --- junk must never be written ------------------------------------------
+  assert(parseRatePayload({ result: 'error', 'error-type': 'quota' }) === undefined, 'an error envelope is rejected')
+  assert(parseRatePayload({ rates: { EUR: 0.9 } }) === undefined, 'a payload without PHP is rejected')
+  assert(parseRatePayload({ rates: { PHP: 0 } }) === undefined, 'a zero rate is rejected')
+  assert(parseRatePayload({ rates: { PHP: Number.NaN } }) === undefined, 'a NaN rate is rejected')
+  assert(parseRatePayload({ rates: { PHP: -3 } }) === undefined, 'a negative rate is rejected')
+  assert(parseRatePayload(null) === undefined, 'a null payload is rejected')
+
+  // --- provider order, fallback, and total failure --------------------------
+  const tried: string[] = []
+  const primaryDown = (async (url: unknown) => {
+    tried.push(String(url))
+    if (String(url).includes('er-api')) return { ok: false, status: 503, json: async () => ({}) }
+    return { ok: true, status: 200, json: async () => ({ date: '2026-09-15', rates: { PHP: 57.42 } }) }
+  }) as unknown as typeof fetch
+  const fellBack = await fetchFreshRate(primaryDown)
+  assert(fellBack?.rate === 57.42, `a failed primary falls back to the next provider (got ${fellBack?.rate})`)
+  assert(fellBack?.provider === 'frankfurter', 'and names the provider that answered')
+  assert(tried.length === 2, 'both providers were tried, in order')
+
+  const offline = (async () => {
+    throw new Error('offline')
+  }) as unknown as typeof fetch
+  assert((await fetchFreshRate(offline)) === null, 'every provider failing resolves null instead of throwing')
+
+  const allFail = (async () => {
+    return { ok: true, status: 200, json: async () => ({ result: 'error' }) }
+  }) as unknown as typeof fetch
+  assert((await fetchFreshRate(allFail)) === null, 'a 200 with an unusable body also resolves null')
+
+  // --- the sources are the keyless, daily-refreshing pair -------------------
+  assert(RATE_PROVIDERS.length === 2, 'exactly two providers are configured')
+  assert(
+    RATE_PROVIDERS.every((p) => p.url.startsWith('https://')),
+    'every provider is fetched over https'
+  )
+  assert(
+    // Anything in this module also runs in a browser bundle, so a key here would
+    // be public. Keys stay in the Netlify function's environment instead.
+    RATE_PROVIDERS.every((p) => !/key|token|app_id/i.test(p.url)),
+    'no provider URL carries an API key (this code also ships to the browser)'
+  )
+
+  // --- and they are the SAME sources the scheduled function uses ------------
+  // The function keeps its own copy of the list on purpose (it must stay
+  // deployable with no `src/` import), so nothing but a check keeps the two
+  // from drifting apart and quietly showing two different numbers.
+  const { readFile } = await import('node:fs/promises')
+  const fnSource = await readFile(new URL('../netlify/functions/sync-fx-rate.ts', import.meta.url), 'utf8')
+  for (const provider of RATE_PROVIDERS) {
+    const host = new URL(provider.url).hostname
+    assert(fnSource.includes(host), `the scheduled function also reads ${host}`)
+  }
+}
+
+/**
+ * End-to-end: the write the browser performs in demo mode, through the ordinary
+ * backend, lands on the settings row and flips the UI out of fallback mode.
+ */
+async function checkDemoBackendWritePath() {
+  const { localBackend } = await import('../src/lib/localDb')
+  const { usdPhpRate } = await import('../src/lib/fx')
+
+  await localBackend.signIn('admin', 'admin.pipelinesync')
+  assert(usdPhpRate((await localBackend.getSettings()).data)?.isFallback === true, 'the demo workspace starts on the fallback rate')
+
+  // This is exactly what FxRateCard (Refresh now) and the store's self-heal
+  // both do: fetch a rate, save it with the normal settings call.
+  const saved = await localBackend.saveSettings({
+    usd_php_rate: 57.83,
+    usd_php_rate_updated_at: new Date().toISOString(),
+  } as any)
+  assert(!saved.error, 'the browser-fetched rate saves through the ordinary settings path')
+
+  const after = usdPhpRate((await localBackend.getSettings()).data)
+  assert(after?.rate === 57.83, `the saved rate is what the app now reports (got ${after?.rate})`)
+  assert(after?.isFallback === false, 'and the chip switches from "≈" to "=" because it is no longer the fallback')
+  assert(after?.updatedAt !== null, 'with an "updated at" the card can show')
+
+  // Leaving the demo workspace as it was found keeps later checks honest.
+  await localBackend.saveSettings({ usd_php_rate: null, usd_php_rate_updated_at: null } as any)
+  assert(usdPhpRate((await localBackend.getSettings()).data)?.isFallback === true, 'and clearing it returns to the fallback')
+}
+
 async function main() {
   console.log('\n— USD → PHP rate logic —')
   await checkPureLogic()
@@ -361,6 +466,10 @@ async function main() {
   await checkRenderedMarkup()
   console.log('\n— demo-mode settings —')
   await checkDemoBackend()
+  console.log('\n— browser provider client (no-server path) —')
+  await checkBrowserProviderClient()
+  console.log('\n— demo-mode write path —')
+  await checkDemoBackendWritePath()
   console.log('\n— sync-fx-rate function —')
   await checkSyncFunction()
 

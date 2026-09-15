@@ -63,19 +63,23 @@ const FOCUS_FULL_MIN_MS = 90_000     // a refocus re-loads the full window at mo
 const LOCAL_ACTION_TTL_MS = 30_000
 
 // ---- FX rate self-healing --------------------------------------------------
-// The daily sync-fx-rate Netlify Function is the primary mechanism that writes
-// the USD → PHP rate. If the cron misses a day (scheduling gaps, env-var
-// misconfiguration, network error), the rate goes stale and never self-heals
-// until the cron fires again — which could be 48+ hours later.
+// Two mechanisms, because there are two situations:
 //
-// Fix: whenever the app loads settings and the stored rate is > 23 h old, call
-// the Netlify function endpoint from the browser (fire-and-forget). The
-// function fetches a fresh rate from the provider and writes it to the database
-// using its server-side secret key; the next settings poll (≤ 60 s later) picks
-// it up. We only do this once per page-load and only on Supabase deployments
-// (the local/demo backend has no server to write to). In dev or non-Netlify
-// environments the request will 404 — the catch silently ignores it.
+//  1. Supabase/Netlify (the normal deployment): when the app loads settings
+//     whose rate is > 23 h old, it pings the scheduled function, which fetches
+//     from the provider and writes the row with its server-side key. Covers a
+//     cron that missed a day (scheduling gaps, a hiccup, a network error).
+//  2. No netlify function reachable — **demo mode** above all (no Supabase
+//     configured, so the preview and any unconfigured deployment), plus any
+//     non-Netlify host. There the ping above does nothing at all, which is why
+//     such a workspace used to sit on the bundled fallback for ever. Here the
+//     browser fetches the provider itself and saves the number through the
+//     ordinary settings path (see `triggerBrowserFxSyncIfStale`).
+//
+// Both run at most once per page load and are silent on failure: an unavailable
+// provider must never hold up the app or show an error nobody can act on.
 const fxSyncTriggered = { value: false }
+const fxBrowserSyncTriggered = { value: false }
 
 function triggerFxSyncIfStale(settings: Settings): void {
   if (fxSyncTriggered.value) return
@@ -84,6 +88,37 @@ function triggerFxSyncIfStale(settings: Settings): void {
   if (ageMs <= 23 * 3_600_000) return
   fxSyncTriggered.value = true
   fetch('/.netlify/functions/sync-fx-rate').catch(() => undefined)
+}
+
+/**
+ * Browser-side counterpart for **deployments with no server to ping**.
+ *
+ * The function above is passive and Netlify-only: it asks Netlify to go and
+ * fetch a rate. That leaves demo mode (no Supabase configured, so there is no
+ * `settings` row to write to) and any non-Netlify host showing the bundled
+ * `≈ ₱58.00` for ever — the "it is not updating" report in its purest form.
+ *
+ * So when the app finds the stored rate missing or > 23 h old, it fetches the
+ * provider itself (`@/lib/fxRate`, the same two keyless sources the function
+ * uses) and saves the number through the ordinary settings path. It runs at
+ * most once per page load, it is fire-and-forget, and a failure is silent —
+ * an unavailable provider must never surface as an app error.
+ *
+ * Note this is the *self-healing* path; the explicit, explainable control is
+ * Settings → General → "Refresh now" (see `FxRateCard`).
+ */
+function triggerBrowserFxSyncIfStale(settings: Settings, save: (patch: Partial<Settings>) => Promise<Settings | null>): void {
+  if (fxBrowserSyncTriggered.value) return
+  const updatedAt = settings.usd_php_rate_updated_at
+  const ageMs = updatedAt ? Date.now() - new Date(updatedAt).getTime() : Infinity
+  if (ageMs <= 23 * 3_600_000) return
+  fxBrowserSyncTriggered.value = true
+  void import('./fxRate').then(async ({ fetchFreshRate }) => {
+    const fresh = await fetchFreshRate()
+    if (!fresh) return
+    // The shared save path updates `settings` for every screen at once.
+    await save({ usd_php_rate: fresh.rate, usd_php_rate_updated_at: new Date().toISOString() })
+  })
 }
 
 function sortEntriesDesc(rows: TimeEntry[]): TimeEntry[] {
@@ -474,6 +509,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
       if (s.data) {
         setSettings(s.data)
+        // Ask Netlify to refresh (a no-op off Netlify / in demo mode). The
+        // direct browser fetch for deployments with no server to ping lives in
+        // its own effect below, where `saveSettings` is already defined.
         if (isSupabaseConfigured()) triggerFxSyncIfStale(s.data)
       }
       // Clear on a clean empty result (someone clocked out elsewhere); keep the
@@ -971,6 +1009,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setSettings(res.data)
     return res.data
   }, [backend])
+
+  // Self-heal a missing / day-old USD → PHP rate by fetching the provider from
+  // the browser. This is the path that works with **no server** — demo mode,
+  // the sandbox preview, any non-Netlify host — and it is deliberately separate
+  // from `refreshData` so the save goes through `saveSettings` like any other
+  // settings write. Guarded to one attempt per page load (see
+  // triggerBrowserFxSyncIfStale), and silent when every provider is unreachable.
+  useEffect(() => {
+    if (!settings) return
+    triggerBrowserFxSyncIfStale(settings, saveSettings)
+  }, [settings, saveSettings])
 
   const getSlackSettings = useCallback(async () => {
     const res = await backend.getSlackSettings()
