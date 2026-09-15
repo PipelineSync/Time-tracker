@@ -7,6 +7,8 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/EmptyState'
 import { ActiveWorkersPanel } from '@/components/ActiveWorkersPanel'
+import { FaqButton } from '@/components/FaqButton'
+import { PageHeader } from '@/components/PageHeader'
 import { RateChip } from '@/components/RateChip'
 import {
   Clock, DollarSign, CalendarRange, Wallet, Plus, Users, ListChecks,
@@ -43,15 +45,15 @@ export function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      {/* Title row mirrors PageHeader's layout so the rate chip floats
-          top-right on desktop and wraps below the title on phones. */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="space-y-1">
-          <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Dashboard</h1>
-          <p className="text-sm text-muted-foreground">Overview of your team’s time and earnings.</p>
-        </div>
+      {/* Same title row as every other page (`PageHeader`) — the FAQ button
+          takes the upper-left slot and the rate chip the right-hand one. */}
+      <PageHeader
+        title="Dashboard"
+        description="Overview of your team’s time and earnings."
+        leading={<FaqButton />}
+      >
         <RateChip settings={settings} />
-      </div>
+      </PageHeader>
 
       {/* Everyone currently on the clock (working or on break) */}
       <ActiveWorkersPanel />
