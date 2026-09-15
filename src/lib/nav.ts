@@ -16,6 +16,11 @@ import type { Permission } from './types'
  * the admin does not hold automatically, so it is passed in separately
  * (`isItSupport`) rather than read through `can()`, which answers `true` for
  * every permission when the account is an admin.
+ *
+ * There is deliberately **no** "Submit a Ticket" destination here. Reporting a
+ * problem is help, not a section: the entry point lives in the FAQs dialog
+ * (`FaqButton`), which every account already has in the upper-left of the
+ * screen it is reading.
  */
 export type NavKey =
   | 'dashboard'
@@ -34,7 +39,6 @@ export type NavKey =
   | 'reports'
   | 'settings'
   | 'itSupport'
-  | 'submitTicket'
 
 export interface NavPlanSection {
   /** Heading shown above the group. Empty = no heading (admin / default block). */
@@ -79,9 +83,6 @@ export function buildNavPlan(
         'priorityBoard',
         'meetings',
         'invoicing',
-        // Reporting a problem is open to everyone, the owner included — this
-        // is the *submission* entry, not the desk.
-        'submitTicket',
         'notepad',
         'finance',
         'workers',
@@ -100,12 +101,6 @@ export function buildNavPlan(
     'payroll',
     'settings',
   ]
-
-  // "Submit a Ticket" is everyone's, granted or not: a worker with no access
-  // still has to be able to report a broken laptop. The account that *runs*
-  // support gets the desk instead (it can submit from there too), so this entry
-  // is left out for them rather than doubling up.
-  if (!isItSupport) defaults.splice(defaults.indexOf('notepad') + 1, 0, 'submitTicket')
 
   const granted: NavKey[] = []
   if (can('dashboard.view')) granted.push('dashboard')

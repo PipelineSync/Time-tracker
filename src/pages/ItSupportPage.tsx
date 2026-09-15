@@ -56,27 +56,7 @@ export function ItSupportPage() {
       const next = new URLSearchParams(searchParams)
       if (id) next.set('ticket', id)
       else next.delete('ticket')
-      // The "Submit a Ticket" menu entry arrives as ?new=1; opening or picking
-      // a ticket is what replaces it.
-      next.delete('new')
       setSearchParams(next, { replace: true })
-    },
-    [searchParams, setSearchParams],
-  )
-
-  // The "Submit a Ticket" menu entry opens the form directly.
-  useEffect(() => {
-    if (searchParams.get('new') === '1') setFormOpen(true)
-  }, [searchParams])
-
-  const closeForm = useCallback(
-    (open: boolean) => {
-      setFormOpen(open)
-      if (!open && searchParams.get('new') === '1') {
-        const next = new URLSearchParams(searchParams)
-        next.delete('new')
-        setSearchParams(next, { replace: true })
-      }
     },
     [searchParams, setSearchParams],
   )
@@ -188,7 +168,7 @@ export function ItSupportPage() {
             </CardContent>
           </Card>
         )}
-        <TicketFormDialog open={formOpen} onOpenChange={closeForm} onSubmitted={(t) => selectTicket(t.id)} />
+        <TicketFormDialog open={formOpen} onOpenChange={setFormOpen} onSubmitted={(t) => selectTicket(t.id)} />
       </div>
     )
   }
@@ -302,7 +282,7 @@ export function ItSupportPage() {
 
       <TicketFormDialog
         open={formOpen}
-        onOpenChange={closeForm}
+        onOpenChange={setFormOpen}
         onSubmitted={(t) => {
           void refreshTickets()
           selectTicket(t.id)

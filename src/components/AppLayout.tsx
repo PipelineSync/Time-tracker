@@ -16,7 +16,6 @@ import {
   Landmark,
   CircleDollarSign,
   Headset,
-  LifeBuoy,
   LogOut,
   KeyRound,
   Moon,
@@ -74,9 +73,6 @@ const NAV: Record<NavKey, NavItem> = {
   // The support desk. Shown only to a worker the admin granted it to — never
   // to the admin, who holds every other capability but not this one.
   itSupport: { to: '/it-support', label: 'IT Support', shortLabel: 'Support', icon: Headset },
-  // Reporting a problem — every account has this one, and it opens the ticket
-  // form rather than the desk.
-  submitTicket: { to: '/it-support?new=1', label: 'Submit a Ticket', shortLabel: 'Ticket', icon: LifeBuoy },
   settings: { to: '/settings', label: 'Settings', shortLabel: 'Settings', icon: Settings },
 }
 

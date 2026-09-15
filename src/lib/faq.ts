@@ -115,7 +115,7 @@ export const FAQ_SECTIONS: Record<FaqAudience, FaqSection[]> = {
           id: 'worker-ticket',
           question: 'My computer is playing up — who do I tell?',
           answer:
-            'Use Submit a Ticket in the menu: a subject, what happened, how urgent it is and up to three screenshots. It goes to whoever is running IT Support — you never need their queue, and they never see your time or pay. You get a bell notification when they reply or move the ticket, and clicking it opens the thread.',
+            'Open this help list (the ? in the corner) and press Submit a Ticket at the bottom: a subject, what happened, how urgent it is and up to three screenshots. It goes to whoever is running IT Support — you never need their queue, and they never see your time or pay. They are notified at once, and a bell notification tells you when they reply or move it.',
         },
         {
           id: 'worker-notepad',
