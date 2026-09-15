@@ -238,6 +238,7 @@ export interface DataBackend {
   /** How many of the signed-in user's notifications are still unread. */
   countUnreadNotifications(): Promise<BackendResult<number>>
   markNotificationsRead(): Promise<BackendResult<null>>
+  createNotification(recipientUserId: string, n: { entry_id?: string | null; type: AppNotification['type']; message: string }): Promise<BackendResult<AppNotification | null>>
 
   // Payments / settlements
   listPayments(limit?: number): Promise<BackendResult<Payment[]>>

@@ -89,6 +89,127 @@ export function recordRecurringRun(item: PFRecurring): PFRecurring {
     active: maxOccurrences === null || runCount < maxOccurrences,
   }
 }
+
+/**
+ * Remove a recurring payment from Personal Tracker data. Past expenses
+ * recorded against this recurring payment are preserved as transactions.
+ */
+export function deleteRecurringPayment(data: PFData, recurringId: string): PFData {
+  return {
+    ...data,
+    recurring: data.recurring.filter((r) => r.id !== recurringId),
+  }
+}
+
+export type PFOverduePayment = {
+  recurringId: string
+  recurringName: string
+  installmentId?: string
+  installmentNumber?: number
+  dueDate: string
+  period: string
+  amount: number | null
+  accountId: string
+  categoryId: string
+  daysOverdue: number
+}
+
+/** Calculate days between two ISO date strings (positive = toIso is after fromIso). */
+export function daysDifference(fromIso: string, toIso: string): number {
+  const from = new Date(`${fromIso}T00:00:00`).getTime()
+  const to = new Date(`${toIso}T00:00:00`).getTime()
+  return Math.floor((to - from) / (1000 * 60 * 60 * 24))
+}
+
+/**
+ * Return all overdue payments across active recurring items in the tracker.
+ * Checks both fixed installments and monthly open-ended recurring payments.
+ */
+export function getOverdueRecurringPayments(data: PFData, asOfDate: string = today()): PFOverduePayment[] {
+  const overdue: PFOverduePayment[] = []
+
+  for (const r of data.recurring) {
+    if (!r.active) continue
+    if (r.maxOccurrences !== null && r.runCount >= r.maxOccurrences) continue
+
+    if (r.installments && r.installments.length > 0) {
+      for (const inst of r.installments) {
+        if (inst.paid) continue
+        if (inst.dueDate < asOfDate) {
+          const alreadyPaid = data.expenses.some(
+            (e) => e.recurringId === r.id && (e.installmentNumber === inst.number || (e.dueDate === inst.dueDate && e.paid))
+          )
+          if (!alreadyPaid) {
+            overdue.push({
+              recurringId: r.id,
+              recurringName: r.name,
+              installmentId: inst.id,
+              installmentNumber: inst.number,
+              dueDate: inst.dueDate,
+              period: inst.dueDate.slice(0, 7),
+              amount: r.expectedAmount,
+              accountId: r.accountId,
+              categoryId: r.categoryId,
+              daysOverdue: daysDifference(inst.dueDate, asOfDate),
+            })
+          }
+        }
+      }
+    } else {
+      // Monthly open-ended payment or recurring payment with no pre-generated installments
+      const parsedDay = r.startDate ? Number(r.startDate.slice(8, 10)) : 1
+      const dueDay = (r.dueDay ?? parsedDay) || 1
+      const safeDueDay = Math.max(1, Math.min(28, dueDay))
+      const dayStr = String(safeDueDay).padStart(2, '0')
+
+      const startPeriod = r.startDate ? r.startDate.slice(0, 7) : asOfDate.slice(0, 7)
+      const currentPeriodStr = asOfDate.slice(0, 7)
+
+      let [year, month] = startPeriod.split('-').map(Number)
+      const [endYear, endMonth] = currentPeriodStr.split('-').map(Number)
+
+      // Cap backwards scan to at most 12 months
+      const startLimit = new Date(`${asOfDate}T00:00:00`)
+      startLimit.setMonth(startLimit.getMonth() - 12)
+      const startLimitPeriod = startLimit.toISOString().slice(0, 7)
+      if (startPeriod < startLimitPeriod) {
+        [year, month] = startLimitPeriod.split('-').map(Number)
+      }
+
+      while (year < endYear || (year === endYear && month <= endMonth)) {
+        const periodStr = `${year}-${String(month).padStart(2, '0')}`
+        const dueDate = `${periodStr}-${dayStr}`
+
+        if (dueDate < asOfDate) {
+          const isPaid = data.expenses.some(
+            (e) => e.recurringId === r.id && (e.period === periodStr || e.dueDate === dueDate || (e.dueDate && e.dueDate.slice(0, 7) === periodStr)) && e.paid
+          )
+          if (!isPaid) {
+            overdue.push({
+              recurringId: r.id,
+              recurringName: r.name,
+              dueDate,
+              period: periodStr,
+              amount: r.expectedAmount,
+              accountId: r.accountId,
+              categoryId: r.categoryId,
+              daysOverdue: daysDifference(dueDate, asOfDate),
+            })
+          }
+        }
+
+        month++
+        if (month > 12) {
+          month = 1
+          year++
+        }
+      }
+    }
+  }
+
+  // Sort earliest due date first (most overdue on top)
+  return overdue.sort((a, b) => a.dueDate.localeCompare(b.dueDate))
+}
 export const pfId = () => crypto.randomUUID?.() || `${Date.now()}-${Math.random()}`
 export const today = () => new Date().toISOString().slice(0, 10)
 export const currentPeriod = () => new Date().toISOString().slice(0, 7)

@@ -40,6 +40,7 @@ import { notifySlack } from './slack'
 import { playCue, playCues, readTeamSoundsPref, writeTeamSoundsPref } from './sounds'
 import { diffTimerSnapshots, snapshotsEqual, timerSnapshots, type TimerSnapshot } from './teamSounds'
 import { formatMinutes } from './utils'
+import { loadPersonalFinance, getOverdueRecurringPayments, money } from './personalFinance'
 import type { SlackSettings } from './types'
 
 // ---- Data-sync budget ----------------------------------------------------
@@ -304,6 +305,8 @@ interface StoreValue {
   updateFinanceItem: (id: string, patch: Partial<Omit<FinanceItem, 'id' | 'kind' | 'created_at' | 'updated_at'>>) => Promise<FinanceItem | null>
   /** Remove a finance line. finance.manage. */
   deleteFinanceItem: (id: string) => Promise<boolean>
+  /** Check personal tracker for overdue recurring payments and deliver bell notifications. */
+  checkOverdueRecurring: () => Promise<void>
 }
 
 const StoreContext = createContext<StoreValue | null>(null)
@@ -337,6 +340,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const refreshInFlight = useRef(false)
   const userRef = useRef(user)
   useEffect(() => { userRef.current = user }, [user])
+  const settingsRef = useRef(settings)
+  useEffect(() => { settingsRef.current = settings }, [settings])
   // Entry-sync state: `lastEntrySyncAt` anchors the delta syncs; the pages the
   // user explicitly "loaded older" live in `olderEntries` and survive the
   // background full syncs (those replace only the newest window).
@@ -378,6 +383,43 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   function skipped<T>(): { data: T | null; error: null } {
     return { data: null, error: null }
   }
+
+  const checkOverdueRecurring = useCallback(async () => {
+    const currentUser = userRef.current
+    if (!currentUser) return
+    try {
+      const pf = await loadPersonalFinance(currentUser.id)
+      const overdueList = getOverdueRecurringPayments(pf.data)
+      if (overdueList.length === 0) return
+
+      const currNotifs = (await backend.listNotifications(NOTIF_WINDOW)).data || []
+      let created = false
+      for (const op of overdueList) {
+        const alreadyNotified = currNotifs.some(
+          (n) => n.user_id === currentUser.id && n.message.includes(op.recurringName) && n.message.includes(op.dueDate)
+        )
+        if (!alreadyNotified) {
+          const currencyCode = settingsRef.current?.currency || 'PHP'
+          const amountStr = op.amount ? ` (${money(op.amount, currencyCode)})` : ''
+          const message = `Overdue recurring payment: "${op.recurringName}"${amountStr} was due on ${op.dueDate} (${op.daysOverdue} day${op.daysOverdue === 1 ? '' : 's'} overdue)`
+          await backend.createNotification(currentUser.id, {
+            entry_id: null,
+            type: 'payment',
+            message,
+          })
+          created = true
+        }
+      }
+      if (created) {
+        const fresh = await backend.listNotifications(NOTIF_WINDOW)
+        if (fresh.data) setNotifications(fresh.data)
+        const unread = await backend.countUnreadNotifications()
+        if (unread.data != null) setUnreadCount(unread.data)
+      }
+    } catch (e) {
+      console.warn('[store] Could not check overdue recurring payments:', e)
+    }
+  }, [backend])
 
   // What a refresh refetches. Timers and notifications need to stay near
   // real-time (who is on the clock, the unread badge); the heavy lists
@@ -496,6 +538,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (n.data) setNotifications(n.data)
       if (p.data) setPayments(p.data)
       if (u.data != null) setUnreadCount(u.data)
+      if (userRef.current) {
+        void checkOverdueRecurring()
+      }
       if (t.data) setTasks(t.data)
       if (cl.data) setClients(cl.data)
       if (cp.data) setClientPriorities(cp.data)
@@ -1520,6 +1565,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     createFinanceItem,
     updateFinanceItem,
     deleteFinanceItem,
+    checkOverdueRecurring,
   }
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>
