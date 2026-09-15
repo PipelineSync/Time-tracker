@@ -1645,13 +1645,27 @@ export const supabaseBackend: DataBackend = {
     if (me.error) return fail(me.error)
     const { data, error } = await client().from('settings').select('*').maybeSingle()
     if (error) return fail(error.message)
+    const normalizeSettings = (row: Settings): Settings => {
+      const raw = row as unknown as { default_hourly_rate?: unknown }
+      const parsedDefault =
+        typeof raw.default_hourly_rate === 'string'
+          ? Number(raw.default_hourly_rate)
+          : raw.default_hourly_rate
+      return {
+        ...row,
+        default_hourly_rate:
+          typeof parsedDefault === 'number' && Number.isFinite(parsedDefault)
+            ? parsedDefault
+            : row.default_hourly_rate,
+      } as Settings
+    }
     if (!data) {
       const def = { business_name: 'My Business', currency: 'USD', timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC', default_hourly_rate: 20 }
       const ins = await client().from('settings').insert(def).select().single()
       if (ins.error) return fail(ins.error.message)
-      return ok(ins.data as Settings)
+      return ok(normalizeSettings(ins.data as Settings))
     }
-    return ok(data as Settings)
+    return ok(normalizeSettings(data as Settings))
   },
 
   async saveSettings(patch) {
@@ -1662,7 +1676,15 @@ export const supabaseBackend: DataBackend = {
     if (!cur.data) return fail('Settings not found.')
     const { data, error } = await client().from('settings').update(patch).eq('id', cur.data.id).select().single()
     if (error) return fail(error.message)
-    return ok(data as Settings)
+    const raw = data as unknown as { default_hourly_rate?: unknown }
+    const normalized = {
+      ...data,
+      default_hourly_rate:
+        typeof raw.default_hourly_rate === 'string'
+          ? Number(raw.default_hourly_rate)
+          : (data as Settings).default_hourly_rate,
+    } as Settings
+    return ok(normalized)
   },
 
   async getSlackSettings() {
@@ -1828,6 +1850,17 @@ export const supabaseBackend: DataBackend = {
     if (me.error) return fail(me.error)
     const { error } = await client().from('notifications').update({ read: true }).eq('user_id', me.data!.id).eq('read', false)
     if (error) return fail(error.message)
+    return ok(null)
+  },
+
+  async createNotification(recipientUserId: string, n: { entry_id?: string | null; type: AppNotification['type']; message: string }) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    await pushNotification(recipientUserId, {
+      entry_id: n.entry_id ?? null,
+      type: n.type,
+      message: n.message,
+    })
     return ok(null)
   },
 

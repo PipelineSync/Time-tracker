@@ -10,7 +10,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { Bell, BellOff, Check, Clock, Coffee, Headset, LogIn, LogOut, MessageSquare, Play, Plus, Wallet, type LucideIcon } from 'lucide-react'
+import { AlertTriangle, Bell, BellOff, Check, Clock, Coffee, Headset, LogIn, LogOut, MessageSquare, Play, Plus, Wallet, type LucideIcon } from 'lucide-react'
 import { formatDateTime } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import type { NotificationType } from '@/lib/types'
@@ -68,35 +68,49 @@ export function NotificationsBell({ onNavy }: { onNavy?: boolean }) {
             </div>
           ) : (
             recent.map((n) => {
+              const isOverdue = n.message.toLowerCase().includes('overdue')
               const meta = typeMeta[n.type] || typeMeta.note
-              const Icon = meta.icon
+              const Icon = isOverdue ? AlertTriangle : meta.icon
+              const iconColor = isOverdue ? 'text-rose-600 dark:text-rose-400' : meta.color
               return (
                 <DropdownMenuItem
                   key={n.id}
                   className={cn(
-                    'items-start gap-3 whitespace-normal border-l-2 py-3',
-                    n.read ? 'border-l-transparent' : 'border-l-[#F77A0A] bg-[#F77A0A]/5'
+                    'items-start gap-3 whitespace-normal border-l-2 py-3 cursor-pointer',
+                    n.read
+                      ? 'border-l-transparent'
+                      : isOverdue
+                      ? 'border-l-rose-500 bg-rose-500/10'
+                      : 'border-l-[#F77A0A] bg-[#F77A0A]/5'
                   )}
                   onClick={() => {
+                    // A note opens its entry; a ticket notification opens that
+                    // ticket (the desk lands on the queue with it selected, the
+                    // requester on their own thread); overdue/recurring opens
+                    // the personal tracker; anything else just dismisses.
                     if (n.entry_id) {
-                      // A note opens its entry.
                       navigate(`/entries?entry=${n.entry_id}`)
                     } else if (n.ticket_id) {
-                      // A ticket notification opens that ticket: IT Support lands
-                      // on the queue with it selected, and everyone else (the
-                      // requester, whose ticket it is) on their own thread.
                       navigate(`/it-support?ticket=${n.ticket_id}`)
+                    } else if (n.message.toLowerCase().includes('recurring') || n.message.toLowerCase().includes('overdue')) {
+                      navigate('/personal')
                     }
                   }}
                 >
-                  <Icon className={cn('mt-0.5 h-4 w-4 shrink-0', meta.color)} />
+                  <Icon className={cn('mt-0.5 h-4 w-4 shrink-0', iconColor)} />
                   <div className="min-w-0 flex-1">
-                    <p className={cn('text-sm leading-snug', !n.read && 'font-bold text-foreground')}>{n.message}</p>
+                    <p className={cn('text-sm leading-snug', !n.read && 'font-bold text-foreground', isOverdue && !n.read && 'text-rose-950 dark:text-rose-200')}>
+                      {n.message}
+                    </p>
                     <p className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
                       <Clock className="h-3 w-3" /> {formatDateTime(n.created_at)}
                     </p>
                   </div>
-                  {!n.read && <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-[#F77A0A]" />}
+                  {!n.read && (
+                    <span
+                      className={cn('mt-1 h-2 w-2 shrink-0 rounded-full', isOverdue ? 'bg-rose-500' : 'bg-[#F77A0A]')}
+                    />
+                  )}
                 </DropdownMenuItem>
               )
             })

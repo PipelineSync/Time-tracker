@@ -26,8 +26,8 @@ export function PageHeader({
           {description && <p className="text-sm text-muted-foreground">{description}</p>}
         </div>
       </div>
-      {/* empty:hidden: a slot whose content renders nothing (e.g. `RateChip` in
-          a workspace that does not bill in USD) must not leave a gap behind. */}
+      {/* empty:hidden: a slot whose content renders nothing must not leave a
+          gap behind — and a caller that hides its own child gets no stray row. */}
       {children && <div className="flex flex-wrap items-center gap-2 empty:hidden">{children}</div>}
     </div>
   )

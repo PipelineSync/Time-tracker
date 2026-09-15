@@ -4,7 +4,6 @@ import { isChristmasTheme } from '@/lib/christmas'
 import { ClaimBonusButton } from '@/components/ClaimBonusButton'
 import { FaqButton } from '@/components/FaqButton'
 import { PageHeader } from '@/components/PageHeader'
-import { RateChip } from '@/components/RateChip'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { TimerDisplay } from '@/components/TimerDisplay'
@@ -167,11 +166,7 @@ export function TrackerPage() {
         title="Clock In / Out"
         description="Clock in, take breaks, and clock out."
         leading={<FaqButton audience="worker" />}
-      >
-        {/* Reference rate on the title row. Renders nothing unless the
-            workspace bills in USD, so a PHP workspace is unaffected. */}
-        <RateChip settings={settings} />
-      </PageHeader>
+      />
 
       {myTimer ? (
         <Card className="border-primary/40">

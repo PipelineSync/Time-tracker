@@ -47,6 +47,7 @@ import { notifySlack } from './slack'
 import { playCue, playCues, readTeamSoundsPref, writeTeamSoundsPref } from './sounds'
 import { diffTimerSnapshots, snapshotsEqual, timerSnapshots, type TimerSnapshot } from './teamSounds'
 import { formatMinutes } from './utils'
+import { loadPersonalFinance, getOverdueRecurringPayments, money } from './personalFinance'
 import type { SlackSettings } from './types'
 
 // ---- Data-sync budget ----------------------------------------------------
@@ -68,65 +69,6 @@ const FOCUS_FULL_MIN_MS = 90_000     // a refocus re-loads the full window at mo
 // clock chime: long enough to outlive the poll that picks the change up, short
 // enough that an id is never ignored forever.
 const LOCAL_ACTION_TTL_MS = 30_000
-
-// ---- FX rate self-healing --------------------------------------------------
-// Two mechanisms, because there are two situations:
-//
-//  1. Supabase/Netlify (the normal deployment): when the app loads settings
-//     whose rate is > 23 h old, it pings the scheduled function, which fetches
-//     from the provider and writes the row with its server-side key. Covers a
-//     cron that missed a day (scheduling gaps, a hiccup, a network error).
-//  2. No netlify function reachable — **demo mode** above all (no Supabase
-//     configured, so the preview and any unconfigured deployment), plus any
-//     non-Netlify host. There the ping above does nothing at all, which is why
-//     such a workspace used to sit on the bundled fallback for ever. Here the
-//     browser fetches the provider itself and saves the number through the
-//     ordinary settings path (see `triggerBrowserFxSyncIfStale`).
-//
-// Both run at most once per page load and are silent on failure: an unavailable
-// provider must never hold up the app or show an error nobody can act on.
-const fxSyncTriggered = { value: false }
-const fxBrowserSyncTriggered = { value: false }
-
-function triggerFxSyncIfStale(settings: Settings): void {
-  if (fxSyncTriggered.value) return
-  const updatedAt = settings.usd_php_rate_updated_at
-  const ageMs = updatedAt ? Date.now() - new Date(updatedAt).getTime() : Infinity
-  if (ageMs <= 23 * 3_600_000) return
-  fxSyncTriggered.value = true
-  fetch('/.netlify/functions/sync-fx-rate').catch(() => undefined)
-}
-
-/**
- * Browser-side counterpart for **deployments with no server to ping**.
- *
- * The function above is passive and Netlify-only: it asks Netlify to go and
- * fetch a rate. That leaves demo mode (no Supabase configured, so there is no
- * `settings` row to write to) and any non-Netlify host showing the bundled
- * `≈ ₱58.00` for ever — the "it is not updating" report in its purest form.
- *
- * So when the app finds the stored rate missing or > 23 h old, it fetches the
- * provider itself (`@/lib/fxRate`, the same two keyless sources the function
- * uses) and saves the number through the ordinary settings path. It runs at
- * most once per page load, it is fire-and-forget, and a failure is silent —
- * an unavailable provider must never surface as an app error.
- *
- * Note this is the *self-healing* path; the explicit, explainable control is
- * Settings → General → "Refresh now" (see `FxRateCard`).
- */
-function triggerBrowserFxSyncIfStale(settings: Settings, save: (patch: Partial<Settings>) => Promise<Settings | null>): void {
-  if (fxBrowserSyncTriggered.value) return
-  const updatedAt = settings.usd_php_rate_updated_at
-  const ageMs = updatedAt ? Date.now() - new Date(updatedAt).getTime() : Infinity
-  if (ageMs <= 23 * 3_600_000) return
-  fxBrowserSyncTriggered.value = true
-  void import('./fxRate').then(async ({ fetchFreshRate }) => {
-    const fresh = await fetchFreshRate()
-    if (!fresh) return
-    // The shared save path updates `settings` for every screen at once.
-    await save({ usd_php_rate: fresh.rate, usd_php_rate_updated_at: new Date().toISOString() })
-  })
-}
 
 function sortEntriesDesc(rows: TimeEntry[]): TimeEntry[] {
   return [...rows].sort((a, b) => b.start_time.localeCompare(a.start_time))
@@ -374,6 +316,8 @@ interface StoreValue {
   updateFinanceItem: (id: string, patch: Partial<Omit<FinanceItem, 'id' | 'kind' | 'created_at' | 'updated_at'>>) => Promise<FinanceItem | null>
   /** Remove a finance line. finance.manage. */
   deleteFinanceItem: (id: string) => Promise<boolean>
+  /** Check personal tracker for overdue recurring payments and deliver bell notifications. */
+  checkOverdueRecurring: () => Promise<void>
 }
 
 const StoreContext = createContext<StoreValue | null>(null)
@@ -408,6 +352,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const refreshInFlight = useRef(false)
   const userRef = useRef(user)
   useEffect(() => { userRef.current = user }, [user])
+  const settingsRef = useRef(settings)
+  useEffect(() => { settingsRef.current = settings }, [settings])
   // Entry-sync state: `lastEntrySyncAt` anchors the delta syncs; the pages the
   // user explicitly "loaded older" live in `olderEntries` and survive the
   // background full syncs (those replace only the newest window).
@@ -462,6 +408,43 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   function skipped<T>(): { data: T | null; error: null } {
     return { data: null, error: null }
   }
+
+  const checkOverdueRecurring = useCallback(async () => {
+    const currentUser = userRef.current
+    if (!currentUser) return
+    try {
+      const pf = await loadPersonalFinance(currentUser.id)
+      const overdueList = getOverdueRecurringPayments(pf.data)
+      if (overdueList.length === 0) return
+
+      const currNotifs = (await backend.listNotifications(NOTIF_WINDOW)).data || []
+      let created = false
+      for (const op of overdueList) {
+        const alreadyNotified = currNotifs.some(
+          (n) => n.user_id === currentUser.id && n.message.includes(op.recurringName) && n.message.includes(op.dueDate)
+        )
+        if (!alreadyNotified) {
+          const currencyCode = settingsRef.current?.currency || 'PHP'
+          const amountStr = op.amount ? ` (${money(op.amount, currencyCode)})` : ''
+          const message = `Overdue recurring payment: "${op.recurringName}"${amountStr} was due on ${op.dueDate} (${op.daysOverdue} day${op.daysOverdue === 1 ? '' : 's'} overdue)`
+          await backend.createNotification(currentUser.id, {
+            entry_id: null,
+            type: 'payment',
+            message,
+          })
+          created = true
+        }
+      }
+      if (created) {
+        const fresh = await backend.listNotifications(NOTIF_WINDOW)
+        if (fresh.data) setNotifications(fresh.data)
+        const unread = await backend.countUnreadNotifications()
+        if (unread.data != null) setUnreadCount(unread.data)
+      }
+    } catch (e) {
+      console.warn('[store] Could not check overdue recurring payments:', e)
+    }
+  }, [backend])
 
   // What a refresh refetches. Timers and notifications need to stay near
   // real-time (who is on the clock, the unread badge); the heavy lists
@@ -559,13 +542,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         }
         lastEntrySyncAt.current = syncTime
       }
-      if (s.data) {
-        setSettings(s.data)
-        // Ask Netlify to refresh (a no-op off Netlify / in demo mode). The
-        // direct browser fetch for deployments with no server to ping lives in
-        // its own effect below, where `saveSettings` is already defined.
-        if (isSupabaseConfigured()) triggerFxSyncIfStale(s.data)
-      }
+      if (s.data) setSettings(s.data)
       // Clear on a clean empty result (someone clocked out elsewhere); keep the
       // previous value when the backend errored so a blip doesn't hide a timer.
       if (!at.error) {
@@ -586,6 +563,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (n.data) setNotifications(n.data)
       if (p.data) setPayments(p.data)
       if (u.data != null) setUnreadCount(u.data)
+      if (userRef.current) {
+        void checkOverdueRecurring()
+      }
       if (t.data) setTasks(t.data)
       if (cl.data) setClients(cl.data)
       if (cp.data) setClientPriorities(cp.data)
@@ -598,7 +578,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       refreshInFlight.current = false
       if (token === dataVersion.current) setDataLoading(false)
     }
-  }, [backend])
+  }, [backend, checkOverdueRecurring])
 
   // Load initial session. The Supabase backend restores/refreshes the stored
   // session here, so a reload keeps the user signed in.
@@ -1062,17 +1042,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setSettings(res.data)
     return res.data
   }, [backend])
-
-  // Self-heal a missing / day-old USD → PHP rate by fetching the provider from
-  // the browser. This is the path that works with **no server** — demo mode,
-  // the sandbox preview, any non-Netlify host — and it is deliberately separate
-  // from `refreshData` so the save goes through `saveSettings` like any other
-  // settings write. Guarded to one attempt per page load (see
-  // triggerBrowserFxSyncIfStale), and silent when every provider is unreachable.
-  useEffect(() => {
-    if (!settings) return
-    triggerBrowserFxSyncIfStale(settings, saveSettings)
-  }, [settings, saveSettings])
 
   const getSlackSettings = useCallback(async () => {
     const res = await backend.getSlackSettings()
@@ -1683,6 +1652,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     createFinanceItem,
     updateFinanceItem,
     deleteFinanceItem,
+    checkOverdueRecurring,
   }
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>
