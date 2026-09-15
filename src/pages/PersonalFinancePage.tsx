@@ -37,10 +37,11 @@ export function PersonalFinancePage() {
   const [entry, setEntry] = useState<EntryKind | null>(null)
   const [accountOpen, setAccountOpen] = useState(false)
   const [recurringOpen, setRecurringOpen] = useState(false)
+  const [recurringDetails, setRecurringDetails] = useState<PFData['recurring'][number] | null>(null)
   const [editAccount, setEditAccount] = useState<PFAccount | null>(null)
   const [reconcileAccount, setReconcileAccount] = useState<PFAccount | null>(null)
   const [deleteTx, setDeleteTx] = useState<{ type: 'income' | 'expense' | 'transfer'; id: string } | null>(null)
-  const [payRecurring, setPayRecurring] = useState<PFData['recurring'][number] | null>(null)
+  const [payRecurring, setPayRecurring] = useState<{r: PFData['recurring'][number]; i?: {id:string;dueDate:string;number:number}} | null>(null)
   const [from, setFrom] = useState(monthStart())
   const [to, setTo] = useState(today())
   const [accountFilter, setAccountFilter] = useState('all')
@@ -102,13 +103,16 @@ export function PersonalFinancePage() {
     <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-sm font-semibold uppercase tracking-[.2em] text-primary">Private workspace</p><h1 className="text-3xl font-bold tracking-tight">{displayName}'s Personal Tracker</h1><p className="text-muted-foreground">Your accounts, spending and income—all in one place.</p></div><div className="flex flex-wrap gap-2"><Button onClick={()=>setEntry('expense')}><ArrowUpRight className="mr-2 h-4 w-4"/>Expense</Button><Button variant="outline" onClick={()=>setEntry('income')}><ArrowDownLeft className="mr-2 h-4 w-4"/>Income</Button><Button variant="outline" onClick={()=>setEntry('transfer')}><ArrowLeftRight className="mr-2 h-4 w-4"/>Transfer</Button></div></div>
     <div className="flex gap-1 overflow-x-auto rounded-xl border bg-card p-1">{NAV.map(n=><Button key={n.id} variant={view===n.id?'default':'ghost'} size="sm" onClick={()=>setView(n.id)} className="shrink-0"><n.icon className="mr-2 h-4 w-4"/>{n.label}</Button>)}</div>
 
-    {view==='dashboard' && <><div className="grid gap-4 md:grid-cols-3"><Metric label="Total balance" value={m(total)} tone="blue"/><Metric label="Money in this month" value={m(moneyIn)} tone="green"/><Metric label="Money out this month" value={m(moneyOut)} tone="orange"/></div><div className="grid gap-6 lg:grid-cols-3"><Card className="lg:col-span-2"><CardHeader className="flex-row items-center justify-between"><CardTitle>Your accounts</CardTitle><Button size="sm" variant="outline" onClick={()=>setAccountOpen(true)}><Plus className="mr-1 h-4 w-4"/>Add</Button></CardHeader><CardContent><AccountGrid data={data} currency={currency}/>{!activeAccounts.length&&<Empty text="Add your first bank or e-wallet account."/>}</CardContent></Card><Card><CardHeader><CardTitle>Recurring this month</CardTitle></CardHeader><CardContent className="space-y-3">{activeRecurring.slice(0,6).map(r=><RecurringRow key={r.id} r={r} data={data} currency={currency} onPay={()=>setPayRecurring(r)}/>)}{!activeRecurring.length&&<Empty text="No active recurring payments."/>}</CardContent></Card></div></>}
+    {view==='dashboard' && <><div className="grid gap-4 md:grid-cols-3"><Metric label="Total balance" value={m(total)} tone="blue"/><Metric label="Money in this month" value={m(moneyIn)} tone="green"/><Metric label="Money out this month" value={m(moneyOut)} tone="orange"/></div><div className="grid gap-6 lg:grid-cols-3"><Card className="lg:col-span-2"><CardHeader className="flex-row items-center justify-between"><CardTitle>Your accounts</CardTitle><Button size="sm" variant="outline" onClick={()=>setAccountOpen(true)}><Plus className="mr-1 h-4 w-4"/>Add</Button></CardHeader><CardContent><AccountGrid data={data} currency={currency}/>{!activeAccounts.length&&<Empty text="Add your first bank or e-wallet account."/>}</CardContent></Card><Card><CardHeader><CardTitle>Recurring this month</CardTitle></CardHeader><CardContent className="space-y-3">{activeRecurring.slice(0,6).map(r=><RecurringRow key={r.id} r={r} data={data} currency={currency} onPay={()=>setPayRecurring({r})}/>)}{!activeRecurring.length&&<Empty text="No active recurring payments."/>}</CardContent></Card></div></>}
 
     {view==='accounts' && <Card><CardHeader className="flex-row items-center justify-between"><div><CardTitle>Accounts</CardTitle><p className="text-sm text-muted-foreground">Balances calculate automatically from paid transactions and transfers.</p></div><Button onClick={()=>setAccountOpen(true)}><Plus className="mr-2 h-4 w-4"/>Add account</Button></CardHeader><CardContent><AccountGrid data={data} currency={currency} manage onArchive={(id)=>commit({...data,accounts:data.accounts.map(a=>a.id===id?{...a,archived:!a.archived}:a)})} onEdit={(id)=>{const a=data.accounts.find(x=>x.id===id);if(a)setEditAccount(a)}} onReconcile={(id)=>{const a=data.accounts.find(x=>x.id===id);if(a)setReconcileAccount(a)}}/><div className="mt-6 rounded-xl bg-primary p-5 text-primary-foreground"><p className="text-sm opacity-80">Total available</p><p className="text-3xl font-bold">{m(total)}</p></div></CardContent></Card>}
 
     {view==='activity' && <Card><CardHeader><CardTitle>Transactions</CardTitle></CardHeader><CardContent className="space-y-2">{[...data.incomes.map(x=>({id:x.id,date:x.date,title:data.sources.find(s=>s.id===x.sourceId)?.name||'Income',amount:x.amount,type:'income' as const})),...data.expenses.map(x=>({id:x.id,date:x.date,title:x.name,amount:-x.amount,type:'expense' as const})),...data.transfers.map(x=>({id:x.id,date:x.date,title:`${data.accounts.find(a=>a.id===x.fromId)?.name} → ${data.accounts.find(a=>a.id===x.toId)?.name}`,amount:0,type:'transfer' as const}))].sort((a,b)=>b.date.localeCompare(a.date)).map(x=><div key={`${x.type}-${x.id}`} className="flex items-center justify-between rounded-lg border p-3"><div><p className="font-medium">{x.title}</p><p className="text-xs text-muted-foreground">{x.date} · {x.type}</p></div><div className="flex items-center gap-3"><span className={x.amount>0?'text-emerald-600':x.amount<0?'text-rose-600':'text-muted-foreground'}>{x.amount?m(x.amount):'Internal'}</span><Button size="sm" variant="ghost" onClick={()=>setDeleteTx({type:x.type,id:x.id})}>Delete</Button></div></div>)}{!data.incomes.length&&!data.expenses.length&&!data.transfers.length&&<Empty text="No transactions match these filters."/>}</CardContent></Card>}
 
-    {view==='recurring' && <Card><CardHeader className="flex-row items-center justify-between"><div><CardTitle>Recurring payments</CardTitle><p className="text-sm text-muted-foreground">Marking one paid creates an expense and counts one run.</p></div><Button onClick={()=>setRecurringOpen(true)}><Plus className="mr-2 h-4 w-4"/>Add</Button></CardHeader><CardContent className="space-y-3">{data.recurring.map(r=><RecurringRow key={r.id} r={r} data={data} currency={currency} detailed onPay={()=>setPayRecurring(r)} onToggle={active=>setRecurringActive(r.id,active)}/>)}{!data.recurring.length&&<Empty text="Add bills, loans, and subscriptions you pay regularly."/>}</CardContent></Card>}
+    {view==='recurring' && <>
+      <Card><CardHeader className="flex-row items-center justify-between"><div><CardTitle>Recurring payments</CardTitle><p className="text-sm text-muted-foreground">Your next scheduled payment for each recurring item.</p></div><Button onClick={()=>setRecurringOpen(true)}><Plus className="mr-2 h-4 w-4"/>Add</Button></CardHeader><CardContent className="space-y-3">{data.recurring.map(r=>{const next=r.installments?.find(i=>!i.paid);return <div key={r.id} className="space-y-1"><RecurringRow r={r} installment={next} data={data} currency={currency} detailed onPay={()=>setPayRecurring({r,i:next})} onToggle={active=>setRecurringActive(r.id,active)}/><Button size="sm" variant="link" className="px-3" onClick={()=>setRecurringDetails(r)}>See more</Button></div>})}{!data.recurring.length&&<Empty text="Add bills, loans, and subscriptions you pay regularly."/>}</CardContent></Card>
+      <Dialog open={!!recurringDetails} onOpenChange={open=>{if(!open)setRecurringDetails(null)}}><DialogContent className="max-h-[85vh] overflow-y-auto"><DialogHeader><DialogTitle>{recurringDetails?.name} payment schedule</DialogTitle><DialogDescription>Paid months, upcoming installments, and the remaining balance.</DialogDescription></DialogHeader>{recurringDetails&&<div className="space-y-4"><div className="grid grid-cols-2 gap-3"><div className="rounded-lg border p-3"><p className="text-xs text-muted-foreground">Paid</p><p className="font-semibold">{recurringDetails.runCount}{recurringDetails.maxOccurrences?` of ${recurringDetails.maxOccurrences}`:''}</p></div><div className="rounded-lg border p-3"><p className="text-xs text-muted-foreground">Total balance to pay</p><p className="font-semibold">{recurringDetails.expectedAmount&&recurringDetails.maxOccurrences?money(recurringDetails.expectedAmount*(recurringDetails.maxOccurrences-recurringDetails.runCount),currency):'Variable'}</p></div></div><div><p className="mb-2 font-medium">Paid months</p>{data.expenses.filter(x=>x.recurringId===recurringDetails.id).sort((a,b)=>(b.dueDate||b.date).localeCompare(a.dueDate||a.date)).map(x=><p key={x.id} className="text-sm text-muted-foreground">{new Date(`${x.dueDate||x.date}T00:00:00`).toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})} · paid {new Date(`${x.date}T00:00:00`).toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})} · {money(x.amount,currency)}</p>)}{!data.expenses.some(x=>x.recurringId===recurringDetails.id)&&<p className="text-sm text-muted-foreground">No paid months yet.</p>}</div><div><p className="mb-2 font-medium">Upcoming payments</p>{(recurringDetails.installments||[]).filter(i=>!i.paid).sort((a,b)=>a.dueDate.localeCompare(b.dueDate)).map(i=><RecurringRow key={i.id} r={recurringDetails} installment={i} data={data} currency={currency} onPay={()=>{setRecurringDetails(null);setPayRecurring({r:recurringDetails,i})}}/> )}</div></div>}</DialogContent></Dialog>
+    </>}
 
     {view==='reports' && <div className="space-y-5"><Card><CardContent className="pt-6"><AccountGrid data={data} currency={currency}/><div className="mt-4 flex justify-between rounded-lg bg-muted p-4 font-semibold"><span>Total across accounts</span><span>{m(total)}</span></div></CardContent></Card><Card><CardContent className="grid gap-3 pt-6 sm:grid-cols-2 lg:grid-cols-6"><Field label="From"><Input type="date" value={from} onChange={e=>setFrom(e.target.value)}/></Field><Field label="To"><Input type="date" value={to} onChange={e=>setTo(e.target.value)}/></Field><Filter value={accountFilter} set={setAccountFilter} label="Account" items={data.accounts}/><Filter value={categoryFilter} set={setCategoryFilter} label="Category" items={data.categories}/><Filter value={kindFilter} set={setKindFilter} label="Type" items={[{id:'income',name:'Income'},{id:'expense',name:'Expense'}]}/><Filter value={paidFilter} set={setPaidFilter} label="Paid status" items={[{id:'true',name:'Paid'},{id:'false',name:'Unpaid'}]}/></CardContent></Card><div className="grid gap-4 md:grid-cols-3"><Metric label="Money in" value={m(moneyIn)} tone="green"/><Metric label="Money out" value={m(moneyOut)} tone="orange"/><Metric label="Net" value={m(moneyIn-moneyOut)} tone="blue"/></div><Card><CardHeader className="flex-row items-center justify-between"><CardTitle>Spending by category</CardTitle><Button variant="outline" onClick={exportCsv}><Download className="mr-2 h-4 w-4"/>Export CSV</Button></CardHeader><CardContent className="space-y-4">{categories.filter(c=>c.total>0).map(c=><div key={c.id}><div className="mb-1 flex justify-between text-sm"><span>{c.name}</span><b>{m(c.total)}</b></div><div className="h-3 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary" style={{width:`${moneyOut?Math.max(3,c.total/moneyOut*100):0}%`}}/></div></div>)}{!moneyOut&&<Empty text="No spending matches these filters."/>}</CardContent></Card></div>}
 
@@ -119,7 +123,7 @@ export function PersonalFinancePage() {
     {editAccount && <EditAccountDialog account={editAccount} close={()=>setEditAccount(null)} data={data} commit={commit}/>}
     {reconcileAccount && <ReconcileDialog account={reconcileAccount} data={data} currency={currency} close={()=>setReconcileAccount(null)} commit={commit}/>}
     <ConfirmDialog open={!!deleteTx} onOpenChange={v=>{if(!v)setDeleteTx(null)}} title={deleteTxTitle} description="The transaction will be removed from your tracker. This cannot be undone." confirmLabel="Delete" onConfirm={doDeleteTx}/>
-    {payRecurring && <PayRecurringDialog recurring={payRecurring} data={data} close={()=>setPayRecurring(null)} commit={commit}/>}
+    {payRecurring && <PayRecurringDialog recurring={payRecurring.r} installment={payRecurring.i} data={data} close={()=>setPayRecurring(null)} commit={commit}/>}
   </main></div>
 }
 
@@ -132,78 +136,15 @@ function Filter({value,set,label,items}:{value:string;set:(v:string)=>void;label
 function AccountDialog({open,close,data,commit}:{open:boolean;close:()=>void;data:PFData;commit:(d:PFData)=>void}) { const submit=(e:FormEvent<HTMLFormElement>)=>{e.preventDefault();const f=new FormData(e.currentTarget);commit({...data,accounts:[...data.accounts,{id:pfId(),name:String(f.get('name')),purpose:String(f.get('purpose')),startingBalance:Number(f.get('balance')),archived:false}]});close()}; return <Dialog open={open} onOpenChange={close}><DialogContent><DialogHeader><DialogTitle>Add account</DialogTitle></DialogHeader><form className="space-y-4" onSubmit={submit}><Field label="Bank or e-wallet name"><Input name="name" required autoFocus/></Field><Field label="Purpose / label"><Input name="purpose" placeholder="For bills, salary, savings…"/></Field><Field label="Starting balance"><Input name="balance" type="number" step="0.01" required defaultValue="0"/></Field><Button className="w-full">Add account</Button></form></DialogContent></Dialog> }
 function EditAccountDialog({account,close,data,commit}:{account:PFAccount;close:()=>void;data:PFData;commit:(d:PFData)=>void}) { const submit=(e:FormEvent<HTMLFormElement>)=>{e.preventDefault();const f=new FormData(e.currentTarget);commit({...data,accounts:data.accounts.map(x=>x.id===account.id?{...x,name:String(f.get('name'))||x.name,purpose:String(f.get('purpose'))}:x)});close()}; return <Dialog open onOpenChange={close}><DialogContent><DialogHeader><DialogTitle>Edit account</DialogTitle></DialogHeader><form className="space-y-4" onSubmit={submit}><Field label="Bank or e-wallet name"><Input name="name" required defaultValue={account.name}/></Field><Field label="Purpose / label"><Input name="purpose" defaultValue={account.purpose} placeholder="For bills, salary, savings…"/></Field><Button className="w-full">Save changes</Button></form></DialogContent></Dialog> }
 function ReconcileDialog({account,data,currency,close,commit}:{account:PFAccount;data:PFData;currency:string;close:()=>void;commit:(d:PFData)=>void}) { const current=accountBalance(data,account.id); const submit=(e:FormEvent<HTMLFormElement>)=>{e.preventDefault();const desired=Number(new FormData(e.currentTarget).get('balance'));if(!Number.isFinite(desired))return;commit({...data,accounts:data.accounts.map(x=>x.id===account.id?{...x,startingBalance:x.startingBalance+(desired-current)}:x)});close()}; return <Dialog open onOpenChange={close}><DialogContent><DialogHeader><DialogTitle>Reconcile {account.name}</DialogTitle></DialogHeader><p className="text-sm text-muted-foreground">The tracker currently calculates a balance of <b>{money(current,currency)}</b>.</p><form className="space-y-4" onSubmit={submit}><Field label="Enter the correct current balance"><Input name="balance" type="number" step="0.01" required defaultValue={String(current)}/></Field><p className="text-xs text-muted-foreground">The difference is folded into the account's starting balance, so history stays intact.</p><Button className="w-full">Reconcile</Button></form></DialogContent></Dialog> }
-function PayRecurringDialog({recurring,data,close,commit}:{recurring:PFData['recurring'][number];data:PFData;close:()=>void;commit:(d:PFData)=>void}) {
+function PayRecurringDialog({recurring,installment,data,close,commit}:{recurring:PFData['recurring'][number];installment?:{id:string;dueDate:string;number:number};data:PFData;close:()=>void;commit:(d:PFData)=>void}) {
   const accounts = data.accounts.filter(a => !a.archived)
-  const submit = (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault()
-    if (!recurring.active) {
-      toast.error('Turn this recurring payment on before recording another run.')
-      return
-    }
-    if (data.expenses.some(expense => expense.recurringId === recurring.id && expense.period === currentPeriod())) {
-      toast.error('This recurring payment is already recorded for the current month.')
-      close()
-      return
-    }
-    const form = new FormData(e.currentTarget)
-    const accountId = String(form.get('account'))
-    if (!data.accounts.some(account => account.id === accountId && !account.archived)) {
-      toast.error('Choose an active account.')
-      return
-    }
-    const amount = Number(form.get('amount'))
-    if (!(amount > 0)) {
-      toast.error('Enter an amount greater than zero.')
-      return
-    }
-
-    const nextRecurring = recordRecurringRun(recurring)
-    void commit({
-      ...data,
-      recurring: data.recurring.map(item => item.id === recurring.id ? nextRecurring : item),
-      expenses: [...data.expenses, {
-        id: pfId(),
-        date: today(),
-        name: recurring.name,
-        categoryId: recurring.categoryId,
-        amount,
-        accountId,
-        paid: true,
-        note: 'Recurring payment',
-        recurringId: recurring.id,
-        period: currentPeriod(),
-      }],
-    })
-
-    if (recurring.maxOccurrences !== null && nextRecurring.runCount >= recurring.maxOccurrences) {
-      toast.success(`Final payment (${nextRecurring.runCount} of ${recurring.maxOccurrences}) recorded — “${recurring.name}” is now off.`)
-    } else {
-      toast.success(`Payment ${nextRecurring.runCount} recorded.`)
-    }
-    close()
+  const submit = (e: FormEvent<HTMLFormElement>) => { e.preventDefault(); const form=new FormData(e.currentTarget); const accountId=String(form.get('account')); const amount=Number(form.get('amount'))
+    if (!accounts.some(a=>a.id===accountId) || !(amount>0)) return toast.error('Choose an active account and enter a valid amount.')
+    const target=installment || recurring.installments?.find(i=>!i.paid)
+    if (!target || data.expenses.some(x=>x.recurringId===recurring.id && x.installmentNumber===target.number)) return toast.error('This installment is already paid.')
+    const next={...data, recurring:data.recurring.map(r=>r.id===recurring.id?{...r,runCount:r.runCount+1,active:r.maxOccurrences===null||r.runCount+1<r.maxOccurrences,installments:(r.installments||[]).map(i=>i.id===target.id?{...i,paid:true}:i)}:r), expenses:[...data.expenses,{id:pfId(),date:today(),dueDate:target.dueDate,name:recurring.name,categoryId:recurring.categoryId,amount,accountId,paid:true,note:`Recurring payment — installment ${target.number} of ${recurring.maxOccurrences??'ongoing'}`,recurringId:recurring.id,installmentNumber:target.number,period:target.dueDate.slice(0,7)}]}; void commit(next); toast.success(`Installment ${target.number} marked paid.`); close()
   }
-
-  return (
-    <Dialog open onOpenChange={close}>
-      <DialogContent>
-        <DialogHeader><DialogTitle>Pay {recurring.name}</DialogTitle></DialogHeader>
-        <form className="space-y-4" onSubmit={submit}>
-          <Picker name="account" label="Pay from" items={accounts} initial={recurring.accountId}/>
-          <Field label="Amount paid">
-            <Input name="amount" type="number" min="0.01" step="0.01" required defaultValue={String(recurring.expectedAmount || '')}/>
-          </Field>
-          {recurring.maxOccurrences !== null && (
-            <p className="text-xs text-muted-foreground">
-              This will be run {Math.min(recurring.runCount + 1, recurring.maxOccurrences)} of {recurring.maxOccurrences}.
-              {recurring.runCount + 1 >= recurring.maxOccurrences && ' It will turn off after this payment.'}
-            </p>
-          )}
-          <Button className="w-full" disabled={!accounts.length}>Mark paid</Button>
-          {!accounts.length && <p className="text-xs text-destructive">Add an account first.</p>}
-        </form>
-      </DialogContent>
-    </Dialog>
-  )
+  return <Dialog open onOpenChange={close}><DialogContent><DialogHeader><DialogTitle>Pay {recurring.name}</DialogTitle></DialogHeader><form className="space-y-4" onSubmit={submit}><p className="text-sm text-muted-foreground">Due {installment?.dueDate || 'next installment'}{installment&&` · installment ${installment.number} of ${recurring.maxOccurrences}`}</p><Picker name="account" label="Pay from" items={accounts} initial={recurring.accountId}/><Field label="Amount paid"><Input name="amount" type="number" min="0.01" step="0.01" required defaultValue={String(recurring.expectedAmount||'')}/></Field><Button className="w-full" disabled={!accounts.length}>Mark paid</Button></form></DialogContent></Dialog>
 }
 function EntryDialog({kind,close,data,commit}:{kind:EntryKind|null;close:()=>void;data:PFData;commit:(d:PFData)=>void}) { const submit=(e:FormEvent<HTMLFormElement>)=>{e.preventDefault();const f=new FormData(e.currentTarget),base={id:pfId(),date:String(f.get('date')),amount:Number(f.get('amount')),note:String(f.get('note')||'')};if(kind==='income'){const sourceName=String(f.get('source')).trim();const existing=data.sources.find(s=>s.name.toLowerCase()===sourceName.toLowerCase());const source=existing||{id:pfId(),name:sourceName};commit({...data,sources:existing?data.sources:[...data.sources,source],incomes:[...data.incomes,{...base,sourceId:source.id,accountId:String(f.get('account'))}]})};if(kind==='expense'){const categoryName=String(f.get('category')).trim();const existing=data.categories.find(c=>c.name.toLowerCase()===categoryName.toLowerCase());const category=existing||{id:pfId(),name:categoryName};commit({...data,categories:existing?data.categories:[...data.categories,category],expenses:[...data.expenses,{...base,name:String(f.get('name')),categoryId:category.id,accountId:String(f.get('account')),paid:f.get('paid')==='on'}]})};if(kind==='transfer')commit({...data,transfers:[...data.transfers,{...base,fromId:String(f.get('from')),toId:String(f.get('to'))}]});close()};return <Dialog open={!!kind} onOpenChange={close}><DialogContent><DialogHeader><DialogTitle>Add {kind}</DialogTitle></DialogHeader><form className="space-y-4" onSubmit={submit}><div className="grid grid-cols-2 gap-3"><Field label="Date"><Input name="date" type="date" defaultValue={today()} required/></Field><Field label="Amount"><Input name="amount" type="number" min="0.01" step="0.01" required/></Field></div>{kind==='income'&&<><Field label="Income source"><Input name="source" list="personal-income-sources" placeholder="Choose or type a new source" required/><datalist id="personal-income-sources">{data.sources.map(s=><option key={s.id} value={s.name}/>)}</datalist><p className="text-xs text-muted-foreground">Select an existing source or type a new one. New sources are saved automatically.</p></Field><Picker name="account" label="Into account" items={data.accounts.filter(a=>!a.archived)}/></>}{kind==='expense'&&<><Field label="Name / description"><Input name="name" required/></Field><CategoryField categories={data.categories}/><Picker name="account" label="From account" items={data.accounts.filter(a=>!a.archived)}/><label className="flex items-center gap-2 text-sm"><input name="paid" type="checkbox" defaultChecked/> Paid / cleared</label></>}{kind==='transfer'&&<><Picker name="from" label="From account" items={data.accounts.filter(a=>!a.archived)}/><Picker name="to" label="To account" items={data.accounts.filter(a=>!a.archived)}/></>}<Field label="Note (optional)"><Input name="note"/></Field><Button className="w-full" disabled={!data.accounts.length}>Save {kind}</Button>{!data.accounts.length&&<p className="text-xs text-destructive">Add an account first.</p>}</form></DialogContent></Dialog> }
 function CategoryField({categories}:{categories:{id:string;name:string}[]}) { return <Field label="Category"><Input name="category" list="personal-expense-categories" placeholder="Choose or type a new category" required/><datalist id="personal-expense-categories">{categories.map(c=><option key={c.id} value={c.name}/>)}</datalist><p className="text-xs text-muted-foreground">Select an existing category or type a new one. New categories are saved automatically.</p></Field> }
@@ -263,6 +204,8 @@ function RecurringDialog({open,close,data,commit}:{open:boolean;close:()=>void;d
         active: true,
         maxOccurrences: occurrenceValue,
         runCount: 0,
+        startDate: String(form.get('startDate') || today()),
+        installments: occurrenceValue ? Array.from({length: occurrenceValue}, (_, index) => { const d=new Date(`${String(form.get('startDate') || today())}T00:00:00`); d.setMonth(d.getMonth()+index); return {id:pfId(), dueDate:d.toISOString().slice(0,10), number:index+1, paid:false} }) : [],
       }],
     })
     toast.success('Recurring payment added.')
@@ -281,7 +224,7 @@ function RecurringDialog({open,close,data,commit}:{open:boolean;close:()=>void;d
           <CategoryField categories={data.categories}/>
           <Picker name="account" label="Usual account" items={accounts}/>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Expected amount"><Input name="amount" type="number" min="0.01" step="0.01"/></Field>
+            <Field label="Start date"><Input name="startDate" type="date" defaultValue={today()} required/></Field><Field label="Expected amount"><Input name="amount" type="number" min="0.01" step="0.01"/></Field>
             <Field label="Due day"><Input name="day" type="number" min="1" max="31" step="1"/></Field>
           </div>
           <Field label="Runs">
@@ -319,14 +262,16 @@ function RecurringDialog({open,close,data,commit}:{open:boolean;close:()=>void;d
     </Dialog>
   )
 }
-function RecurringRow({r,data,currency,detailed,onPay,onToggle}:{r:PFData['recurring'][number];data:PFData;currency:string;detailed?:boolean;onPay:()=>void;onToggle?:(active:boolean)=>void}) {
-  const paid = data.expenses.some(expense => expense.recurringId === r.id && expense.period === currentPeriod())
+function RecurringRow({r,installment,data,currency,detailed,onPay,onToggle}:{r:PFData['recurring'][number];installment?:{dueDate:string;number:number};data:PFData;currency:string;detailed?:boolean;onPay:()=>void;onToggle?:(active:boolean)=>void}) {
+  // A scheduled row is paid only when that exact installment is paid.
+  // Never infer payment from the current month: future installments may be paid early.
+  const paid = installment ? installment.paid : data.expenses.some(expense => expense.recurringId === r.id && expense.period === currentPeriod())
   const finished = r.maxOccurrences !== null && r.runCount >= r.maxOccurrences
   return (
     <div className="flex items-center justify-between gap-3 rounded-lg border p-3">
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-1.5">
-          <p className="font-medium">{r.name}</p>
+          <p className="font-medium">{r.name}</p>{installment&&<p className="text-sm text-muted-foreground">{new Date(`${installment.dueDate}T00:00:00`).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</p>}
           {r.maxOccurrences !== null && (
             <Badge variant="muted" className="whitespace-nowrap text-[10px]">
               {Math.min(r.runCount, r.maxOccurrences)}/{r.maxOccurrences} paid
@@ -334,7 +279,7 @@ function RecurringRow({r,data,currency,detailed,onPay,onToggle}:{r:PFData['recur
           )}
         </div>
         <p className="text-xs text-muted-foreground">
-          {r.expectedAmount ? money(r.expectedAmount, currency) : 'Variable'}
+          {r.expectedAmount ? money(r.expectedAmount, currency) : 'Variable'}{installment && ` · Installment ${installment.number} of ${r.maxOccurrences}`}
           {r.dueDay ? ` · due day ${r.dueDay}` : ''}
           {r.maxOccurrences === null ? ' · until switched off' : ''}
         </p>
