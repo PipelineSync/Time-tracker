@@ -13,16 +13,16 @@ import type { Settings } from '@/lib/types'
  * `settings` row the store already refreshes about once a minute.
  *
  * A synced rate is stated with `=`, the bundled fallback with `≈`, so a
- * workspace whose daily sync has not run yet is not shown a round placeholder
- * as though it were today's quote.
+ * workspace whose sync has not run yet is not shown a round placeholder as
+ * though it were today's quote.
  */
 export function RateChip({ settings, className }: { settings: Settings | null; className?: string }) {
   const fx = usdPhpRate(settings)
   if (!fx) return null
 
   const title = fx.isFallback
-    ? `Reference rate, approximate. The daily sync has not written a rate for this workspace yet — deploy the sync-fx-rate function, or run supabase/RUN-THIS-fx-rate.sql and wait for its next 8:00 AM PHT run.`
-    : `USD to PHP reference rate, synced ${fx.updatedAt ? formatDate(fx.updatedAt) : 'recently'}. Refreshed once a day; conversions are indicative, not a payment quote.`
+    ? `Reference rate, approximate. The twice-daily sync has not written a rate for this workspace yet — deploy the sync-fx-rate function and set CURRENCYFREAKS_API_KEY, or run supabase/RUN-THIS-fx-rate.sql and wait for its next 8:30 AM / 8:30 PM PHT run.`
+    : `USD to PHP reference rate, synced ${fx.updatedAt ? formatDate(fx.updatedAt) : 'recently'}. Refreshed twice a day from CurrencyFreaks; conversions are indicative, not a payment quote.`
 
   return (
     <Badge variant="muted" title={title} className={cn('gap-1.5 font-medium', className)}>

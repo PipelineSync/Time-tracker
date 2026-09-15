@@ -3,17 +3,18 @@ import type { Settings } from './types'
 /**
  * USD → PHP reference rate — the single source of truth for the whole app.
  *
- * The live value is refreshed once a day into `settings.usd_php_rate` by the
- * `sync-fx-rate` Netlify Function (see netlify.toml), which reads a provider
- * that republishes every calendar day. This constant is only the fallback for
- * when that value is absent: a fresh Supabase database whose cron has not run
- * yet, or demo mode, which has no server to run it at all.
+ * The live value is refreshed twice a day into `settings.usd_php_rate` by the
+ * `sync-fx-rate` Netlify Function (see netlify.toml), which reads CurrencyFreaks
+ * and falls back to two keyless public feeds. This constant is only the last
+ * resort for when that value is absent: a fresh Supabase database whose cron has
+ * not run yet, or demo mode, which has no server to run it at all.
  *
  * It is deliberately a round, obviously-approximate number rather than a
  * plausible-looking precise one, so a stale fallback never reads as a live
- * quote. Bump it whenever you touch this file.
+ * quote. Bump it whenever you touch this file — ₱63 was the round number
+ * closest to the market on 15 Sep 2026 (actual ≈ ₱62.85).
  */
-export const FALLBACK_USD_PHP_RATE = 58
+export const FALLBACK_USD_PHP_RATE = 63
 
 /** What one US dollar is worth, as a peso amount: 62.63 → "₱62.63". */
 export function formatRate(rate: number): string {
@@ -28,8 +29,8 @@ export function formatRate(rate: number): string {
 /**
  * A USD amount rendered in pesos, for the "≈ ₱1,158" sub-line under a figure
  * that is already shown in USD. Whole pesos on purpose: these are rounded
- * reference conversions, and cents would imply a precision the daily ECB rate
- * does not have.
+ * reference conversions, and cents would imply a precision a rate that moves
+ * twice a day does not have.
  */
 export function formatPhp(amount: number, rate: number): string {
   return new Intl.NumberFormat('en-PH', {
@@ -42,7 +43,7 @@ export function formatPhp(amount: number, rate: number): string {
 export interface UsdPhpRate {
   /** Pesos per US dollar. Always > 0. */
   rate: number
-  /** When the daily sync wrote it, or null when using the bundled fallback. */
+  /** When the scheduled sync wrote it, or null when using the bundled fallback. */
   updatedAt: string | null
   /** True when the rate is the bundled fallback, not today's synced value. */
   isFallback: boolean

@@ -1375,7 +1375,7 @@ export const localBackend: DataBackend = {
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
         default_hourly_rate: 20,
         avatar_url: null,
-        // No server in demo mode, so no daily sync — the UI uses the bundled
+        // No server in demo mode, so no scheduled sync — the UI uses the bundled
         // fallback rate and marks it approximate.
         usd_php_rate: null,
         usd_php_rate_updated_at: null,

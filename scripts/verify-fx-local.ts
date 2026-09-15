@@ -8,8 +8,12 @@
  *    sub-line at all
  *  - demo mode (local storage) really does carry the two new settings fields
  *  - the sync-fx-rate Netlify Function is exercised for real against a stub
- *    Supabase server: it writes the provider's rate, and it refuses to write
- *    when the provider answers with an error or a nonsense rate
+ *    Supabase server: it prefers the keyed CurrencyFreaks feed (whose rates
+ *    arrive as strings) and falls back to the keyless feeds when the key is
+ *    missing, the quota is spent or the answers are junk; it refuses to write
+ *    on an error or a nonsense rate; it throttles repeat runs so a public
+ *    endpoint cannot be used to spend the monthly quota; it never echoes the
+ *    API key; and it names the migration when the columns are missing
  *
  * Run: npx tsx scripts/verify-fx-local.ts
  */
@@ -62,7 +66,7 @@ async function checkPureLogic() {
 
   // --- which rate it shows -------------------------------------------------
   const synced = usdPhpRate(settings({ usd_php_rate: 62.629, usd_php_rate_updated_at: '2026-09-11T00:00:00.000Z' }))
-  assert(synced?.rate === 62.629, 'a rate the daily sync wrote is used verbatim')
+  assert(synced?.rate === 62.629, 'a rate the scheduled sync wrote is used verbatim')
   assert(synced?.isFallback === false, 'a synced rate is not flagged as a fallback')
   assert(synced?.updatedAt === '2026-09-11T00:00:00.000Z', 'the sync timestamp rides along with the rate')
 
@@ -131,13 +135,25 @@ async function checkDemoBackend() {
  * so a fresh random port per test would leave the cached client pointing at a
  * closed socket.
  */
+/**
+ * A stub PostgREST that records what the function tried to read and write.
+ *
+ * ONE server for the whole run, on a port chosen up front: lib/supabase.ts
+ * reads SUPABASE_URL into a module-level const the first time it is imported,
+ * so a fresh random port per test would leave the cached client pointing at a
+ * closed socket.
+ *
+ * Answers are chosen per HTTP method, because the function now makes two kinds
+ * of request: a GET of the last sync time (its throttle) and a PATCH of the
+ * rate. A test that answered both the same way could not tell those apart.
+ */
+type StubAnswer = { status: number; body: unknown }
+type StubRequest = { method: string; path: string; body: string }
+
 class StubSupabase {
-  readonly writes: { method: string; path: string; body: any }[] = []
+  readonly requests: StubRequest[] = []
   private server: Server
-  private respond: (body: string) => { status: number; body: string } = () => ({
-    status: 200,
-    body: '[]',
-  })
+  private respond: (req: StubRequest) => StubAnswer = () => ({ status: 200, body: [] })
 
   private constructor(server: Server) {
     this.server = server
@@ -149,10 +165,11 @@ class StubSupabase {
         let raw = ''
         req.on('data', (c) => (raw += c))
         req.on('end', () => {
-          stub.writes.push({ method: req.method || '', path: req.url || '', body: raw ? JSON.parse(raw) : null })
-          const r = stub.respond(raw)
+          const request = { method: req.method || '', path: req.url || '', body: raw }
+          stub.requests.push(request)
+          const r = stub.respond(request)
           res.writeHead(r.status, { 'Content-Type': 'application/json' })
-          res.end(r.body)
+          res.end(typeof r.body === 'string' ? r.body : JSON.stringify(r.body))
         })
       }),
     )
@@ -166,13 +183,40 @@ class StubSupabase {
   }
 
   /** Point the stub at a new canned answer and forget earlier requests. */
-  setResponse(respond: (body: string) => { status: number; body: string }) {
+  setResponse(respond: (req: StubRequest) => StubAnswer) {
     this.respond = respond
-    this.writes.length = 0
+    this.requests.length = 0
   }
 
+  /** The simple case: the same answer whatever it asks. */
+  setAnswer(answer: StubAnswer) {
+    this.setResponse(() => answer)
+  }
+
+  /**
+   * A settings table as the sync leaves it: the throttle read answers with the
+   * given timestamp (null = "never synced yet") and the write is accepted.
+   */
+  setSettingsRow(lastSyncedAt: string | null) {
+    this.setResponse((req) =>
+      req.method === 'GET'
+        ? { status: 200, body: lastSyncedAt ? [{ usd_php_rate_updated_at: lastSyncedAt }] : [] }
+        : { status: 200, body: [{ id: 'settings-1' }] },
+    )
+  }
+
+  get patches() {
+    return this.requests.filter((r) => r.method === 'PATCH')
+  }
+  get selects() {
+    return this.requests.filter((r) => r.method === 'GET')
+  }
   get wroteAnything() {
-    return this.writes.some((w) => w.method === 'PATCH')
+    return this.patches.length > 0
+  }
+  /** The body of the single PATCH, if there was one. */
+  get patchBody() {
+    return this.patches.length === 1 ? JSON.parse(this.patches[0].body) : undefined
   }
 
   async stop() {
@@ -183,93 +227,208 @@ class StubSupabase {
   }
 }
 
+/** The three feeds the function may call, in the order it tries them. */
+const FEEDS = {
+  currencyfreaks: 'https://api.currencyfreaks.com',
+  'exchangerate-api': 'https://open.er-api.com',
+  frankfurter: 'https://api.frankfurter.dev',
+} as const
+type Feed = keyof typeof FEEDS
+
+/** A CurrencyFreaks-shaped answer: note the rate arrives as a STRING. */
+const freaks = (php: string, base = 'USD') => ({
+  status: 200,
+  body: { date: '2026-09-15 00:02:00+00', base, rates: { USD: '1.0', PHP: php } },
+})
+
+/** ExchangeRate-API's keyless shape: numbers, not strings. */
+const keyless = (php: number) => ({
+  status: 200,
+  body: {
+    result: 'success',
+    base_code: 'USD',
+    time_last_update_utc: 'Tue, 15 Sep 2026 00:00:31 +0000',
+    rates: { PHP: php },
+  },
+})
+
 async function checkSyncFunction() {
   const realFetch = globalThis.fetch
+  const KEY = 'cf-test-key-abc123'
+  /** Providers actually called, in order — populated by stubProviders below. */
+  let calls: Feed[] = []
 
-  // The function tries providers in order (open.er-api.com first, then
-  // Frankfurter). These stub the primary's response shape; a stubbed failure
-  // (non-200, or no PHP) makes the function fall through to the next provider,
-  // so a stub that fails BOTH providers is what exercises the "provider
-  // failure must not write junk" path below.
-  const PRIMARY = 'https://open.er-api.com'
-  const FALLBACK = 'https://api.frankfurter.dev'
-
-  /** Route the provider call to a canned answer; let Supabase reach the stub. */
-  const stubProvider = (answer: { status: number; body: unknown }) => {
+  /**
+   * Route each feed to a canned answer and record who was called. A feed left
+   * out answers 503 rather than reaching the network, so "the function tried
+   * the fallbacks too" and "it never touched the unconfigured primary" are both
+   * observable instead of assumed.
+   */
+  const stubProviders = (answers: Partial<Record<Feed, StubAnswer>>) => {
+    calls = []
     globalThis.fetch = (async (input: any, init?: any) => {
-      const url = typeof input === 'string' ? input : String(input?.url ?? input)
-      if (url.startsWith(PRIMARY) || url.startsWith(FALLBACK)) {
-        return new Response(JSON.stringify(answer.body), {
-          status: answer.status,
-          headers: { 'Content-Type': 'application/json' },
-        })
-      }
-      return realFetch(input, init)
+      const raw = typeof input === 'string' ? input : String(input?.url ?? input)
+      const feed = (Object.keys(FEEDS) as Feed[]).find((name) => raw.startsWith(FEEDS[name]))
+      if (!feed) return realFetch(input, init)
+      calls.push(feed)
+      const answer = answers[feed] ?? { status: 503, body: { message: `${feed} not stubbed in this test` } }
+      return new Response(JSON.stringify(answer.body), {
+        status: answer.status,
+        headers: { 'Content-Type': 'application/json' },
+      })
     }) as typeof fetch
   }
 
   const stub = await StubSupabase.start()
   const url = 'http://localhost/.netlify/functions/sync-fx-rate'
+  const { default: handler } = await import('../netlify/functions/sync-fx-rate')
+  const run = async () => {
+    const res = await handler(new Request(url))
+    return { status: res.status, text: await res.text() }
+  }
 
   try {
-    // --- happy path --------------------------------------------------------
-    stub.setResponse(() => ({ status: 200, body: '[{"id":"settings-1"}]' }))
-    stubProvider({
-      status: 200,
-      body: {
-        result: 'success',
-        base_code: 'USD',
-        time_last_update_utc: 'Mon, 14 Sep 2026 00:02:31 +0000',
-        rates: { PHP: 62.629 },
-      },
-    })
-    const { default: handler } = await import('../netlify/functions/sync-fx-rate')
+    process.env.CURRENCYFREAKS_API_KEY = KEY
 
-    let res = await handler(new Request(url))
-    let text = await res.text()
-    assert(res.status === 200, `a good provider answer saves the rate (HTTP ${res.status}: ${text})`)
-    assert(text.includes('62.629'), `the summary names the rate (got "${text}")`)
-    const patch = stub.writes.find((w) => w.method === 'PATCH' && w.path.startsWith('/rest/v1/settings'))
-    assert(!!patch, 'the function PATCHes the settings table')
-    assert(patch?.body?.usd_php_rate === 62.629, "it writes the provider's PHP rate, verbatim")
+    // --- happy path: the keyed primary answers, nothing else is called ------
+    stub.setSettingsRow(null)
+    stubProviders({ currencyfreaks: freaks('56.1234') })
+    let { status, text } = await run()
+    assert(status === 200, `a CurrencyFreaks answer saves the rate (HTTP ${status}: ${text})`)
+    assert(text.includes('56.1234'), `the summary names the rate (got "${text}")`)
+    assert(text.includes('currencyfreaks'), `the summary names which feed it came from (got "${text}")`)
+    assert(text.includes('2026-09-15'), `the summary carries the provider's own as-of date (got "${text}")`)
+    assert(calls.length === 1 && calls[0] === 'currencyfreaks', `only the primary is called: ${calls.join(', ')}`)
+    assert(stub.patchBody?.usd_php_rate === 56.1234, "its PHP rate is written as a number, from the API's string")
+    const stamped = stub.patchBody?.usd_php_rate_updated_at
+    assert(typeof stamped === 'string' && !Number.isNaN(Date.parse(stamped)), 'it stamps the time it wrote')
+    assert(stub.selects.length === 1, 'it reads the last sync time exactly once')
     assert(
-      typeof patch?.body?.usd_php_rate_updated_at === 'string' &&
-        !Number.isNaN(Date.parse(patch.body.usd_php_rate_updated_at)),
-      'it stamps the time it wrote',
+      stub.selects[0]?.path.includes('select=usd_php_rate_updated_at'),
+      `and reads only that column (got "${stub.selects[0]?.path}")`,
     )
 
-    // --- provider failure must not write junk ------------------------------
-    for (const [label, answer] of [
-      ['an HTTP 500', { status: 500, body: { error: 'boom' } }],
-      ['no PHP in the payload', { status: 200, body: { base: 'USD', date: '2026-09-11', rates: {} } }],
-      ['a zero rate', { status: 200, body: { base: 'USD', rates: { PHP: 0 } } }],
-      ['a null rate', { status: 200, body: { base: 'USD', rates: { PHP: null } } }],
-    ] as const) {
-      stub.setResponse(() => ({ status: 200, body: '[{"id":"settings-1"}]' }))
-      stubProvider(answer as { status: number; body: unknown })
-      res = await handler(new Request(url))
-      assert(res.status === 502, `provider answering ${label} → 502 (got ${res.status})`)
-      assert(!stub.wroteAnything, `provider answering ${label} leaves the stored rate untouched`)
+    // --- the throttle: two runs a day must not become two provider calls an hour
+    stub.setSettingsRow(new Date(Date.now() - 30 * 60_000).toISOString())
+    stubProviders({ currencyfreaks: freaks('56.9999') })
+    ;({ status, text } = await run())
+    assert(status === 200, `a sync 30 minutes after the last one is skipped, not an error (HTTP ${status})`)
+    assert(/already synced/i.test(text), `and says so (got "${text}")`)
+    assert(calls.length === 0, 'no rate provider is contacted at all, so no quota is spent')
+    assert(!stub.wroteAnything, 'and the stored rate is left untouched')
+
+    // ...but a scheduled run 12 h after the last one is never throttled.
+    stub.setSettingsRow(new Date(Date.now() - (12 * 3_600_000 - 60_000)).toISOString())
+    stubProviders({ currencyfreaks: freaks('56.9999') })
+    ;({ status, text } = await run())
+    assert(status === 200 && text.includes('56.9999'), `the twice-daily schedule is never throttled (got "${text}")`)
+    assert(calls.length === 1, 'the second run of the day does reach the provider')
+
+    // --- no key configured: fall back, loudly, without spending a request ----
+    delete process.env.CURRENCYFREAKS_API_KEY
+    stub.setSettingsRow(null)
+    stubProviders({ 'exchangerate-api': keyless(56.3) })
+    ;({ status, text } = await run())
+    assert(status === 200 && text.includes('56.3'), `with no API key it still syncs from a keyless feed (got "${text}")`)
+    assert(
+      !calls.includes('currencyfreaks'),
+      `and never calls the keyed feed it cannot authenticate to: ${calls.join(', ')}`,
+    )
+    process.env.CURRENCYFREAKS_API_KEY = KEY
+
+    // --- a surprising base is refused, not converted wrongly -----------------
+    stub.setSettingsRow(null)
+    stubProviders({ currencyfreaks: freaks('91.5', 'EUR'), 'exchangerate-api': keyless(56.2) })
+    ;({ status, text } = await run())
+    assert(status === 200 && text.includes('56.2'), `a response based on something other than USD is rejected (got "${text}")`)
+    assert(
+      calls.join(',') === 'currencyfreaks,exchangerate-api',
+      `and the next feed gets its turn (called: ${calls.join(', ')})`,
+    )
+    assert(text.includes('exchangerate-api'), `naming the feed that saved the run (got "${text}")`)
+
+    // --- every failure mode the provider can hand back -----------------------
+    for (const [label, answers, expectInText] of [
+      [
+        'an invalid API key',
+        { currencyfreaks: { status: 401, body: { status: 401, message: `Provided API key ${KEY} is invalid.` } }, 'exchangerate-api': { status: 500, body: { message: 'boom' } }, frankfurter: { status: 500, body: { message: 'boom' } } },
+        'check CURRENCYFREAKS_API_KEY',
+      ],
+      [
+        'a spent monthly quota',
+        { currencyfreaks: { status: 429, body: { status: 429, message: 'You have exceeded the limit of 1000 requests for your subscribed plan.' } }, 'exchangerate-api': { status: 500, body: { message: 'boom' } }, frankfurter: { status: 500, body: { message: 'boom' } } },
+        'quota',
+      ],
+      [
+        'nothing but 500s',
+        { currencyfreaks: { status: 500, body: { message: 'boom' } }, 'exchangerate-api': { status: 500, body: { message: 'boom' } }, frankfurter: { status: 503, body: {} } },
+        'HTTP 500',
+      ],
+      [
+        'no PHP in any payload',
+        { currencyfreaks: { status: 200, body: { base: 'USD', date: 'x', rates: {} } }, 'exchangerate-api': { status: 200, body: { rates: {} } }, frankfurter: { status: 200, body: { rates: {} } } },
+        'no usable PHP rate',
+      ],
+      [
+        'a zero rate',
+        { currencyfreaks: { status: 200, body: { base: 'USD', rates: { PHP: '0' } } }, 'exchangerate-api': { status: 200, body: { rates: { PHP: 0 } } }, frankfurter: { status: 200, body: { rates: { PHP: 0 } } } },
+        'no usable PHP rate',
+      ],
+      [
+        'a rate that is not a number',
+        { currencyfreaks: { status: 200, body: { base: 'USD', rates: { PHP: 'n/a' } } }, 'exchangerate-api': { status: 200, body: { rates: { PHP: null } } }, frankfurter: { status: 200, body: { rates: { PHP: NaN } } } },
+        'no usable PHP rate',
+      ],
+    ] as [string, Partial<Record<Feed, StubAnswer>>, string][]) {
+      stub.setSettingsRow(null)
+      stubProviders(answers)
+      ;({ status, text } = await run())
+      assert(status === 502, `every feed answering ${label} → 502 (got ${status})`)
+      assert(text.includes(expectInText), `and the failure says "${expectInText}" (got "${text}")`)
+      assert(!stub.wroteAnything, `${label}: the stored rate is left untouched`)
+      assert(!text.includes(KEY), `and the API key never reaches the response (got "${text}")`)
     }
 
-    // --- database without the migration ------------------------------------
-    stub.setResponse(() => ({
-      status: 400,
-      body: JSON.stringify({
-        code: '42703',
-        message: 'column "usd_php_rate" of relation "settings" does not exist',
-      }),
-    }))
-    stubProvider({ status: 200, body: { base: 'USD', rates: { PHP: 62.629 } } })
-    res = await handler(new Request(url))
-    text = await res.text()
-    assert(res.status === 500, `an unmigrated database errors instead of silently doing nothing (got ${res.status})`)
+    // A keyless feed failing is not the workspace owner's key problem, so the
+    // advice for that must not be sprayed onto every 429.
+    stub.setSettingsRow(null)
+    stubProviders({ currencyfreaks: { status: 503, body: { message: 'upstream down' } }, 'exchangerate-api': { status: 429, body: {} } })
+    ;({ status, text } = await run())
+    assert(status === 502, `a keyless feed answering 429 still reaches the last feed (got ${status})`)
+    assert(calls.join(',') === 'currencyfreaks,exchangerate-api,frankfurter', `trying each in turn: ${calls.join(', ')}`)
+    assert(
+      !text.includes('check CURRENCYFREAKS_API_KEY'),
+      `and does not blame the API key for a fallback's 429 (got "${text}")`,
+    )
+
+    // --- an unmigrated database is named before a request is wasted ----------
+    stub.setResponse((req) =>
+      req.method === 'GET'
+        ? { status: 400, body: { code: '42703', message: 'column "usd_php_rate" of relation "settings" does not exist' } }
+        : { status: 200, body: [] },
+    )
+    stubProviders({})
+    ;({ status, text } = await run())
+    assert(status === 500, `an unmigrated database errors instead of silently doing nothing (got ${status})`)
     assert(text.includes('RUN-THIS-fx-rate.sql'), `and the error points at the migration to run (got "${text}")`)
+    assert(calls.length === 0, 'without spending a provider request first')
+
+    // ...including when only the WRITE is rejected (e.g. a policy change).
+    stub.setResponse((req) =>
+      req.method === 'GET'
+        ? { status: 200, body: [] }
+        : { status: 400, body: { code: '42703', message: 'column "usd_php_rate" of relation "settings" does not exist' } },
+    )
+    stubProviders({ currencyfreaks: freaks('56.1234') })
+    ;({ status, text } = await run())
+    assert(status === 500 && text.includes('RUN-THIS-fx-rate.sql'), `a rejected write says the same thing (got "${text}")`)
   } finally {
+    delete process.env.CURRENCYFREAKS_API_KEY
     await stub.stop()
     globalThis.fetch = realFetch
   }
 }
+
 
 /**
  * Renders the REAL components with react-dom/server and inspects the markup.

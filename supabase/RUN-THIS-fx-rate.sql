@@ -21,11 +21,11 @@
 --    the rate costs ZERO extra database queries, ZERO extra rows, and about
 --    75 extra bytes per settings read. A separate `exchange_rates` table would
 --    have added one query per client per refresh for a number that only moves
---    once per business day.
+--    twice a day.
 --
 --  Who writes it
 --  -------------
---    The `sync-fx-rate` Netlify Function, on a daily schedule (see
+--    The `sync-fx-rate` Netlify Function, on a twice-daily schedule (see
 --    netlify.toml). It runs server-side with SUPABASE_SECRET_KEY, so it can
 --    update the row without a user token — the same credential pattern the
 --    other functions in netlify/functions/lib/supabase.ts already use.
@@ -58,7 +58,34 @@ alter table public.settings
   check (usd_php_rate is null or usd_php_rate > 0);
 
 comment on column public.settings.usd_php_rate is
-  'Latest USD to PHP reference rate, refreshed daily by the sync-fx-rate Netlify Function. Null = not fetched yet.';
+  'Latest USD to PHP reference rate, refreshed twice a day by the sync-fx-rate Netlify Function. Null = not fetched yet.';
 
 comment on column public.settings.usd_php_rate_updated_at is
   'When usd_php_rate was last written by the sync-fx-rate function.';
+
+
+-- ---------- 2. verify ----------
+-- Both columns must come back, and the check constraint exactly once (re-running
+-- this file drops and re-adds it rather than stacking a duplicate).
+select column_name, data_type, is_nullable
+from information_schema.columns
+where table_schema = 'public'
+  and table_name = 'settings'
+  and column_name in ('usd_php_rate', 'usd_php_rate_updated_at')
+order by column_name;
+
+select conname
+from pg_constraint
+where conrelid = 'public.settings'::regclass
+  and conname = 'settings_usd_php_rate_sane';
+
+-- What the app is showing right now, per workspace. A null rate means the
+-- sync-fx-rate function has not written one yet, so the chip is on the bundled
+-- fallback (marked "≈"); hours_since_sync over 12 means the schedule itself has
+-- skipped a run.
+select
+  usd_php_rate,
+  usd_php_rate_updated_at,
+  round(extract(epoch from now() - usd_php_rate_updated_at) / 3600.0, 1) as hours_since_sync
+from public.settings
+order by usd_php_rate_updated_at desc nulls last;
