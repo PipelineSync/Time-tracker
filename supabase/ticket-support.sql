@@ -27,6 +27,12 @@
 -- ============================================================================
 
 -- ---------- 1. the capability key ----------
+-- On a database that predates per-worker access, start by adding the column
+-- (supabase/worker-permissions.sql does the same thing); everywhere else this
+-- is a no-op. The allow-list itself is re-stated below with the new key in it.
+alter table public.workers
+  add column if not exists permissions text[] not null default '{}'::text[];
+
 -- Same list as before, plus the new key. Without this, saving a worker with IT
 -- Support ticked would be rejected by the constraint.
 alter table public.workers drop constraint if exists workers_permissions_valid;
@@ -214,7 +220,31 @@ alter table public.notifications
   add constraint notifications_type_check
   check (type in ('note','time_in','time_out','time_added','payment','break_start','break_end','chat','ticket'));
 
--- ---------- 7. the fan-out ----------
+-- ---------- 7. resolved_at / updated_at, stamped before the row is written --
+-- BEFORE UPDATE, not inside the notification trigger: RETURNING (which is what
+-- the app reads back) reflects the row as this statement wrote it, and a second
+-- UPDATE from an AFTER trigger comes too late to be seen.
+create or replace function public.stamp_ticket_times()
+returns trigger
+language plpgsql
+as $$
+begin
+  if new.status is distinct from old.status then
+    -- Resolving stamps the moment; reopening clears it; touching anything else
+    -- leaves it alone.
+    new.resolved_at := case when new.status = 'resolved' then coalesce(old.resolved_at, now()) else null end;
+  end if;
+  new.updated_at := now();
+  return new;
+end;
+$$;
+
+drop trigger if exists tickets_stamp_times on public.tickets;
+create trigger tickets_stamp_times
+  before update on public.tickets
+  for each row execute function public.stamp_ticket_times();
+
+-- ---------- 8. the fan-out ----------
 -- One trigger function for all three moments, because they all need the same
 -- two things: the ticket row, and the list of people running support.
 create or replace function public.notify_ticket_event()
@@ -301,11 +331,10 @@ begin
 
   if tg_op = 'UPDATE' then
     -- Moving a ticket along is how the requester learns it is being handled.
-    update public.tickets
-       set resolved_at = case when new.status = 'resolved' then coalesce(old.resolved_at, now()) else null end,
-           updated_at  = now()
-     where id = new.id;
-
+    -- (resolved_at / updated_at were stamped on the way *in*, by
+    -- stamp_ticket_times() below: an AFTER trigger's own UPDATE is invisible to
+    -- the caller's RETURNING, so the app would otherwise draw "Resolved" with
+    -- no date until the next refresh.)
     if new.requester_user_id <> coalesce(auth.uid(), new.requester_user_id)
        and new.status is distinct from old.status then
       v_status := case new.status
@@ -343,6 +372,6 @@ create trigger ticket_replies_notify
   after insert on public.ticket_replies
   for each row execute function public.notify_ticket_event();
 
--- ---------- 8. table privileges (RLS narrows them per row) ----------
+-- ---------- 9. table privileges (RLS narrows them per row) ----------
 grant select, insert, update, delete on public.tickets to authenticated;
 grant select, insert on public.ticket_replies to authenticated;
