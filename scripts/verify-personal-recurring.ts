@@ -137,7 +137,7 @@ const reNormalized = normalizePFData(afterDelete)
 assert(reNormalized.recurring.length === 1, 'normalized data after deletion remains valid')
 
 // Overdue recurring payments detection
-import { getOverdueRecurringPayments, daysDifference } from '../src/lib/personalFinance'
+import { getOverdueRecurringPayments } from '../src/lib/personalFinance'
 
 const overdueTestData = normalizePFData({
   ...emptyPFData(),

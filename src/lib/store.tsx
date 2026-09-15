@@ -552,7 +552,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       refreshInFlight.current = false
       if (token === dataVersion.current) setDataLoading(false)
     }
-  }, [backend])
+  }, [backend, checkOverdueRecurring])
 
   // Load initial session. The Supabase backend restores/refreshes the stored
   // session here, so a reload keeps the user signed in.
