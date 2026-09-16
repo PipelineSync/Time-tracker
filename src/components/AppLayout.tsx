@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { Suspense, useMemo, useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard,
@@ -27,8 +27,10 @@ import { buildNavPlan, type NavKey } from '@/lib/nav'
 import { useTheme } from '@/lib/theme'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import { BrandLogo } from '@/components/BrandLogo'
 import { NotificationsBell } from '@/components/NotificationsBell'
+import { SectionTransition } from '@/components/SectionTransition'
 import { ChangePasswordDialog } from '@/components/ChangePasswordDialog'
 import {
   DropdownMenu,
@@ -92,6 +94,29 @@ function DemoModeBadge({ onNavy }: { onNavy?: boolean }) {
     >
       Demo mode
     </span>
+  )
+}
+
+/**
+ * Placeholder shown while a section's chunk downloads. Shaped like a page
+ * header plus a couple of cards so the layout doesn't jump when the real
+ * content arrives.
+ */
+function SectionLoading() {
+  return (
+    <div className="space-y-6" aria-busy="true" aria-live="polite">
+      <span className="sr-only">Loading section…</span>
+      <div className="space-y-2">
+        <Skeleton className="h-7 w-48" />
+        <Skeleton className="h-4 w-72 max-w-full" />
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <Skeleton className="h-28" />
+        <Skeleton className="h-28" />
+        <Skeleton className="h-28" />
+      </div>
+      <Skeleton className="h-64" />
+    </div>
   )
 }
 
@@ -252,7 +277,19 @@ export function AppLayout() {
       <main className="px-4 pb-24 pt-6 sm:px-6 lg:ml-64 lg:pb-10">
         <div className="mx-auto max-w-6xl">
           <div className="mb-2 hidden justify-end lg:flex"><NotificationsBell /></div>
-          <Outlet />
+          {/* Changing section fades + settles the new screen in (CSS only, and
+              off for `prefers-reduced-motion`). The bell above stays put: only
+              the page content moves, so the chrome never jitters. */}
+          <SectionTransition>
+            {/* Pages load as their own chunk (see `App.tsx`). This inner
+                boundary catches that wait *inside* the shell, so a first visit
+                to a section shows a placeholder where the page goes instead of
+                replacing the whole app — sidebar and all — with the splash
+                loader mid-transition. */}
+            <Suspense fallback={<SectionLoading />}>
+              <Outlet />
+            </Suspense>
+          </SectionTransition>
         </div>
       </main>
 

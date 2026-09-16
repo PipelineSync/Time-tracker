@@ -199,6 +199,43 @@
   }
 }
 
+/* ============================================================
+   Section transition
+   Moving between sections (Dashboard → Time Entries → Finance …) fades the
+   new screen in while it settles up a few pixels, so the switch reads as one
+   movement instead of a hard cut. `SectionTransition` remounts on a route
+   change, which is what restarts this animation; tab switches *inside* a
+   section keep the same key and stay instant.
+
+   Short and small on purpose: 220ms and 8px is enough to feel deliberate
+   without making people wait for their data.
+   ============================================================ */
+.section-enter {
+  animation: section-enter var(--section-transition, 220ms) cubic-bezier(0.22, 1, 0.36, 1) both;
+  /* The slide starts 8px low, which would otherwise let the page paint over
+     the sticky mobile header for a frame. */
+  will-change: transform, opacity;
+}
+
+@keyframes section-enter {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 8px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+/* Someone who asked their OS for less motion gets the switch with no movement
+   and no fade — the new section is simply there. */
+@media (prefers-reduced-motion: reduce) {
+  .section-enter {
+    animation: none;
+  }
+}
+
 
 /* ============================================================
    Falling snow (Christmas theme)
