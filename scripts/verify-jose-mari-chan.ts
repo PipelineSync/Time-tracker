@@ -25,7 +25,8 @@ assert(jmc.includes('classic-peeking.png'), 'References classic-peeking.png imag
 assert(jmc.includes('jmc-anim-section-change'), 'Applies section change animation')
 assert(jmc.includes("window.addEventListener('pointermove', trackPointer"), 'Tracks hover without intercepting clicks')
 assert(jmc.includes('containerRef.current?.getBoundingClientRect()'), 'Uses the stationary wrapper as the hover area')
-assert(jmc.includes("pointerOver && 'opacity-0'"), 'Hides the wrapper while hovered without collapsing its hover area')
+assert(jmc.includes("pointerOver && 'jmc-hover-hide'"), 'Slides the image behind the sidebar while hovered')
+assert(jmc.includes('jmc-hover-image'), 'Keeps the hover transition on the image instead of the stationary wrapper')
 assert(jmc.includes("event.pointerType !== 'touch'"), 'Touch interactions do not leave the decoration hidden')
 assert(jmc.includes("window.removeEventListener('pointermove', trackPointer)"), 'Cleans up pointer tracking on unmount')
 
@@ -36,6 +37,8 @@ assert(layout.indexOf('<JoseMariChan') > layout.indexOf('</aside>'), 'Placed alo
 
 console.log('--- CSS Animations ---')
 const css = read('src/index.css')
+assert(css.includes('.jmc-hover-image.jmc-hover-hide'), 'Hover state targets the image that should retreat')
+assert(css.includes('transition:') && css.includes('transform 240ms'), 'Hover retreat is animated instead of disappearing instantly')
 assert(css.includes('@keyframes jmc-slide-hide-reappear'), 'Keyframe jmc-slide-hide-reappear is defined')
 assert(css.includes('translateX(-120%)') || css.includes('translateX(-'), 'Slides left behind the panel during transition')
 assert(
