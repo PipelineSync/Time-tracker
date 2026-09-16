@@ -29,6 +29,7 @@
     "verify:permissions": "tsx scripts/verify-permissions-local.ts && tsx scripts/verify-permissions-supabase.ts",
     "verify:nav": "tsx scripts/verify-nav-local.ts",
     "verify:section-transition": "tsx scripts/verify-section-transition-local.ts",
+    "verify:jose-mari-chan": "tsx scripts/verify-jose-mari-chan.ts",
     "verify:faq": "tsx scripts/verify-faq-local.ts",
     "verify:priority-board": "tsx scripts/verify-priority-board-local.ts",
     "verify:invoices": "tsx scripts/verify-invoices-local.ts",
