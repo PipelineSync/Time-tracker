@@ -1112,8 +1112,12 @@ create table if not exists public.clients (
   id         uuid primary key default gen_random_uuid(),
   user_id    uuid not null references auth.users (id) on delete cascade,
   name       text not null check (length(btrim(name)) between 1 and 80),
+  -- Colour tag used for the client's badge and its slice of the charts: one
+  -- of the eight built-in tags, or a custom #RGB/#RRGGBB hex picked with the
+  -- custom swatch on the Clients dialog.
   color      text not null default 'blue'
-             check (color in ('blue','aqua','violet','emerald','amber','orange','rose','slate')),
+             check (color in ('blue','aqua','violet','emerald','amber','orange','rose','slate')
+                    or color ~* '^#([0-9a-f]{3}|[0-9a-f]{6})$'),
   status     text not null default 'active' check (status in ('active','inactive')),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()

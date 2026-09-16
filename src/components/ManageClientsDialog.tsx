@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Building2, Check, Pencil, Plus, Trash2, X } from 'lucide-react'
 import { useStore } from '@/lib/store'
 import type { Client, ClientColor } from '@/lib/types'
-import { CLIENT_COLORS, ClientColorStyles, DEFAULT_CLIENT_COLOR } from '@/lib/types'
+import { CLIENT_COLORS, ClientColorStyles, clientColorStyles, DEFAULT_CLIENT_COLOR, isClientColorPreset } from '@/lib/types'
 import {
   Dialog,
   DialogContent,
@@ -20,7 +20,12 @@ import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 
-/** The eight colour tags, as a row of swatches. */
+/**
+ * The eight built-in colour tags as a row of swatches, plus a ninth "custom"
+ * swatch that opens the browser's own colour picker — so any colour at all,
+ * not just the eight, can be picked. A custom pick is remembered as its hex
+ * value: the swatch shows that colour (with a check) until a preset is chosen.
+ */
 function ColorPicker({
   value,
   onChange,
@@ -30,6 +35,9 @@ function ColorPicker({
   onChange: (color: ClientColor) => void
   idPrefix: string
 }) {
+  const customInputRef = useRef<HTMLInputElement>(null)
+  const isCustom = !isClientColorPreset(value)
+  const custom = clientColorStyles(value)
   return (
     <div className="flex flex-wrap items-center gap-1.5">
       {CLIENT_COLORS.map((color) => (
@@ -46,6 +54,34 @@ function ColorPicker({
           )}
         />
       ))}
+      <button
+        key={`${idPrefix}-custom`}
+        type="button"
+        aria-label={isCustom ? `Custom colour ${value} — pick another` : 'Pick a custom colour'}
+        aria-pressed={isCustom}
+        onClick={() => customInputRef.current?.click()}
+        className={cn(
+          'relative h-6 w-6 rounded-full ring-offset-2 ring-offset-background transition',
+          isCustom ? 'ring-2 ring-foreground/60' : 'opacity-60 hover:opacity-100'
+        )}
+        style={
+          isCustom
+            ? custom.dotStyle
+            : { background: 'conic-gradient(from 220deg, #f43f5e, #f77a0a, #f59e0b, #10b981, #36b7c9, #0868d9, #8b5cf6, #f43f5e)' }
+        }
+      >
+        {isCustom && <Check className="pointer-events-none absolute inset-0 m-auto h-3.5 w-3.5 text-white" aria-hidden />}
+      </button>
+      {/* The browser's own picker, hidden — the rainbow swatch above is its click target. */}
+      <input
+        ref={customInputRef}
+        type="color"
+        value={isCustom ? custom.chart : '#8b5cf6'}
+        onChange={(e) => onChange(e.target.value)}
+        className="sr-only"
+        tabIndex={-1}
+        aria-hidden="true"
+      />
     </div>
   )
 }
@@ -189,6 +225,7 @@ export function ManageClientsDialog({
               clients.map((client) => {
                 const inUse = (usage.get(client.id) ?? 0) > 0
                 const busy = savingId === client.id
+                const colorStyle = clientColorStyles(client.color)
                 return (
                   <div
                     key={client.id}
@@ -219,7 +256,8 @@ export function ManageClientsDialog({
                     ) : (
                       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                         <span
-                          className={cn('h-3 w-3 shrink-0 rounded-full', ClientColorStyles[client.color].dot)}
+                          className={cn('h-3 w-3 shrink-0 rounded-full', colorStyle.dot)}
+                          style={colorStyle.dotStyle}
                           aria-hidden
                         />
                         <div className="min-w-0 flex-1">

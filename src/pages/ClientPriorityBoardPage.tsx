@@ -10,7 +10,7 @@ import {
 } from 'lucide-react'
 import { useStore } from '@/lib/store'
 import type { Client, ClientPriorityLane } from '@/lib/types'
-import { CLIENT_PRIORITY_LANES, ClientPriorityLaneNames, ClientPriorityLaneStyles, ClientColorStyles } from '@/lib/types'
+import { CLIENT_PRIORITY_LANES, ClientPriorityLaneNames, ClientPriorityLaneStyles, clientColorStyles } from '@/lib/types'
 import { PageHeader } from '@/components/PageHeader'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -175,7 +175,11 @@ export function ClientPriorityBoardPage() {
       >
         <div className="flex items-center gap-2">
           <GripVertical className="h-4 w-4 shrink-0 text-muted-foreground/50" aria-hidden />
-          <span className={cn('h-2 w-2 shrink-0 rounded-full', ClientColorStyles[client.color].dot)} aria-hidden />
+          <span
+            className={cn('h-2 w-2 shrink-0 rounded-full', clientColorStyles(client.color).dot)}
+            style={clientColorStyles(client.color).dotStyle}
+            aria-hidden
+          />
           <p className="min-w-0 flex-1 truncate text-sm font-medium">{client.name}</p>
         </div>
 

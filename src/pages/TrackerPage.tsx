@@ -14,7 +14,7 @@ import { SwitchClientDialog } from '@/components/SwitchClientDialog'
 import { toast } from 'sonner'
 import { Square, Pause, PlayCircle, LogIn, TimerReset, Repeat } from 'lucide-react'
 import { formatMinutes, money, timerBreakMs, timerElapsedMs, timerSessionStart } from '@/lib/utils'
-import { ClientColorStyles } from '@/lib/types'
+import { clientColorStyles } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { BRAND_ACTION_BUTTON } from '@/lib/brand'
 
@@ -159,6 +159,7 @@ export function TrackerPage() {
   // The client this shift is currently booked to, shown at the top of the card.
   const currentClient = myTimer?.client_id ? clients.find((c) => c.id === myTimer.client_id) ?? null : null
   const currentScope = currentClient?.name ?? myTimer?.project ?? null
+  const currentClientDot = currentClient ? clientColorStyles(currentClient.color) : null
 
   return (
     <div ref={sectionRef} className="relative space-y-6">
@@ -189,8 +190,9 @@ export function TrackerPage() {
                   <span
                     className={cn(
                       'h-2 w-2 rounded-full',
-                      currentClient?.color ? ClientColorStyles[currentClient.color].dot : running ? 'bg-[#F77A0A]' : 'bg-[#36B7C9]'
+                      currentClientDot ? currentClientDot.dot : running ? 'bg-[#F77A0A]' : 'bg-[#36B7C9]'
                     )}
+                    style={currentClientDot?.dotStyle}
                   />
                   {currentScope}
                 </span>

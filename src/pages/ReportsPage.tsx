@@ -15,7 +15,7 @@ import { toast } from 'sonner'
 import { Download, BarChart3, Clock, DollarSign, Hash, Landmark, TrendingUp } from 'lucide-react'
 import { money, formatMinutes, formatDate } from '@/lib/utils'
 import { dateRangeFor, filterEntriesInRange, summarizeEntries, hoursByWorker, hoursByClient } from '@/lib/stats'
-import { ClientColorStyles } from '@/lib/types'
+import { clientColorStyles } from '@/lib/types'
 import { ClientDot } from '@/components/ClientBadge'
 import { daysUntil, dueLabel, financeByMonth, financeChartMonths, monthKeysBetween, subscriptionsPerMonth } from '@/lib/finance'
 import { Badge } from '@/components/ui/badge'
@@ -147,7 +147,7 @@ export function ReportsPage() {
       byClient.map((c) => ({
         name: c.label,
         hours: Math.round(c.hours * 100) / 100,
-        fill: c.client ? ClientColorStyles[c.client.color].chart : '#94a3b8',
+        fill: c.client ? clientColorStyles(c.client.color).chart : '#94a3b8',
       })),
     [byClient]
   )

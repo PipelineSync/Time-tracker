@@ -29,7 +29,7 @@ import type {
   CreateTicketInput,
   UpdateTicketInput,
 } from './types'
-import { CLIENT_PRIORITY_LANES, DEFAULT_SLACK_SETTINGS, DEFAULT_CLIENT_COLOR, DEFAULT_NOTE_COLOR, NOTE_COLORS, PERMISSIONS, TEAM_VIEW_PERMISSIONS, ALL_ENTRIES_VIEW_PERMISSIONS, normalizePermissions } from './types'
+import { CLIENT_PRIORITY_LANES, DEFAULT_SLACK_SETTINGS, DEFAULT_CLIENT_COLOR, DEFAULT_NOTE_COLOR, NOTE_COLORS, PERMISSIONS, TEAM_VIEW_PERMISSIONS, ALL_ENTRIES_VIEW_PERMISSIONS, normalizePermissions, isValidClientColor } from './types'
 import {
   IT_SUPPORT_PERMISSION,
   MAX_TICKET_ATTACHMENTS,
@@ -651,7 +651,9 @@ function normalizeClientRow(c: Client): Client {
   return {
     ...c,
     name: (c.name ?? '').trim() || 'Client',
-    color: c.color ?? DEFAULT_CLIENT_COLOR,
+    // A valid tag is a built-in preset or a custom #hex; anything else (rows
+    // written by an older app version, or by hand) falls back to the default.
+    color: isValidClientColor(c.color) ? c.color : DEFAULT_CLIENT_COLOR,
     status: c.status === 'inactive' ? 'inactive' : 'active',
   }
 }
