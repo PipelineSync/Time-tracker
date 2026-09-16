@@ -194,6 +194,8 @@ create table if not exists public.tasks (
   created_by_role text not null default 'worker' check (created_by_role in ('admin','worker')),
   -- When it first reached the Completed column (cleared if it moves back).
   completed_at    timestamptz,
+  -- When the completed task was archived (null for active board tasks).
+  archived_at     timestamptz,
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now()
 );

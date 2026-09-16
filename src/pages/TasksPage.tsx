@@ -17,6 +17,9 @@ import {
   BadgeCheck,
   Search,
   X,
+  Archive,
+  ArchiveRestore,
+  RotateCcw,
 } from 'lucide-react'
 import { useStore } from '@/lib/store'
 import type { Task, TaskPriority, TaskStatus } from '@/lib/types'
@@ -34,7 +37,9 @@ import { ClientBadge } from '@/components/ClientBadge'
 import { ClientSelect } from '@/components/ClientSelect'
 import { AvatarBubble } from '@/components/AvatarBubble'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { cn, formatDate } from '@/lib/utils'
+import { toast } from 'sonner'
 
 /** Column accents — the board reads at a glance without a legend. */
 const columnStyles: Record<TaskStatus, { icon: typeof Circle; dot: string; ring: string }> = {
@@ -60,17 +65,33 @@ function isOverdue(task: Task): boolean {
 }
 
 export function TasksPage() {
-  const { tasks, workers, clients, user, can, dataLoading, moveTask, deleteTask } = useStore()
+  const {
+    tasks,
+    workers,
+    clients,
+    user,
+    can,
+    dataLoading,
+    moveTask,
+    deleteTask,
+    archiveTask,
+    restoreTask,
+    archiveTasks,
+  } = useStore()
   // Seeing everyone's board and running it are separate grants; the admin has
   // both, a worker has whatever was ticked on their row.
   const canViewAll = can('tasks.view_all')
   const canManageAll = can('tasks.manage_all')
 
+  const [activeTab, setActiveTab] = useState<'board' | 'archive'>('board')
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<Task | null>(null)
   const [formStatus, setFormStatus] = useState<TaskStatus>('todo')
   const [deleting, setDeleting] = useState<Task | null>(null)
+  const [confirmArchiveAll, setConfirmArchiveAll] = useState(false)
+  const [confirmRestoreAll, setConfirmRestoreAll] = useState(false)
   const [clientsOpen, setClientsOpen] = useState(false)
+
   // Admin-only filters: one worker's board (or everyone's) and one stage (or
   // all of them). Both narrow the same board rather than changing its shape.
   const [workerFilter, setWorkerFilter] = useState<string>('all')
@@ -81,6 +102,7 @@ export function TasksPage() {
   // Search is intentionally title-only so results stay predictable as task
   // descriptions, assignees and client labels change around the board.
   const [searchQuery, setSearchQuery] = useState('')
+
   // Drag state. `dragging` is the card under the pointer; `dropTarget` is the
   // column (and index) it would land in — used to draw the placeholder.
   // The ref mirrors `dragging` synchronously: dragover fires before React has
@@ -120,6 +142,19 @@ export function TasksPage() {
   const normalizedSearch = searchQuery.trim().toLocaleLowerCase()
   const searchActive = normalizedSearch.length > 0
 
+  const isArchived = (t: Task) => Boolean(t.archived_at)
+
+  // Unfiltered total counts for tabs (scoped to the user's role)
+  const totalActiveCount = useMemo(() => {
+    const rows = canViewAll ? tasks : tasks.filter((t) => t.worker_id === user?.workerId)
+    return rows.filter((t) => !isArchived(t)).length
+  }, [tasks, canViewAll, user?.workerId])
+
+  const totalArchivedCount = useMemo(() => {
+    const rows = canViewAll ? tasks : tasks.filter((t) => t.worker_id === user?.workerId)
+    return rows.filter((t) => isArchived(t)).length
+  }, [tasks, canViewAll, user?.workerId])
+
   // Without tasks.view_all the backend only ever returns the signed-in
   // worker's own tasks; this keeps the UI honest if a stale row is cached.
   // Search composes with the existing filters and only considers task titles.
@@ -131,6 +166,16 @@ export function TasksPage() {
     if (normalizedSearch) rows = rows.filter((t) => t.title.toLocaleLowerCase().includes(normalizedSearch))
     return rows
   }, [tasks, canViewAll, user?.workerId, workerFilter, clientFilter, priorityFilter, normalizedSearch])
+
+  // Active tasks for the kanban board
+  const activeTasks = useMemo(() => visible.filter((t) => !isArchived(t)), [visible])
+
+  // Archived tasks for the archive view, newest archived first
+  const archivedTasks = useMemo(() => {
+    return visible
+      .filter((t) => isArchived(t))
+      .sort((a, b) => (b.archived_at || b.updated_at).localeCompare(a.archived_at || a.updated_at))
+  }, [visible])
 
   // Cards stay compact boxes: the title clamps to two lines and the
   // description to three, and "See more" expands a card on demand instead of
@@ -159,7 +204,7 @@ export function TasksPage() {
       })
       return changed ? next : prev
     })
-  }, [visible, expandedIds])
+  }, [visible, expandedIds, activeTab])
 
   function toggleExpand(id: string) {
     setExpandedIds((prev) => {
@@ -170,27 +215,39 @@ export function TasksPage() {
     })
   }
 
-  const filtersActive = workerFilter !== 'all' || stageFilter !== 'all' || clientFilter !== 'all' || priorityFilter !== 'all'
+  const filtersActive =
+    workerFilter !== 'all' ||
+    (activeTab === 'board' && stageFilter !== 'all') ||
+    clientFilter !== 'all' ||
+    priorityFilter !== 'all'
+
+  const clearFilters = () => {
+    setWorkerFilter('all')
+    setStageFilter('all')
+    setClientFilter('all')
+    setPriorityFilter('all')
+    setSearchQuery('')
+  }
 
   const columns = useMemo(() => {
     // Derived from TASK_STATUSES so adding a stage never needs a change here.
     const grouped = Object.fromEntries(TASK_STATUSES.map((s) => [s, [] as Task[]])) as Record<TaskStatus, Task[]>
-    for (const t of visible) grouped[t.status]?.push(t)
+    for (const t of activeTasks) grouped[t.status]?.push(t)
     for (const status of TASK_STATUSES) {
       grouped[status].sort((a, b) => a.position - b.position || b.created_at.localeCompare(a.created_at))
     }
     return grouped
-  }, [visible])
+  }, [activeTasks])
 
   const workersWithTasks = useMemo(
     () => workers.filter((w) => tasks.some((t) => t.worker_id === w.id)),
     [workers, tasks]
   )
 
-  // Which lanes to render. Filtering by stage hides the other lanes entirely
-  // rather than emptying them, so the board stays a board.
+  // Which lanes to render on the board. Filtering by stage hides the other lanes
+  // entirely rather than emptying them, so the board stays a board.
   const shownStages = stageFilter === 'all' ? TASK_STATUSES : [stageFilter]
-  const shownTaskCount = stageFilter === 'all' ? visible.length : columns[stageFilter].length
+  const shownTaskCount = stageFilter === 'all' ? activeTasks.length : columns[stageFilter].length
 
   function openNew(status: TaskStatus) {
     setEditing(null)
@@ -230,17 +287,42 @@ export function TasksPage() {
     await moveTask(task.id, next, 0)
   }
 
+  /** Archive a single completed task */
+  async function handleArchiveSingle(task: Task) {
+    const res = await archiveTask(task.id)
+    if (res) toast.success(`Task "${task.title}" archived.`)
+  }
+
+  /** Restore an archived task back to the completed column */
+  async function handleRestoreTask(task: Task) {
+    const res = await restoreTask(task.id)
+    if (res) toast.success(`"${task.title}" restored to Completed.`)
+  }
+
+  /** Archive all completed tasks currently on the board */
+  async function handleArchiveAllCompleted() {
+    const items = columns.completed
+    if (items.length === 0) return
+    const ids = items.map((t) => t.id)
+    const count = await archiveTasks(ids)
+    toast.success(`Archived ${count} completed task${count === 1 ? '' : 's'}.`)
+    setConfirmArchiveAll(false)
+  }
+
+  /** Restore all visible archived tasks */
+  async function handleRestoreAllArchived() {
+    if (archivedTasks.length === 0) return
+    let count = 0
+    for (const t of archivedTasks) {
+      const res = await restoreTask(t.id)
+      if (res) count++
+    }
+    toast.success(`Restored ${count} task${count === 1 ? '' : 's'} to the board.`)
+    setConfirmRestoreAll(false)
+  }
+
   /**
    * A card, rendered as a plain function call rather than a nested component.
-   *
-   * Declaring `<TaskCard>` inside TasksPage made React see a BRAND-NEW
-   * component type on every render, so the first `setDragging` of a drag
-   * unmounted and re-created the very node the browser was dragging — the
-   * drag died on the spot and only the second attempt (which re-set the same
-   * state value, so React bailed out of re-rendering) actually worked. Calling
-   * the function inlines the elements into this component's own tree, so the
-   * card keeps its DOM node across renders and a drag survives from grab to
-   * drop. Same reason for renderColumn below.
    */
   function renderTaskCard({ task, index, status }: { task: Task; index: number; status: TaskStatus }) {
     const overdue = isOverdue(task)
@@ -367,6 +449,18 @@ export function TasksPage() {
             </Button>
           </div>
           <div className="flex items-center gap-0.5">
+            {task.status === 'completed' && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                aria-label={`Archive "${task.title}"`}
+                title="Archive task"
+                onClick={() => void handleArchiveSingle(task)}
+              >
+                <Archive className="h-3.5 w-3.5" />
+              </Button>
+            )}
             <Button variant="ghost" size="icon" className="h-7 w-7" aria-label={`Edit "${task.title}"`} onClick={() => openEdit(task)}>
               <Pencil className="h-3.5 w-3.5" />
             </Button>
@@ -418,19 +512,34 @@ export function TasksPage() {
           isTarget && cn('bg-muted ring-2', style.ring)
         )}
       >
-        <div className="relative mb-3 flex items-center justify-center gap-2 px-7">
+        <div className={cn('relative mb-3 flex items-center justify-center gap-2', status === 'completed' ? 'pl-4 pr-16' : 'px-7')}>
           <span className={cn('h-2.5 w-2.5 shrink-0 rounded-full', style.dot)} aria-hidden />
           <h2 className="truncate text-sm font-semibold">{TaskStatusNames[status]}</h2>
           <Badge variant="muted" className="text-[10px]">{items.length}</Badge>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="absolute right-0 top-1/2 h-7 w-7 -translate-y-1/2"
-            aria-label={`Add a task to ${TaskStatusNames[status]}`}
-            onClick={() => openNew(status)}
-          >
-            <Plus className="h-4 w-4" />
-          </Button>
+          <div className="absolute right-0 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
+            {status === 'completed' && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                aria-label="Archive all completed tasks"
+                title="Archive all completed tasks"
+                disabled={items.length === 0}
+                onClick={() => setConfirmArchiveAll(true)}
+              >
+                <Archive className="h-3.5 w-3.5" />
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              aria-label={`Add a task to ${TaskStatusNames[status]}`}
+              onClick={() => openNew(status)}
+            >
+              <Plus className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
 
         <div className="flex flex-1 flex-col gap-2">
@@ -461,6 +570,122 @@ export function TasksPage() {
     )
   }
 
+  /** Render a card in the archived tasks list */
+  function renderArchivedCard(task: Task) {
+    const priority = priorityBadge[task.priority]
+    const isExpanded = expandedIds.has(task.id)
+    const isClipped = overflowIds.has(task.id)
+    return (
+      <div
+        key={task.id}
+        className="flex flex-col justify-between rounded-xl border bg-card p-3.5 shadow-sm transition hover:border-primary/40 hover:shadow-md"
+      >
+        <div>
+          <div className="flex items-start gap-2">
+            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" aria-hidden />
+            <div className="min-w-0 flex-1">
+              <p
+                ref={(el) => {
+                  if (el) clampRefs.current.set(`${task.id}|title`, el)
+                  else clampRefs.current.delete(`${task.id}|title`)
+                }}
+                className={cn(
+                  'break-words text-sm font-medium text-muted-foreground line-through',
+                  !isExpanded && 'line-clamp-2'
+                )}
+              >
+                {task.title}
+              </p>
+              {task.description && (
+                <p
+                  ref={(el) => {
+                    if (el) clampRefs.current.set(`${task.id}|desc`, el)
+                    else clampRefs.current.delete(`${task.id}|desc`)
+                  }}
+                  className={cn('mt-1.5 break-words text-xs text-muted-foreground', !isExpanded && 'line-clamp-3')}
+                >
+                  {task.description}
+                </p>
+              )}
+              {isClipped && (
+                <button
+                  type="button"
+                  aria-expanded={isExpanded}
+                  onClick={() => toggleExpand(task.id)}
+                  className="mt-1 inline-flex items-center gap-0.5 text-xs font-medium text-primary underline-offset-2 hover:underline"
+                >
+                  {isExpanded ? 'Show less' : 'See more'}
+                  <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', isExpanded && 'rotate-180')} aria-hidden />
+                </button>
+              )}
+
+              <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                <ClientBadge client={clientOf(task.client_id)} showInactive={false} />
+                <Badge variant={priority.variant} className="text-[10px]">{priority.label}</Badge>
+                {task.due_date && (
+                  <Badge variant="muted" className="gap-1 text-[10px]">
+                    <CalendarDays className="h-3 w-3" />
+                    Due {formatDate(task.due_date)}
+                  </Badge>
+                )}
+                {task.completed_at && (
+                  <Badge variant="muted" className="gap-1 text-[10px] text-emerald-600 dark:text-emerald-400">
+                    <CheckCircle2 className="h-3 w-3" />
+                    Completed {formatDate(task.completed_at)}
+                  </Badge>
+                )}
+                {task.archived_at && (
+                  <Badge variant="muted" className="gap-1 text-[10px]">
+                    <Archive className="h-3 w-3" />
+                    Archived {formatDate(task.archived_at)}
+                  </Badge>
+                )}
+                {canViewAll && (
+                  <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                    <AvatarBubble name={workerName(task.worker_id)} avatarUrl={workerAvatar(task.worker_id)} size="sm" className="h-5 w-5 text-[9px]" />
+                    {workerName(task.worker_id)}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-3 flex items-center justify-between gap-1 border-t pt-2.5">
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 gap-1.5 text-xs"
+            onClick={() => void handleRestoreTask(task)}
+          >
+            <ArchiveRestore className="h-3.5 w-3.5" />
+            Restore to board
+          </Button>
+          <div className="flex items-center gap-0.5">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              aria-label={`Edit "${task.title}"`}
+              onClick={() => openEdit(task)}
+            >
+              <Pencil className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 text-destructive hover:bg-destructive/10"
+              aria-label={`Delete "${task.title}"`}
+              onClick={() => setDeleting(task)}
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   const showSkeleton = dataLoading && tasks.length === 0
 
   return (
@@ -468,7 +693,11 @@ export function TasksPage() {
       <PageHeader
         title="Tasks"
         description={
-          canViewAll
+          activeTab === 'archive'
+            ? canViewAll
+              ? 'Archive of completed tasks for all workers. Restore or delete as needed.'
+              : 'Archive of your completed tasks. Restore or delete as needed.'
+            : canViewAll
             ? "Every worker's board. Drag a card between stages to update it."
             : 'Your board. Drag a card between stages as you work through it.'
         }
@@ -501,34 +730,34 @@ export function TasksPage() {
           )}
         </div>
 
-        {/* Worker + stage are the cross-team filters, shown to anyone who can
-            see the whole board; client and priority narrow any board. */}
+        {/* Worker filter (cross-team, for managers/admins) */}
         {canViewAll && (
-          <>
-            <Select value={workerFilter} onValueChange={setWorkerFilter}>
-              <SelectTrigger className="w-[150px]">
-                <SelectValue placeholder="All workers" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All workers</SelectItem>
-                {workersWithTasks.map((w) => (
-                  <SelectItem key={w.id} value={w.id}>{w.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+          <Select value={workerFilter} onValueChange={setWorkerFilter}>
+            <SelectTrigger className="w-[150px]">
+              <SelectValue placeholder="All workers" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All workers</SelectItem>
+              {workersWithTasks.map((w) => (
+                <SelectItem key={w.id} value={w.id}>{w.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
 
-            <Select value={stageFilter} onValueChange={(v) => setStageFilter(v as 'all' | TaskStatus)}>
-              <SelectTrigger className="w-[150px]">
-                <SelectValue placeholder="All stages" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All stages</SelectItem>
-                {TASK_STATUSES.map((st) => (
-                  <SelectItem key={st} value={st}>{TaskStatusNames[st]}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </>
+        {/* Stage filter is relevant only on the kanban board */}
+        {canViewAll && activeTab === 'board' && (
+          <Select value={stageFilter} onValueChange={(v) => setStageFilter(v as 'all' | TaskStatus)}>
+            <SelectTrigger className="w-[150px]">
+              <SelectValue placeholder="All stages" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All stages</SelectItem>
+              {TASK_STATUSES.map((st) => (
+                <SelectItem key={st} value={st}>{TaskStatusNames[st]}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         )}
 
         <ClientSelect
@@ -551,15 +780,7 @@ export function TasksPage() {
         </Select>
 
         {filtersActive && (
-          <Button
-            variant="ghost"
-            onClick={() => {
-              setWorkerFilter('all')
-              setStageFilter('all')
-              setClientFilter('all')
-              setPriorityFilter('all')
-            }}
-          >
+          <Button variant="ghost" onClick={clearFilters}>
             Clear filters
           </Button>
         )}
@@ -574,70 +795,141 @@ export function TasksPage() {
         </Button>
       </PageHeader>
 
-      {showSkeleton ? (
-        <div className="rounded-2xl border bg-muted/30 p-2 sm:p-3">
-          <div className="flex gap-2 overflow-hidden">
-            {TASK_STATUSES.map((s) => (
-              <Skeleton key={s} className="h-56 flex-[1_0_15.5rem] rounded-xl" />
-            ))}
-          </div>
+      {/* Tabs navigation: Kanban Board vs Archived Tasks */}
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'board' | 'archive')} className="space-y-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <TabsList>
+            <TabsTrigger value="board" className="gap-2">
+              <KanbanSquare className="h-4 w-4" />
+              <span>Board</span>
+              <Badge variant="muted" className="text-[10px]">
+                {totalActiveCount}
+              </Badge>
+            </TabsTrigger>
+            <TabsTrigger value="archive" className="gap-2">
+              <Archive className="h-4 w-4" />
+              <span>Archive</span>
+              {totalArchivedCount > 0 && (
+                <Badge variant="muted" className="text-[10px]">
+                  {totalArchivedCount}
+                </Badge>
+              )}
+            </TabsTrigger>
+          </TabsList>
         </div>
-      ) : shownTaskCount === 0 && searchActive ? (
-        <EmptyState
-          icon={Search}
-          title="No tasks found"
-          description={
-            filtersActive
-              ? `No task titles matching “${searchQuery.trim()}” were found with the current filters.`
-              : `No task titles match “${searchQuery.trim()}”. Try a different title or clear the search.`
-          }
-          action={<Button variant="outline" onClick={() => setSearchQuery('')}>Clear search</Button>}
-        />
-      ) : visible.length === 0 && filtersActive ? (
-        // The board is not empty — the filters just hide everything.
-        <EmptyState
-          icon={KanbanSquare}
-          title="No tasks match these filters"
-          description="Nothing on the board fits the client, priority, worker or stage you picked."
-          action={
-            <Button
-              variant="outline"
-              onClick={() => {
-                setWorkerFilter('all')
-                setStageFilter('all')
-                setClientFilter('all')
-                setPriorityFilter('all')
-              }}
-            >
-              Clear filters
-            </Button>
-          }
-        />
-      ) : visible.length === 0 ? (
-        <EmptyState
-          icon={KanbanSquare}
-          title="No tasks yet"
-          description={
-            canManageAll
-              ? 'Add a task and assign it to a worker. It shows up on their board straight away.'
-              : 'Add your first task, then drag it across the board as you make progress.'
-          }
-          action={<Button onClick={() => openNew('todo')}><Plus className="mr-2 h-4 w-4" /> New task</Button>}
-        />
-      ) : (
-        // Horizontal board: the stages sit side by side in a single row inside
-        // one framed board, divided by hairlines. When the row is wider than the
-        // screen it scrolls sideways, one snapped lane at a time.
-        <div className="rounded-2xl border bg-muted/30 p-2 sm:p-3">
-          <div
-            ref={rowRef}
-            onDragOver={edgeScroll}
-            className="flex snap-x snap-mandatory divide-x overflow-x-auto"
-          >
-            {shownStages.map((status) => renderColumn(status))}
-          </div>
-        </div>
-      )}
+
+        {/* Board Tab Content */}
+        <TabsContent value="board" className="mt-0 space-y-4">
+          {showSkeleton ? (
+            <div className="rounded-2xl border bg-muted/30 p-2 sm:p-3">
+              <div className="flex gap-2 overflow-hidden">
+                {TASK_STATUSES.map((s) => (
+                  <Skeleton key={s} className="h-56 flex-[1_0_15.5rem] rounded-xl" />
+                ))}
+              </div>
+            </div>
+          ) : shownTaskCount === 0 && searchActive ? (
+            <EmptyState
+              icon={Search}
+              title="No tasks found"
+              description={
+                filtersActive
+                  ? `No task titles matching “${searchQuery.trim()}” were found with the current filters.`
+                  : `No task titles match “${searchQuery.trim()}”. Try a different title or clear the search.`
+              }
+              action={<Button variant="outline" onClick={() => setSearchQuery('')}>Clear search</Button>}
+            />
+          ) : activeTasks.length === 0 && filtersActive ? (
+            // The board is not empty — the filters just hide everything.
+            <EmptyState
+              icon={KanbanSquare}
+              title="No tasks match these filters"
+              description="Nothing on the board fits the client, priority, worker or stage you picked."
+              action={<Button variant="outline" onClick={clearFilters}>Clear filters</Button>}
+            />
+          ) : activeTasks.length === 0 ? (
+            <EmptyState
+              icon={KanbanSquare}
+              title="No active tasks"
+              description={
+                totalArchivedCount > 0
+                  ? 'All tasks are in the archive. Switch to the Archive tab to view or restore them, or create a new task.'
+                  : canManageAll
+                  ? 'Add a task and assign it to a worker. It shows up on their board straight away.'
+                  : 'Add your first task, then drag it across the board as you make progress.'
+              }
+              action={<Button onClick={() => openNew('todo')}><Plus className="mr-2 h-4 w-4" /> New task</Button>}
+            />
+          ) : (
+            // Horizontal board: the stages sit side by side in a single row inside
+            // one framed board, divided by hairlines. When the row is wider than the
+            // screen it scrolls sideways, one snapped lane at a time.
+            <div className="rounded-2xl border bg-muted/30 p-2 sm:p-3">
+              <div
+                ref={rowRef}
+                onDragOver={edgeScroll}
+                className="flex snap-x snap-mandatory divide-x overflow-x-auto"
+              >
+                {shownStages.map((status) => renderColumn(status))}
+              </div>
+            </div>
+          )}
+        </TabsContent>
+
+        {/* Archive Tab Content */}
+        <TabsContent value="archive" className="mt-0 space-y-4">
+          {archivedTasks.length === 0 && searchActive ? (
+            <EmptyState
+              icon={Search}
+              title="No archived tasks found"
+              description={
+                filtersActive
+                  ? `No archived tasks matching “${searchQuery.trim()}” were found with the current filters.`
+                  : `No archived tasks match “${searchQuery.trim()}”. Try a different title or clear the search.`
+              }
+              action={<Button variant="outline" onClick={() => setSearchQuery('')}>Clear search</Button>}
+            />
+          ) : archivedTasks.length === 0 && filtersActive ? (
+            <EmptyState
+              icon={Archive}
+              title="No archived tasks match these filters"
+              description="Nothing in the archive fits the client, priority or worker you picked."
+              action={<Button variant="outline" onClick={clearFilters}>Clear filters</Button>}
+            />
+          ) : archivedTasks.length === 0 ? (
+            <EmptyState
+              icon={Archive}
+              title="No archived tasks yet"
+              description={
+                canManageAll
+                  ? 'Completed tasks that you or your team archive from the board will appear here.'
+                  : 'Completed tasks you archive from your board will appear here for safe keeping.'
+              }
+            />
+          ) : (
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border bg-muted/40 px-4 py-2.5 text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">
+                  Showing {archivedTasks.length} archived {archivedTasks.length === 1 ? 'task' : 'tasks'}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={() => setConfirmRestoreAll(true)}
+                >
+                  <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+                  Restore all visible
+                </Button>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {archivedTasks.map((t) => renderArchivedCard(t))}
+              </div>
+            </div>
+          )}
+        </TabsContent>
+      </Tabs>
 
       <TaskFormDialog
         open={formOpen}
@@ -650,15 +942,41 @@ export function TasksPage() {
 
       {can('clients.manage') && <ManageClientsDialog open={clientsOpen} onOpenChange={setClientsOpen} />}
 
+      {/* Delete task dialog */}
       <ConfirmDialog
         open={!!deleting}
         onOpenChange={(v) => !v && setDeleting(null)}
         title="Delete this task?"
-        description={deleting ? `"${deleting.title}" will be removed from the board. This cannot be undone.` : ''}
+        description={deleting ? `"${deleting.title}" will be permanently removed. This cannot be undone.` : ''}
         onConfirm={async () => {
-          if (deleting) await deleteTask(deleting.id)
+          if (deleting) {
+            await deleteTask(deleting.id)
+            toast.success('Task deleted.')
+          }
           setDeleting(null)
         }}
+      />
+
+      {/* Bulk archive dialog */}
+      <ConfirmDialog
+        open={confirmArchiveAll}
+        onOpenChange={setConfirmArchiveAll}
+        title="Archive all completed tasks?"
+        description={`This will move ${columns.completed.length} completed task(s) to the Archive tab. You can view or restore them at any time.`}
+        confirmLabel="Archive all"
+        destructive={false}
+        onConfirm={handleArchiveAllCompleted}
+      />
+
+      {/* Bulk restore dialog */}
+      <ConfirmDialog
+        open={confirmRestoreAll}
+        onOpenChange={setConfirmRestoreAll}
+        title="Restore all archived tasks?"
+        description={`This will restore ${archivedTasks.length} task(s) back to the Completed column on the active board.`}
+        confirmLabel="Restore all"
+        destructive={false}
+        onConfirm={handleRestoreAllArchived}
       />
     </div>
   )

@@ -157,6 +157,7 @@ function from(table) {
                 id: row.id || `task-${state.tasks.length + 1}`,
                 position: 0,
                 completed_at: null,
+                archived_at: null,
                 created_at: new Date().toISOString(),
                 updated_at: new Date().toISOString(),
                 ...row,

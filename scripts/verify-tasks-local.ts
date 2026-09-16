@@ -84,6 +84,32 @@ async function main() {
   todo = columnOrder((await localBackend.listTasks()).data!, john.id, 'todo')
   assert(todo[bottom]?.id === c.data!.id, 'explicit drop index is honoured (card dropped at the bottom stays at the bottom)')
 
+  // 6) Archiving & restoring completed tasks.
+  const comp1 = await localBackend.createTask({ worker_id: john.id, client_id: client.id, title: 'VT-Comp-1', status: 'completed' })
+  const comp2 = await localBackend.createTask({ worker_id: john.id, client_id: client.id, title: 'VT-Comp-2', status: 'completed' })
+  assert(!comp1.error && !comp2.error, 'completed tasks created')
+  assert(comp1.data!.completed_at !== null, 'completed task has completed_at timestamp')
+  assert(comp1.data!.archived_at === null, 'newly completed task starts unarchived')
+
+  // Archive comp1
+  const now = new Date().toISOString()
+  const archived = await localBackend.updateTask(comp1.data!.id, { archived_at: now })
+  assert(!archived.error, 'archiving task succeeds')
+  assert(archived.data!.archived_at === now, 'task has archived_at timestamp set')
+
+  // Restore comp1: lands back at top of completed column
+  const restored = await localBackend.updateTask(comp1.data!.id, { archived_at: null })
+  assert(!restored.error, 'restoring task succeeds')
+  assert(restored.data!.archived_at === null, 'restored task has archived_at cleared')
+  assert(restored.data!.position === 0, 'restored task lands at position 0 of completed column')
+  const compOrder = columnOrder((await localBackend.listTasks()).data!, john.id, 'completed')
+  assert(compOrder[0]?.id === comp1.data!.id, 'restored task is at the TOP of the completed column')
+
+  // Moving away from completed clears archived_at
+  await localBackend.updateTask(comp1.data!.id, { archived_at: now })
+  const movedToTodo = await localBackend.moveTask(comp1.data!.id, 'todo', 0)
+  assert(movedToTodo.data!.archived_at === null, 'moving away from completed clears archived_at')
+
   console.log(failures ? `\n${failures} check(s) failed.` : '\nAll checks passed.')
   if (failures) process.exitCode = 1
 }

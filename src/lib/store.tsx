@@ -294,6 +294,12 @@ interface StoreValue {
   /** Drag & drop: drop a task into `status` at index `position`. */
   moveTask: (id: string, status: TaskStatus, position: number) => Promise<Task | null>
   deleteTask: (id: string) => Promise<boolean>
+  /** Archive a completed task. */
+  archiveTask: (id: string) => Promise<Task | null>
+  /** Restore an archived task back to the completed column. */
+  restoreTask: (id: string) => Promise<Task | null>
+  /** Bulk archive multiple tasks by id. */
+  archiveTasks: (ids: string[]) => Promise<number>
 
   settleWorker: (workerId: string, note?: string) => Promise<Payment | null>
   updatePaymentStatus: (
@@ -1509,6 +1515,25 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return true
   }, [backend, refreshTasks])
 
+  const archiveTask = useCallback(async (id: string) => {
+    return updateTask(id, { archived_at: new Date().toISOString() })
+  }, [updateTask])
+
+  const restoreTask = useCallback(async (id: string) => {
+    return updateTask(id, { archived_at: null })
+  }, [updateTask])
+
+  const archiveTasks = useCallback(async (ids: string[]) => {
+    const now = new Date().toISOString()
+    let count = 0
+    for (const id of ids) {
+      const res = await backend.updateTask(id, { archived_at: now })
+      if (!res.error && res.data) count++
+    }
+    await refreshTasks()
+    return count
+  }, [backend, refreshTasks])
+
   const settleWorker = useCallback(async (workerId: string, note?: string) => {
     const res = await backend.settleWorker(workerId, note)
     if (res.error || !res.data) return null
@@ -1676,6 +1701,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     updateTask,
     moveTask,
     deleteTask,
+    archiveTask,
+    restoreTask,
+    archiveTasks,
     settleWorker,
     updatePaymentStatus,
     updatePaymentNote,

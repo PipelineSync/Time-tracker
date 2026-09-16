@@ -2857,14 +2857,18 @@ export const supabaseBackend: DataBackend = {
       if (!canDo(me.data!, 'tasks.view_all') && me.data!.workerId) q = q.eq('worker_id', me.data!.workerId)
       return q.order('position', { ascending: true }).order('created_at', { ascending: false })
     }
-    const columns = 'id, worker_id, client_id, title, description, status, priority, due_date, position, created_by_role, completed_at, created_at, updated_at'
+    let columns = 'id, worker_id, client_id, title, description, status, priority, due_date, position, created_by_role, completed_at, archived_at, created_at, updated_at'
     let res = await build(columns)
+    if (res.error && isMissingColumn(res.error as { code?: string; message?: string }, 'archived_at')) {
+      columns = columns.replace('archived_at, ', '')
+      res = await build(columns)
+    }
     if (res.error && isMissingColumn(res.error as { code?: string; message?: string }, 'client_id')) {
       // Database without supabase/clients.sql: the board still loads, unlabelled.
       res = await build(columns.replace('client_id, ', ''))
     }
     if (res.error) return fail(res.error.message)
-    return ok(((res.data as unknown as Task[]) ?? []).map((t) => ({ ...t, client_id: t.client_id ?? null })))
+    return ok(((res.data as unknown as Task[]) ?? []).map((t) => ({ ...t, client_id: t.client_id ?? null, archived_at: t.archived_at ?? null })))
   },
 
   async createTask(input: CreateTaskInput) {
@@ -2905,6 +2909,7 @@ export const supabaseBackend: DataBackend = {
         position: 0,
         created_by_role: me.data!.role,
         completed_at: status === 'completed' ? new Date().toISOString() : null,
+        archived_at: null,
       })
       .select()
       .single() as PromiseLike<{ data: Task | null; error: { code?: string; message?: string } | null }>)
@@ -2945,13 +2950,21 @@ export const supabaseBackend: DataBackend = {
       update.status = patch.status
       // Stamp the first time it reaches Completed; clear it when it moves back.
       update.completed_at = patch.status === 'completed' ? (task.completed_at ?? new Date().toISOString()) : null
+      if (patch.status !== 'completed') {
+        update.archived_at = null
+      }
+    }
+    if (patch.archived_at !== undefined) {
+      const finalStatus = (update.status as TaskStatus | undefined) ?? task.status
+      update.archived_at = finalStatus === 'completed' ? patch.archived_at : null
     }
     const nextWorker = (update.worker_id as string | undefined) ?? task.worker_id
     const nextStatus = (update.status as TaskStatus | undefined) ?? task.status
-    // Landing on a new stage (or with a new assignee) puts the card on top:
+    const isRestoring = Boolean(task.archived_at && update.archived_at === null)
+    // Landing on a new stage (or with a new assignee, or restoring from archive) puts the card on top:
     // it takes position 0 and everyone already there shifts down a slot.
     let shiftIds: string[] = []
-    if (nextWorker !== task.worker_id || nextStatus !== task.status) {
+    if (nextWorker !== task.worker_id || nextStatus !== task.status || isRestoring) {
       update.position = 0
       const { data: columnRows } = await sb
         .from('tasks')
@@ -2963,9 +2976,19 @@ export const supabaseBackend: DataBackend = {
         .filter((rowId) => rowId !== id)
     }
 
-    const { data, error } = await withClientColumn<Task>((withClient) => {
-      const payload = withClient ? update : (({ client_id: _drop, ...rest }) => rest)(update)
+    const runUpdate = async (withArchived: boolean, withClient: boolean) => {
+      const payload = { ...update }
+      if (!withArchived) delete payload.archived_at
+      if (!withClient) delete payload.client_id
       return sb.from('tasks').update(payload).eq('id', id).select().single() as PromiseLike<{ data: Task | null; error: { code?: string; message?: string } | null }>
+    }
+
+    const { data, error } = await withClientColumn<Task>(async (withClient) => {
+      let res = await runUpdate(true, withClient)
+      if (res.error && isMissingColumn(res.error, 'archived_at')) {
+        res = await runUpdate(false, withClient)
+      }
+      return res
     })
     if (error) return fail(error.message ?? 'Could not save the task.')
     // Best-effort re-index of the column the card just landed on top of; a
@@ -3005,6 +3028,7 @@ export const supabaseBackend: DataBackend = {
         status,
         position: ordered.indexOf(id),
         completed_at: status === 'completed' ? (task.completed_at ?? new Date().toISOString()) : null,
+        ...(status !== 'completed' ? { archived_at: null } : {}),
       })
       .eq('id', id)
       .select()

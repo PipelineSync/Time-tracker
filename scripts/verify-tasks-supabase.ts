@@ -123,6 +123,21 @@ async function main() {
   assert(prog[bottom]?.id === c.data!.id, 'explicit drop index is honoured (card dropped at the bottom stays at the bottom)')
   assert(prog.every((t, i) => t.position === i), 'positions stay gap-free after the explicit drop')
 
+  // 5) Archiving & restoring completed tasks.
+  const comp1 = await supabaseBackend.createTask({ worker_id: JOHN, client_id: null, title: 'VT-Supabase-Comp', status: 'completed' })
+  assert(!comp1.error, 'completed task created')
+  assert(comp1.data!.archived_at === null, 'task starts unarchived')
+
+  const now = new Date().toISOString()
+  const archived = await supabaseBackend.updateTask(comp1.data!.id, { archived_at: now })
+  assert(!archived.error, 'archived task saved')
+  assert(archived.data!.archived_at === now, 'task has archived_at timestamp')
+
+  const restored = await supabaseBackend.updateTask(comp1.data!.id, { archived_at: null })
+  assert(!restored.error, 'restored task saved')
+  assert(restored.data!.archived_at === null, 'task archived_at cleared')
+  assert(restored.data!.position === 0, 'restored task lands at position 0')
+
   console.log(failures ? `\n${failures} check(s) failed.` : '\nAll checks passed.')
   if (failures) process.exitCode = 1
 }
