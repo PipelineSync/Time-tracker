@@ -84,9 +84,7 @@ export function PersonalFinancePage() {
       toast.error(e instanceof Error ? e.message : 'Could not save')
     }
   }
-  const myWorker = user?.workerId
-    ? workers.find((w) => w.id === user.workerId)
-    : workers.find((w) => user?.id && w.user_id === user.id)
+  const myWorker = user?.workerId ? workers.find((w) => w.id === user.workerId) : undefined
   const accountAvatar = (isAdmin ? settings?.avatar_url : null) || myWorker?.avatar_url || null
   const workerName = myWorker?.name
   const displayName = workerName || user?.email.split('@')[0] || 'My'
