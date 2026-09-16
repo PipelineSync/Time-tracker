@@ -15,7 +15,7 @@ import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { NotificationsBell } from '@/components/NotificationsBell'
 import { cn } from '@/lib/utils'
-import { accountBalance, buildInstallments, compareScheduledPayments, currentPeriod, daysDifference, deleteRecurringPayment, emptyPFData, formatShortDate, getOverdueRecurringPayments, getScheduledPayments, loadPersonalFinance, money, normalizePFData, pfId, savePersonalFinance, scheduledPaymentLabel, today, type PFData, type PFAccount, type PFOverduePayment, type PFScheduledPayment } from '@/lib/personalFinance'
+import { accountBalance, buildInstallments, compareScheduledPayments, currentPeriod, daysDifference, deleteRecurringPayment, effectiveUnpaidAmounts, emptyPFData, formatShortDate, getOverdueRecurringPayments, getScheduledPayments, loadPersonalFinance, money, normalizePFData, pfId, recurringPaidCount, recurringPaidTotal, recurringRemainingBalance, savePersonalFinance, scheduledPaymentLabel, today, type PFData, type PFAccount, type PFOverduePayment, type PFScheduledPayment } from '@/lib/personalFinance'
 
 type View = 'dashboard' | 'accounts' | 'activity' | 'recurring' | 'reports' | 'settings'
 type EntryKind = 'income' | 'expense' | 'transfer'
@@ -154,15 +154,36 @@ export function PersonalFinancePage() {
     const rows = [['Type','Date','Description','Account','Category','Amount','Paid','Note'], ...filteredIncome.map(x => ['Income',x.date,data.sources.find(s=>s.id===x.sourceId)?.name||'',data.accounts.find(a=>a.id===x.accountId)?.name||'','',String(x.amount),'Yes',x.note]), ...filteredExpenses.map(x => ['Expense',x.date,x.name,data.accounts.find(a=>a.id===x.accountId)?.name||'',data.categories.find(c=>c.id===x.categoryId)?.name||'',String(x.amount),x.paid?'Yes':'No',x.note])]
     const csv = rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n'); const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'})); a.download=`personal-finance-${from}-${to}.csv`; a.click(); URL.revokeObjectURL(a.href)
   }
+  const deleteTxExpense = deleteTx?.type === 'expense' ? data.expenses.find(x => x.id === deleteTx.id) : undefined
   const deleteTxTitle = deleteTx ? (deleteTx.type === 'income' ? 'Delete this income entry?' : deleteTx.type === 'expense' ? 'Delete this expense?' : 'Delete this transfer?') : ''
   const doDeleteTx = () => {
     const t = deleteTx
     if (!t) return
+    const removed = t.type === 'expense' ? data.expenses.find(x => x.id === t.id) : undefined
     commit({
       ...data,
       incomes: t.type === 'income' ? data.incomes.filter(i => i.id !== t.id) : data.incomes,
       expenses: t.type === 'expense' ? data.expenses.filter(i => i.id !== t.id) : data.expenses,
       transfers: t.type === 'transfer' ? data.transfers.filter(i => i.id !== t.id) : data.transfers,
+      // Deleting a recorded recurring payment also undoes its run: the paid
+      // count, installment flag and carry-over all go back to what they were,
+      // so the balance to pay never drifts from reality.
+      recurring: removed?.recurringId
+        ? data.recurring.map(r => {
+            if (r.id !== removed.recurringId) return r
+            const runCount = Math.max(0, r.runCount - 1)
+            return {
+              ...r,
+              runCount,
+              active: r.active && (r.maxOccurrences === null || runCount < r.maxOccurrences),
+              installments: r.installments?.map(i =>
+                (removed.installmentNumber != null ? i.number === removed.installmentNumber : i.dueDate === removed.dueDate)
+                  ? { ...i, paid: false }
+                  : i,
+              ),
+            }
+          })
+        : data.recurring,
     })
     setDeleteTx(null)
   }
@@ -190,7 +211,7 @@ export function PersonalFinancePage() {
     <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-sm font-semibold uppercase tracking-[.2em] text-primary">Private workspace</p><h1 className="text-3xl font-bold tracking-tight">{displayName}'s Personal Tracker</h1><p className="text-muted-foreground">Your accounts, spending and income—all in one place.</p></div><div className="flex flex-wrap gap-2"><Button onClick={()=>setEntry('expense')}><ArrowUpRight className="mr-2 h-4 w-4"/>Expense</Button><Button variant="outline" onClick={()=>setEntry('income')}><ArrowDownLeft className="mr-2 h-4 w-4"/>Income</Button><Button variant="outline" onClick={()=>setEntry('transfer')}><ArrowLeftRight className="mr-2 h-4 w-4"/>Transfer</Button></div></div>
     <div className="flex gap-1 overflow-x-auto rounded-xl border bg-card p-1">{NAV.map(n=><Button key={n.id} variant={view===n.id?'default':'ghost'} size="sm" onClick={()=>setView(n.id)} className="shrink-0"><n.icon className="mr-2 h-4 w-4"/>{n.label}</Button>)}</div>
 
-    {view==='dashboard' && <><div className="grid gap-4 md:grid-cols-3"><Metric label="Total balance" value={m(total)} tone="blue"/><Metric label="Money in this month" value={m(moneyIn)} tone="green"/><Metric label="Money out this month" value={m(moneyOut)} tone="orange"/></div><div className="grid gap-6 lg:grid-cols-3"><Card className="lg:col-span-2"><CardHeader className="flex-row items-center justify-between"><CardTitle>Your accounts</CardTitle><Button size="sm" variant="outline" onClick={()=>setAccountOpen(true)}><Plus className="mr-1 h-4 w-4"/>Add</Button></CardHeader><CardContent><AccountGrid data={data} currency={currency}/>{!activeAccounts.length&&<Empty text="Add your first bank or e-wallet account."/>}</CardContent></Card><Card><CardHeader className="flex-row items-center justify-between"><CardTitle>Recurring this month</CardTitle>{overduePayments.length > 0 && <Badge variant="destructive" className="gap-1 text-[10px]"><AlertTriangle className="h-3 w-3" />{overduePayments.length} overdue</Badge>}</CardHeader><CardContent className="space-y-3">{billsByNextDue.slice(0,6).map(r=>{const itemOverdue = overduePayments.filter(op => op.recurringId === r.id); const nextOverdue = itemOverdue[0]; const nextRow = nextRowFor(r.id); const target = nextRow ? { id: nextRow.installmentId ?? '', dueDate: nextRow.dueDate, number: nextRow.installmentNumber, paid: false } : undefined; return <RecurringRow key={r.id} r={r} installment={target} isOverdue={Boolean(nextOverdue)} daysOverdue={nextOverdue?.daysOverdue} overdueCount={itemOverdue.length} dueLabel={nextRow ? scheduledPaymentLabel(nextRow) : undefined} data={data} currency={currency} onPay={()=>setPayRecurring({r, i: target, overduePayment: nextOverdue})}/>})}{!activeRecurring.length&&<Empty text="No active recurring payments."/>}</CardContent></Card></div></>}
+    {view==='dashboard' && <><div className="grid gap-4 md:grid-cols-3"><Metric label="Total balance" value={m(total)} tone="blue"/><Metric label="Money in this month" value={m(moneyIn)} tone="green"/><Metric label="Money out this month" value={m(moneyOut)} tone="orange"/></div><div className="grid gap-6 lg:grid-cols-3"><Card className="lg:col-span-2"><CardHeader className="flex-row items-center justify-between"><CardTitle>Your accounts</CardTitle><Button size="sm" variant="outline" onClick={()=>setAccountOpen(true)}><Plus className="mr-1 h-4 w-4"/>Add</Button></CardHeader><CardContent><AccountGrid data={data} currency={currency}/>{!activeAccounts.length&&<Empty text="Add your first bank or e-wallet account."/>}</CardContent></Card><Card><CardHeader className="flex-row items-center justify-between"><CardTitle>Recurring this month</CardTitle>{overduePayments.length > 0 && <Badge variant="destructive" className="gap-1 text-[10px]"><AlertTriangle className="h-3 w-3" />{overduePayments.length} overdue</Badge>}</CardHeader><CardContent className="space-y-3">{billsByNextDue.slice(0,6).map(r=>{const itemOverdue = overduePayments.filter(op => op.recurringId === r.id); const nextOverdue = itemOverdue[0]; const nextRow = nextRowFor(r.id); const target = nextRow ? { id: nextRow.installmentId ?? '', dueDate: nextRow.dueDate, number: nextRow.installmentNumber, paid: false } : undefined; return <RecurringRow key={r.id} r={r} installment={target} amount={nextRow?.amount} isOverdue={Boolean(nextOverdue)} daysOverdue={nextOverdue?.daysOverdue} overdueCount={itemOverdue.length} dueLabel={nextRow ? scheduledPaymentLabel(nextRow) : undefined} data={data} currency={currency} onPay={()=>setPayRecurring({r, i: target, overduePayment: nextOverdue})}/>})}{!activeRecurring.length&&<Empty text="No active recurring payments."/>}</CardContent></Card></div></>}
 
     {view==='accounts' && <Card><CardHeader className="flex-row items-center justify-between"><div><CardTitle>Accounts</CardTitle><p className="text-sm text-muted-foreground">Balances calculate automatically from paid transactions and transfers.</p></div><Button onClick={()=>setAccountOpen(true)}><Plus className="mr-2 h-4 w-4"/>Add account</Button></CardHeader><CardContent><AccountGrid data={data} currency={currency} manage onArchive={(id)=>commit({...data,accounts:data.accounts.map(a=>a.id===id?{...a,archived:!a.archived}:a)})} onEdit={(id)=>{const a=data.accounts.find(x=>x.id===id);if(a)setEditAccount(a)}} onReconcile={(id)=>{const a=data.accounts.find(x=>x.id===id);if(a)setReconcileAccount(a)}}/><div className="mt-6 rounded-xl bg-primary p-5 text-primary-foreground"><p className="text-sm opacity-80">Total available</p><p className="text-3xl font-bold">{m(total)}</p></div></CardContent></Card>}
 
@@ -233,7 +254,7 @@ export function PersonalFinancePage() {
                     </div>
                     <p className="text-xs text-muted-foreground mt-0.5">
                       Due {new Date(`${op.dueDate}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                      {op.amount ? ` · ${m(op.amount)}` : ' · Variable'}
+                      {op.amount !== null ? ` · ${m(op.amount)}` : ' · Variable'}
                       {op.installmentNumber ? ` · Installment ${op.installmentNumber}${r.maxOccurrences ? ` of ${r.maxOccurrences}` : ''}` : ''}
                     </p>
                   </div>
@@ -278,7 +299,7 @@ export function PersonalFinancePage() {
                       <div className="min-w-0">
                         <p className="truncate font-medium">{r.name}</p>
                         <p className="text-xs text-muted-foreground">
-                          {r.expectedAmount ? m(r.expectedAmount) : 'Variable'} a month · {billRows.length} payment{billRows.length === 1 ? '' : 's'} · {paidCount} paid
+                          {r.expectedAmount ? m(r.expectedAmount) : 'Variable'} a month · {billRows.length} payment{billRows.length === 1 ? '' : 's'} · {paidCount} paid{recurringRemainingBalance(data, r) !== null ? ` · ${m(recurringRemainingBalance(data, r) ?? 0)} to go` : ''}
                           {nextRow ? ` · next ${formatShortDate(nextRow.dueDate)}` : ' · nothing left due'}
                         </p>
                       </div>
@@ -366,7 +387,14 @@ export function PersonalFinancePage() {
                           {category}
                         </span>
                       </td>
-                      <td className="whitespace-nowrap px-3 py-2.5 text-right font-semibold">{row.amount !== null ? m(row.amount) : 'Variable'}</td>
+                      <td className="whitespace-nowrap px-3 py-2.5 text-right font-semibold">
+                        {row.amount !== null ? m(row.amount) : 'Variable'}
+                        {!row.paid && row.amount !== null && row.recurring.expectedAmount !== null && row.amount !== row.recurring.expectedAmount && (
+                          <span className="block text-[10px] font-normal text-muted-foreground">
+                            {row.amount < row.recurring.expectedAmount ? 'credit applied' : 'shortfall added'}
+                          </span>
+                        )}
+                      </td>
                       <td className="whitespace-nowrap px-3 py-2.5">{accountNameOf(data, row.recurring.accountId)}</td>
                       <td className="whitespace-nowrap px-3 py-2.5"><StatusBadge row={row}/></td>
                       <td className="px-3 py-2.5 text-right">
@@ -402,15 +430,19 @@ export function PersonalFinancePage() {
         const allInst = (recurringDetails.installments || []).slice().sort((a,b)=>a.dueDate.localeCompare(b.dueDate))
         const overdueInst = allInst.filter(i => !i.paid && i.dueDate < today())
         const upcomingInst = allInst.filter(i => !i.paid && i.dueDate >= today())
+        const instAmounts = effectiveUnpaidAmounts(data, recurringDetails)
+        const balanceToPay = recurringRemainingBalance(data, recurringDetails)
+        const paidCount = Math.min(recurringPaidCount(data, recurringDetails), recurringDetails.maxOccurrences ?? Infinity)
         return <div className="space-y-4">
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-lg border p-3">
               <p className="text-xs text-muted-foreground">Paid</p>
-              <p className="font-semibold">{recurringDetails.runCount}{recurringDetails.maxOccurrences?` of ${recurringDetails.maxOccurrences}`:''}</p>
+              <p className="font-semibold">{paidCount}{recurringDetails.maxOccurrences?` of ${recurringDetails.maxOccurrences}`:''}</p>
             </div>
             <div className="rounded-lg border p-3">
               <p className="text-xs text-muted-foreground">Total balance to pay</p>
-              <p className="font-semibold">{recurringDetails.expectedAmount&&recurringDetails.maxOccurrences?money(recurringDetails.expectedAmount*(recurringDetails.maxOccurrences-recurringDetails.runCount),currency):'Variable'}</p>
+              <p className="font-semibold">{balanceToPay!==null?money(balanceToPay,currency):'Variable'}</p>
+              <p className="mt-1 text-[11px] text-muted-foreground">{balanceToPay!==null?`${recurringDetails.maxOccurrences} × ${money(recurringDetails.expectedAmount??0,currency)} − ${money(recurringPaidTotal(data,recurringDetails),currency)} paid`:'No fixed total to pay off'}</p>
             </div>
           </div>
           <div>
@@ -432,7 +464,7 @@ export function PersonalFinancePage() {
           <div>
             <p className="mb-2 font-medium">Upcoming payments</p>
             <div className="space-y-2">
-              {upcomingInst.map(i=><RecurringRow key={i.id} r={recurringDetails} installment={i} data={data} currency={currency} onPay={()=>{setRecurringDetails(null);setPayRecurring({r:recurringDetails,i})}}/> )}
+              {upcomingInst.map(i=><RecurringRow key={i.id} r={recurringDetails} installment={i} amount={instAmounts.get(i.id)} data={data} currency={currency} onPay={()=>{setRecurringDetails(null);setPayRecurring({r:recurringDetails,i})}}/> )}
               {upcomingInst.length === 0 && overdueInst.length === 0 && <p className="text-sm text-muted-foreground">No pending payments.</p>}
             </div>
           </div>
@@ -452,9 +484,9 @@ export function PersonalFinancePage() {
     <RecurringDialog open={recurringOpen} close={()=>setRecurringOpen(false)} data={data} commit={commit}/>
     {editAccount && <EditAccountDialog account={editAccount} close={()=>setEditAccount(null)} data={data} commit={commit}/>}
     {reconcileAccount && <ReconcileDialog account={reconcileAccount} data={data} currency={currency} close={()=>setReconcileAccount(null)} commit={commit}/>}
-    <ConfirmDialog open={!!deleteTx} onOpenChange={v=>{if(!v)setDeleteTx(null)}} title={deleteTxTitle} description="The transaction will be removed from your tracker. This cannot be undone." confirmLabel="Delete" onConfirm={doDeleteTx}/>
+    <ConfirmDialog open={!!deleteTx} onOpenChange={v=>{if(!v)setDeleteTx(null)}} title={deleteTxTitle} description={deleteTxExpense?.recurringId ? 'This payment was recorded from a recurring bill. Removing it reopens the installment — the paid count and total balance to pay go back to what they were.' : 'The transaction will be removed from your tracker. This cannot be undone.'} confirmLabel="Delete" onConfirm={doDeleteTx}/>
     <ConfirmDialog open={!!deleteRecurring} onOpenChange={v=>{if(!v)setDeleteRecurring(null)}} title={deleteRecurring ? `Delete ${deleteRecurring.name}?` : 'Delete recurring payment?'} description="This recurring payment will be removed from your tracker. Past transactions already recorded will be kept." confirmLabel="Delete" onConfirm={doDeleteRecurring}/>
-    {payRecurring && <PayRecurringDialog recurring={payRecurring.r} installment={payRecurring.i} overduePayment={payRecurring.overduePayment} data={data} close={()=>setPayRecurring(null)} commit={commit}/>}
+    {payRecurring && <PayRecurringDialog recurring={payRecurring.r} installment={payRecurring.i} overduePayment={payRecurring.overduePayment} data={data} currency={currency} close={()=>setPayRecurring(null)} commit={commit}/>}
   </main></div>
 }
 
@@ -519,7 +551,7 @@ function Filter({value,set,label,items}:{value:string;set:(v:string)=>void;label
 function AccountDialog({open,close,data,commit}:{open:boolean;close:()=>void;data:PFData;commit:(d:PFData)=>void}) { const submit=(e:FormEvent<HTMLFormElement>)=>{e.preventDefault();const f=new FormData(e.currentTarget);commit({...data,accounts:[...data.accounts,{id:pfId(),name:String(f.get('name')),purpose:String(f.get('purpose')),startingBalance:Number(f.get('balance')),archived:false}]});close()}; return <Dialog open={open} onOpenChange={close}><DialogContent><DialogHeader><DialogTitle>Add account</DialogTitle></DialogHeader><form className="space-y-4" onSubmit={submit}><Field label="Bank or e-wallet name"><Input name="name" required autoFocus/></Field><Field label="Purpose / label"><Input name="purpose" placeholder="For bills, salary, savings…"/></Field><Field label="Starting balance"><Input name="balance" type="number" step="0.01" required defaultValue="0"/></Field><Button className="w-full">Add account</Button></form></DialogContent></Dialog> }
 function EditAccountDialog({account,close,data,commit}:{account:PFAccount;close:()=>void;data:PFData;commit:(d:PFData)=>void}) { const submit=(e:FormEvent<HTMLFormElement>)=>{e.preventDefault();const f=new FormData(e.currentTarget);commit({...data,accounts:data.accounts.map(x=>x.id===account.id?{...x,name:String(f.get('name'))||x.name,purpose:String(f.get('purpose'))}:x)});close()}; return <Dialog open onOpenChange={close}><DialogContent><DialogHeader><DialogTitle>Edit account</DialogTitle></DialogHeader><form className="space-y-4" onSubmit={submit}><Field label="Bank or e-wallet name"><Input name="name" required defaultValue={account.name}/></Field><Field label="Purpose / label"><Input name="purpose" defaultValue={account.purpose} placeholder="For bills, salary, savings…"/></Field><Button className="w-full">Save changes</Button></form></DialogContent></Dialog> }
 function ReconcileDialog({account,data,currency,close,commit}:{account:PFAccount;data:PFData;currency:string;close:()=>void;commit:(d:PFData)=>void}) { const current=accountBalance(data,account.id); const submit=(e:FormEvent<HTMLFormElement>)=>{e.preventDefault();const desired=Number(new FormData(e.currentTarget).get('balance'));if(!Number.isFinite(desired))return;commit({...data,accounts:data.accounts.map(x=>x.id===account.id?{...x,startingBalance:x.startingBalance+(desired-current)}:x)});close()}; return <Dialog open onOpenChange={close}><DialogContent><DialogHeader><DialogTitle>Reconcile {account.name}</DialogTitle></DialogHeader><p className="text-sm text-muted-foreground">The tracker currently calculates a balance of <b>{money(current,currency)}</b>.</p><form className="space-y-4" onSubmit={submit}><Field label="Enter the correct current balance"><Input name="balance" type="number" step="0.01" required defaultValue={String(current)}/></Field><p className="text-xs text-muted-foreground">The difference is folded into the account's starting balance, so history stays intact.</p><Button className="w-full">Reconcile</Button></form></DialogContent></Dialog> }
-function PayRecurringDialog({recurring,installment,overduePayment,data,close,commit}:{recurring:PFData['recurring'][number];installment?:{id:string;dueDate:string;number:number};overduePayment?:PFOverduePayment;data:PFData;close:()=>void;commit:(d:PFData)=>void}) {
+function PayRecurringDialog({recurring,installment,overduePayment,data,currency,close,commit}:{recurring:PFData['recurring'][number];installment?:{id:string;dueDate:string;number:number};overduePayment?:PFOverduePayment;data:PFData;currency:string;close:()=>void;commit:(d:PFData)=>void}) {
   const accounts = data.accounts.filter(a => !a.archived)
   const target = (() => {
     if (installment) return { id: installment.id, dueDate: installment.dueDate, number: installment.number }
@@ -544,14 +576,21 @@ function PayRecurringDialog({recurring,installment,overduePayment,data,close,com
       number: recurring.runCount + 1,
     }
   })()
+  // What this payment actually costs after carry-over: an earlier overpayment
+  // makes it cheaper (possibly free), an earlier short payment makes it cost
+  // more. Same map the schedule and overdue list use, so they all agree.
+  const costs = effectiveUnpaidAmounts(data, recurring)
+  const costKey = recurring.installments && recurring.installments.length > 0 ? target.id : target.dueDate
+  const effectiveAmount = costs.has(costKey) ? costs.get(costKey)! : recurring.expectedAmount
+  const covered = effectiveAmount !== null && effectiveAmount <= 0
 
   const submit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     const form = new FormData(e.currentTarget)
     const accountId = String(form.get('account'))
     const amount = Number(form.get('amount'))
-    if (!accounts.some(a => a.id === accountId) || !(amount > 0)) {
-      return toast.error('Choose an active account and enter a valid amount.')
+    if (!accounts.some(a => a.id === accountId) || !Number.isFinite(amount) || amount < 0 || (amount <= 0 && !covered)) {
+      return toast.error(covered ? 'Choose an active account.' : 'Choose an active account and enter a valid amount.')
     }
 
     if (recurring.installments && recurring.installments.length > 0) {
@@ -584,7 +623,7 @@ function PayRecurringDialog({recurring,installment,overduePayment,data,close,com
           amount,
           accountId,
           paid: true,
-          note: `Recurring payment — ${recurring.maxOccurrences ? `installment ${target.number} of ${recurring.maxOccurrences}` : `payment ${target.number}`}`,
+          note: `Recurring payment — ${recurring.maxOccurrences ? `installment ${target.number} of ${recurring.maxOccurrences}` : `payment ${target.number}`}${covered ? ' · covered by overpayment credit' : ''}`,
           recurringId: recurring.id,
           installmentNumber: target.number,
           period: target.dueDate.slice(0, 7),
@@ -592,7 +631,9 @@ function PayRecurringDialog({recurring,installment,overduePayment,data,close,com
       ]
     }
     void commit(next)
-    toast.success(`Payment for ${recurring.name} marked paid.`)
+    toast.success(covered
+      ? `${recurring.name} covered by your overpayment credit — marked paid.`
+      : `Payment for ${recurring.name} marked paid.`)
     close()
   }
 
@@ -609,9 +650,16 @@ function PayRecurringDialog({recurring,installment,overduePayment,data,close,com
           </p>
           <Picker name="account" label="Pay from" items={accounts} initial={recurring.accountId}/>
           <Field label="Amount paid">
-            <Input name="amount" type="number" min="0.01" step="0.01" required defaultValue={String(recurring.expectedAmount || '')}/>
+            <Input name="amount" type="number" min={covered ? '0' : '0.01'} step="0.01" required defaultValue={String(effectiveAmount ?? '')}/>
           </Field>
-          <Button className="w-full" disabled={!accounts.length}>Mark paid</Button>
+          {covered ? (
+            <p className="text-xs text-emerald-600">Fully covered by the credit from your earlier overpayment — mark it paid for {money(0, currency)}, no money leaves your account.</p>
+          ) : effectiveAmount !== null && recurring.expectedAmount !== null && effectiveAmount < recurring.expectedAmount ? (
+            <p className="text-xs text-emerald-600">Includes {money(recurring.expectedAmount - effectiveAmount, currency)} credit from your earlier overpayment — this payment costs less than the usual {money(recurring.expectedAmount, currency)}.</p>
+          ) : effectiveAmount !== null && recurring.expectedAmount !== null && effectiveAmount > recurring.expectedAmount ? (
+            <p className="text-xs text-amber-600">Adds {money(effectiveAmount - recurring.expectedAmount, currency)} shortfall from an earlier short payment — this payment costs more than the usual {money(recurring.expectedAmount, currency)}.</p>
+          ) : null}
+          <Button className="w-full" disabled={!accounts.length}>{covered ? 'Mark paid (covered)' : 'Mark paid'}</Button>
         </form>
       </DialogContent>
     </Dialog>
@@ -782,6 +830,7 @@ function RecurringDialog({open,close,data,commit}:{open:boolean;close:()=>void;d
 function RecurringRow({
   r,
   installment,
+  amount,
   isOverdue,
   daysOverdue,
   overdueCount,
@@ -793,6 +842,8 @@ function RecurringRow({
 }: {
   r: PFData['recurring'][number]
   installment?: { id: string; dueDate: string; number: number; paid: boolean }
+  /** This payment's real cost after carry-over; defaults to the bill's monthly amount. */
+  amount?: number | null
   isOverdue?: boolean
   daysOverdue?: number
   overdueCount?: number
@@ -808,6 +859,10 @@ function RecurringRow({
   // Never infer payment from the current month: future installments may be paid early.
   const paid = installment ? installment.paid : data.expenses.some(expense => expense.recurringId === r.id && expense.period === currentPeriod())
   const showOverdue = Boolean(isOverdue && !paid && r.active)
+  const cost = amount !== undefined ? amount : r.expectedAmount
+  const carryHint = amount !== undefined && r.expectedAmount !== null && amount !== null
+    ? amount < r.expectedAmount ? ' · credit applied' : amount > r.expectedAmount ? ' · shortfall added' : ''
+    : ''
 
   return (
     <div className={cn(
@@ -838,7 +893,8 @@ function RecurringRow({
           )}
         </div>
         <p className="text-xs text-muted-foreground">
-          {r.expectedAmount ? money(r.expectedAmount, currency) : 'Variable'}
+          {cost !== null && cost !== undefined ? money(cost, currency) : 'Variable'}
+          {carryHint}
           {installment && (r.maxOccurrences !== null
             ? ` · Installment ${installment.number} of ${r.maxOccurrences}`
             : ` · Payment ${installment.number}`)}

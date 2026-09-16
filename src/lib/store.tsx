@@ -425,7 +425,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         )
         if (!alreadyNotified) {
           const currencyCode = settingsRef.current?.currency || 'PHP'
-          const amountStr = op.amount ? ` (${money(op.amount, currencyCode)})` : ''
+          const amountStr = op.amount != null ? ` (${money(op.amount, currencyCode)})` : ''
           const message = `Overdue recurring payment: "${op.recurringName}"${amountStr} was due on ${op.dueDate} (${op.daysOverdue} day${op.daysOverdue === 1 ? '' : 's'} overdue)`
           await backend.createNotification(currentUser.id, {
             entry_id: null,

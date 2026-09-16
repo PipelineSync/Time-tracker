@@ -172,6 +172,125 @@ export function deleteRecurringPayment(data: PFData, recurringId: string): PFDat
   }
 }
 
+/** Round money to centavos so carry-over maths never shows float dust (0.1 + 0.2 → 0.3). */
+const roundMoney = (n: number) => Math.round(n * 100) / 100
+
+/**
+ * Total actually paid against a bill so far — the real recorded amounts,
+ * which may differ from the monthly expected amount.
+ */
+export function recurringPaidTotal(data: PFData, r: PFRecurring): number {
+  return roundMoney(data.expenses.reduce((s, e) => (e.recurringId === r.id && e.paid ? s + e.amount : s), 0))
+}
+
+/**
+ * Carry-over between one payment and the next: everything paid minus
+ * everything due, across the bill's recorded payments. Positive = an
+ * overpayment credit that reduces the next payment's cost; negative = a
+ * shortfall the next payment has to make up.
+ */
+export function recurringCarryOver(data: PFData, r: PFRecurring): number {
+  if (r.expectedAmount === null) return 0
+  let paid = 0
+  let count = 0
+  for (const e of data.expenses) {
+    if (e.recurringId !== r.id || !e.paid) continue
+    paid += e.amount
+    count++
+  }
+  return roundMoney(paid - r.expectedAmount * count)
+}
+
+/**
+ * Cost of the nth still-unpaid payment (0-based, in payment order) once the
+ * carry-over is applied: credit reduces it — a fully covered payment costs 0
+ * and any credit it does not use flows on to the payments after it — while a
+ * shortfall adds to it. Variable bills have no fixed cost to adjust.
+ */
+export function effectiveUnpaidAmount(carryOver: number, expectedAmount: number | null, unpaidIndex: number): number | null {
+  if (expectedAmount === null) return null
+  let remaining = carryOver
+  for (let i = 0; i < unpaidIndex; i++) {
+    remaining -= remaining >= 0 ? Math.min(remaining, expectedAmount) : remaining
+  }
+  const applied = remaining >= 0 ? Math.min(remaining, expectedAmount) : remaining
+  return roundMoney(expectedAmount - applied)
+}
+
+/**
+ * How many payments of a bill are actually settled, counted from the stored
+ * installments and the recorded expenses — never from the drift-prone
+ * run counter alone.
+ */
+export function recurringPaidCount(data: PFData, r: PFRecurring): number {
+  const settledExpenses = data.expenses.filter((e) => e.recurringId === r.id && e.paid).length
+  if (r.installments && r.installments.length > 0) {
+    const settledInstallments = r.installments.filter(
+      (inst) => inst.paid || data.expenses.some((e) => e.recurringId === r.id && e.paid && (e.installmentNumber === inst.number || e.dueDate === inst.dueDate)),
+    ).length
+    return Math.max(settledInstallments, settledExpenses)
+  }
+  return settledExpenses
+}
+
+/**
+ * Total balance still to pay on a bill: the plan's full cost minus what was
+ * actually paid so far. Unlike the naive `monthly × payments left` guess,
+ * this stays exact when a payment was more (credit) or less (shortfall) than
+ * the monthly amount. Null when the total cannot be known — variable amounts,
+ * or an open-ended bill with no fixed number of payments.
+ */
+export function recurringRemainingBalance(data: PFData, r: PFRecurring): number | null {
+  if (r.expectedAmount === null || r.maxOccurrences === null) return null
+  const totalCost = roundMoney(r.expectedAmount * r.maxOccurrences)
+  return Math.max(0, roundMoney(totalCost - recurringPaidTotal(data, r)))
+}
+
+/**
+ * Cost of each still-unpaid payment of a bill, keyed by installment id
+ * (fixed plans) or due date (projected months of open-ended bills), with the
+ * carry-over applied in payment order. The schedule, the overdue list and the
+ * pay dialog all read from this one map, so they can never disagree about
+ * what the next payment costs.
+ */
+export function effectiveUnpaidAmounts(data: PFData, r: PFRecurring): Map<string, number | null> {
+  const amounts = new Map<string, number | null>()
+  if (r.expectedAmount === null) return amounts
+  const carryOver = recurringCarryOver(data, r)
+  let unpaidIndex = 0
+  const next = (key: string) => amounts.set(key, effectiveUnpaidAmount(carryOver, r.expectedAmount, unpaidIndex++))
+
+  if (r.installments && r.installments.length > 0) {
+    for (const inst of r.installments) {
+      if (inst.paid || paidExpenseForInstallment(data, r.id, inst)) continue
+      next(inst.id)
+    }
+    return amounts
+  }
+
+  // Open-ended bill: same projection window the payment schedule uses.
+  const reference = today()
+  const startPeriod = r.startDate && ISO_DATE.test(r.startDate) ? r.startDate.slice(0, 7) : reference.slice(0, 7)
+  const lookbackPeriod = addMonthsClamped(reference, -SCHEDULE_LOOKBACK_MONTHS).slice(0, 7)
+  const firstPeriod = startPeriod < lookbackPeriod ? lookbackPeriod : startPeriod
+  const horizonPeriod = addMonthsClamped(reference, SCHEDULE_HORIZON_MONTHS).slice(0, 7)
+  const dueDay = String(recurringDueDay(r)).padStart(2, '0')
+
+  let [year, month] = firstPeriod.split('-').map(Number)
+  const [endYear, endMonth] = horizonPeriod.split('-').map(Number)
+  while (year < endYear || (year === endYear && month <= endMonth)) {
+    const period = `${year}-${String(month).padStart(2, '0')}`
+    const dueDate = `${period}-${dueDay}`
+    if (!paidExpenseForPeriod(data, r.id, period, dueDate)) next(dueDate)
+    month++
+    if (month > 12) {
+      month = 1
+      year++
+    }
+  }
+  return amounts
+}
+
 export type PFOverduePayment = {
   recurringId: string
   recurringName: string
@@ -203,6 +322,10 @@ export function getOverdueRecurringPayments(data: PFData, asOfDate: string = tod
     if (!r.active) continue
     if (r.maxOccurrences !== null && r.runCount >= r.maxOccurrences) continue
 
+    // What each still-unpaid payment costs after carry-over: an overpayment
+    // makes the next payments cheaper, a shortfall makes them cost more.
+    const unpaidAmounts = effectiveUnpaidAmounts(data, r)
+
     if (r.installments && r.installments.length > 0) {
       for (const inst of r.installments) {
         if (inst.paid) continue
@@ -218,7 +341,7 @@ export function getOverdueRecurringPayments(data: PFData, asOfDate: string = tod
               installmentNumber: inst.number,
               dueDate: inst.dueDate,
               period: inst.dueDate.slice(0, 7),
-              amount: r.expectedAmount,
+              amount: unpaidAmounts.get(inst.id) ?? r.expectedAmount,
               accountId: r.accountId,
               categoryId: r.categoryId,
               daysOverdue: daysDifference(inst.dueDate, asOfDate),
@@ -261,7 +384,7 @@ export function getOverdueRecurringPayments(data: PFData, asOfDate: string = tod
               recurringName: r.name,
               dueDate,
               period: periodStr,
-              amount: r.expectedAmount,
+              amount: unpaidAmounts.get(dueDate) ?? r.expectedAmount,
               accountId: r.accountId,
               categoryId: r.categoryId,
               daysOverdue: daysDifference(dueDate, asOfDate),
@@ -368,8 +491,10 @@ export function getScheduledPayments(data: PFData, asOfDate: string = today()): 
     paid: boolean
     paidOn: string | null
     projected: boolean
+    /** The row's real cost: carry-over-adjusted while unpaid, actually paid once settled. */
+    amount: number | null
   }) => {
-    const { recurring, installmentNumber, dueDate, installmentId, paid, paidOn, projected } = row
+    const { recurring, installmentNumber, dueDate, installmentId, paid, paidOn, projected, amount } = row
     const daysFromReference = daysDifference(reference, dueDate)
     rows.push({
       key: installmentId || `${recurring.id}:${dueDate}`,
@@ -380,7 +505,7 @@ export function getScheduledPayments(data: PFData, asOfDate: string = today()): 
       installmentNumber,
       dueDate,
       period: dueDate.slice(0, 7),
-      amount: recurring.expectedAmount,
+      amount,
       paid,
       paidOn,
       status: scheduleStatus(paid, daysFromReference),
@@ -395,6 +520,9 @@ export function getScheduledPayments(data: PFData, asOfDate: string = today()): 
   for (const r of data.recurring) {
     const finished = r.maxOccurrences !== null && r.runCount >= r.maxOccurrences
     const schedulesUnpaid = r.active && !finished
+    // Per-payment cost after carry-over, keyed like the rows below (shared
+    // with the overdue list and the pay dialog, so all views agree).
+    const unpaidAmounts = effectiveUnpaidAmounts(data, r)
 
     if (r.installments && r.installments.length > 0) {
       for (const inst of r.installments) {
@@ -402,7 +530,16 @@ export function getScheduledPayments(data: PFData, asOfDate: string = today()): 
         const paid = inst.paid || Boolean(expense)
         // A switched-off bill keeps its paid history and drops its open dates.
         if (!paid && !schedulesUnpaid) continue
-        push({ recurring: r, installmentNumber: inst.number, dueDate: inst.dueDate, installmentId: inst.id, paid, paidOn: expense?.date ?? null, projected: false })
+        push({
+          recurring: r,
+          installmentNumber: inst.number,
+          dueDate: inst.dueDate,
+          installmentId: inst.id,
+          paid,
+          paidOn: expense?.date ?? null,
+          projected: false,
+          amount: paid ? expense?.amount ?? r.expectedAmount : unpaidAmounts.get(inst.id) ?? r.expectedAmount,
+        })
       }
       continue
     }
@@ -422,7 +559,15 @@ export function getScheduledPayments(data: PFData, asOfDate: string = today()): 
       const expense = paidExpenseForPeriod(data, r.id, period, dueDate)
       const paid = Boolean(expense)
       if (paid || schedulesUnpaid) {
-        push({ recurring: r, installmentNumber: Math.max(1, monthsBetween(startPeriod, period) + 1), dueDate, paid, paidOn: expense?.date ?? null, projected: true })
+        push({
+          recurring: r,
+          installmentNumber: Math.max(1, monthsBetween(startPeriod, period) + 1),
+          dueDate,
+          paid,
+          paidOn: expense?.date ?? null,
+          projected: true,
+          amount: paid ? expense?.amount ?? r.expectedAmount : unpaidAmounts.get(dueDate) ?? r.expectedAmount,
+        })
       }
       month++
       if (month > 12) {
