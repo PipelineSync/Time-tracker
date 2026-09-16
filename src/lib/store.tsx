@@ -409,21 +409,50 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return { data: null, error: null }
   }
 
+  const checkOverdueInFlight = useRef(false)
+
   const checkOverdueRecurring = useCallback(async () => {
     const currentUser = userRef.current
     if (!currentUser) return
+    if (checkOverdueInFlight.current) return
+    checkOverdueInFlight.current = true
     try {
       const pf = await loadPersonalFinance(currentUser.id)
       const overdueList = getOverdueRecurringPayments(pf.data)
       if (overdueList.length === 0) return
 
-      const currNotifs = (await backend.listNotifications(NOTIF_WINDOW)).data || []
+      // Fetch all notifications for the user (without a pagination limit) so that
+      // an overdue notice sent earlier that fell off the recent window is still found
+      // and not re-notified.
+      const currNotifs = (await backend.listNotifications()).data || []
+      const notifiedKeys = new Set<string>()
+
+      for (const n of currNotifs) {
+        if (n.user_id === currentUser.id && n.type === 'payment' && n.message.toLowerCase().includes('overdue recurring payment')) {
+          const nameMatch = n.message.match(/Overdue recurring payment:\s*"([^"]+)"/i)
+          const dueMatch = n.message.match(/was due on\s+(\d{4}-\d{2}-\d{2})/i)
+          if (nameMatch && dueMatch) {
+            notifiedKeys.add(`${nameMatch[1].toLowerCase()}:${dueMatch[1]}`)
+          }
+        }
+      }
+
       let created = false
       for (const op of overdueList) {
-        const alreadyNotified = currNotifs.some(
-          (n) => n.user_id === currentUser.id && n.message.includes(op.recurringName) && n.message.includes(op.dueDate)
-        )
+        const key = `${op.recurringName.toLowerCase()}:${op.dueDate}`
+        const alreadyNotified =
+          notifiedKeys.has(key) ||
+          currNotifs.some(
+            (n) =>
+              n.user_id === currentUser.id &&
+              n.type === 'payment' &&
+              n.message.toLowerCase().includes('overdue') &&
+              (n.message.includes(`"${op.recurringName}"`) || n.message.includes(op.recurringName)) &&
+              n.message.includes(op.dueDate)
+          )
+
         if (!alreadyNotified) {
+          notifiedKeys.add(key)
           const currencyCode = settingsRef.current?.currency || 'PHP'
           const amountStr = op.amount ? ` (${money(op.amount, currencyCode)})` : ''
           const message = `Overdue recurring payment: "${op.recurringName}"${amountStr} was due on ${op.dueDate} (${op.daysOverdue} day${op.daysOverdue === 1 ? '' : 's'} overdue)`
@@ -443,6 +472,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
     } catch (e) {
       console.warn('[store] Could not check overdue recurring payments:', e)
+    } finally {
+      checkOverdueInFlight.current = false
     }
   }, [backend])
 

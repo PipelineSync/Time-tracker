@@ -581,7 +581,22 @@ function readData(userId: string): UserData {
   d.tickets = (d.tickets || []).map(normalizeTicket)
   d.ticketReplies = (d.ticketReplies || []).map(normalizeTicketReply)
   // Notifications written before tickets existed have no ticket target.
-  d.notifications = (d.notifications || []).map((n) => ({ ...n, ticket_id: n.ticket_id ?? null }))
+  // Also prune duplicate overdue recurring notices for the same bill and due date.
+  const seenOverdue = new Set<string>()
+  d.notifications = (d.notifications || [])
+    .map((n) => ({ ...n, ticket_id: n.ticket_id ?? null }))
+    .filter((n) => {
+      if (n.type === 'payment' && n.message.toLowerCase().includes('overdue recurring payment')) {
+        const nameMatch = n.message.match(/Overdue recurring payment:\s*"([^"]+)"/i)
+        const dueMatch = n.message.match(/was due on\s+(\d{4}-\d{2}-\d{2})/i)
+        if (nameMatch && dueMatch) {
+          const key = `${n.user_id}:${nameMatch[1].toLowerCase()}:${dueMatch[1]}`
+          if (seenOverdue.has(key)) return false
+          seenOverdue.add(key)
+        }
+      }
+      return true
+    })
   // A client that was deleted should not keep a phantom place on the board.
   const clientIds = new Set(d.clients.map((c) => c.id))
   const beforePrune = d.clientPriorities.length
@@ -1586,6 +1601,32 @@ export const localBackend: DataBackend = {
   async createNotification(recipientUserId: string, n: { entry_id?: string | null; ticket_id?: string | null; type: AppNotification['type']; message: string }) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
+
+    // Deduplication guard: an overdue recurring payment notice for a given bill and due date
+    // should only be delivered once, even if called multiple times or concurrently.
+    const isOverdueNotice = n.type === 'payment' && n.message.toLowerCase().includes('overdue recurring payment')
+    if (isOverdueNotice) {
+      const nameMatch = n.message.match(/Overdue recurring payment:\s*"([^"]+)"/i)
+      const dueMatch = n.message.match(/was due on\s+(\d{4}-\d{2}-\d{2})/i)
+      if (nameMatch && dueMatch) {
+        const billName = nameMatch[1].toLowerCase()
+        const dueDate = dueMatch[1]
+        const existing = c.data.notifications.find((existing) => {
+          if (existing.user_id !== recipientUserId || existing.type !== 'payment') return false
+          if (!existing.message.toLowerCase().includes('overdue recurring payment')) return false
+          const eName = existing.message.match(/Overdue recurring payment:\s*"([^"]+)"/i)
+          const eDue = existing.message.match(/was due on\s+(\d{4}-\d{2}-\d{2})/i)
+          return (
+            (eName && eName[1].toLowerCase() === billName && eDue && eDue[1] === dueDate) ||
+            (existing.message.includes(`"${nameMatch[1]}"`) && existing.message.includes(dueDate))
+          )
+        })
+        if (existing) {
+          return { data: existing, error: null }
+        }
+      }
+    }
+
     const notif: AppNotification = {
       id: uid(),
       user_id: recipientUserId,

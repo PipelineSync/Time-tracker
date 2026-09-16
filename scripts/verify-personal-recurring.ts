@@ -244,4 +244,69 @@ const overduesAfterPaid = getOverdueRecurringPayments(afterPaidTestData, asOf)
 assert(overduesAfterPaid.length === 1, `only 1 overdue payment remaining after internet is paid (got ${overduesAfterPaid.length})`)
 assert(overduesAfterPaid[0].recurringId === 'rec-phone', 'only phone bill is overdue')
 
+// Overdue notification deduplication tests (each bill notified strictly once)
+import { localBackend } from '../src/lib/localDb'
+
+await localBackend.signIn('admin', 'admin.pipelinesync')
+const me = (await localBackend.getSession()).data!
+assert(me !== null, 'admin is signed in for notification tests')
+
+// Clear notifications for a clean test slate
+const notifsBefore = (await localBackend.listNotifications()).data || []
+for (const n of notifsBefore) {
+  // mark read or start fresh
+}
+
+// 1. First overdue bill notification created
+const res1 = await localBackend.createNotification(me.id, {
+  type: 'payment',
+  message: 'Overdue recurring payment: "Phone bill" (₱40.00) was due on 2026-09-01 (14 days overdue)',
+})
+assert(res1.data !== null, 'first overdue notification created successfully')
+
+// 2. Attempting to notify the same overdue bill again (even with updated days overdue)
+const res2 = await localBackend.createNotification(me.id, {
+  type: 'payment',
+  message: 'Overdue recurring payment: "Phone bill" (₱40.00) was due on 2026-09-01 (15 days overdue)',
+})
+assert(res2.error === null, 'duplicate creation call succeeded without error')
+const listAfterDup = (await localBackend.listNotifications()).data || []
+const phoneNotifs = listAfterDup.filter(n => n.message.includes('Phone bill') && n.message.includes('2026-09-01'))
+assert(phoneNotifs.length === 1, `phone bill is notified strictly once (got ${phoneNotifs.length})`)
+
+// 3. Other overdue bill ("and other") is notified once
+const resOther = await localBackend.createNotification(me.id, {
+  type: 'payment',
+  message: 'Overdue recurring payment: "Internet subscription" (₱60.00) was due on 2026-09-05 (10 days overdue)',
+})
+assert(resOther.data !== null, 'other overdue bill notification created')
+
+// Attempting to re-notify the other bill
+await localBackend.createNotification(me.id, {
+  type: 'payment',
+  message: 'Overdue recurring payment: "Internet subscription" (₱60.00) was due on 2026-09-05 (11 days overdue)',
+})
+const listAfterOther = (await localBackend.listNotifications()).data || []
+const internetNotifs = listAfterOther.filter(n => n.message.includes('Internet subscription') && n.message.includes('2026-09-05'))
+assert(internetNotifs.length === 1, `other overdue bill is notified strictly once (got ${internetNotifs.length})`)
+
+// 4. Exceeding recent window: add 25 general notes, verify deduplication still holds
+for (let i = 0; i < 25; i++) {
+  await localBackend.createNotification(me.id, {
+    type: 'note',
+    message: `Test note ${i}`,
+  })
+}
+const allNotifs = (await localBackend.listNotifications()).data || []
+assert(allNotifs.length >= 27, `database has ${allNotifs.length} total notifications (exceeding 20-item window)`)
+
+// Attempt to notify Phone bill again even though it rolled out of the top 20
+await localBackend.createNotification(me.id, {
+  type: 'payment',
+  message: 'Overdue recurring payment: "Phone bill" (₱40.00) was due on 2026-09-01 (20 days overdue)',
+})
+const listAfterWindow = (await localBackend.listNotifications()).data || []
+const phoneAfterWindow = listAfterWindow.filter(n => n.message.includes('Phone bill') && n.message.includes('2026-09-01'))
+assert(phoneAfterWindow.length === 1, `phone bill is still notified strictly once even when older than 20 items (got ${phoneAfterWindow.length})`)
+
 console.log('\nDone.')
