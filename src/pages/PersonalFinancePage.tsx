@@ -14,9 +14,10 @@ import { Switch } from '@/components/ui/switch'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { NotificationsBell } from '@/components/NotificationsBell'
 import { cn } from '@/lib/utils'
-import { accountBalance, buildInstallments, compareScheduledPayments, currentPeriod, daysDifference, deleteRecurringPayment, effectiveUnpaidAmounts, emptyPFData, formatShortDate, getOverdueRecurringPayments, getScheduledPayments, loadPersonalFinance, money, normalizePFData, pfId, recurringPaidCount, recurringPaidTotal, recurringRemainingBalance, savePersonalFinance, scheduledPaymentLabel, today, type PFData, type PFAccount, type PFOverduePayment, type PFScheduledPayment } from '@/lib/personalFinance'
+import { accountBalance, buildInstallments, compareScheduledPayments, currentPeriod, daysDifference, deleteRecurringPayment, effectiveUnpaidAmounts, emptyPFData, formatShortDate, getOverdueRecurringPayments, getScheduledPayments, loadPersonalFinance, money, normalizePFData, pfId, recurringPaidCount, recurringPaidTotal, recurringRemainingBalance, savePersonalFinance, scheduledPaymentLabel, today, type PFData, type PFAccount, type PFExpense, type PFOverduePayment, type PFRecurring, type PFScheduledPayment } from '@/lib/personalFinance'
 
 type View = 'dashboard' | 'accounts' | 'activity' | 'recurring' | 'reports' | 'settings'
 type EntryKind = 'income' | 'expense' | 'transfer'
@@ -60,6 +61,11 @@ export function PersonalFinancePage() {
   const [categoryFilter, setCategoryFilter] = useState('all')
   const [kindFilter, setKindFilter] = useState('all')
   const [paidFilter, setPaidFilter] = useState('all')
+  const [overviewTab, setOverviewTab] = useState<'recurring' | 'paid'>('recurring')
+  const [paidFilterMode, setPaidFilterMode] = useState<'all' | 'recurring' | 'other'>('all')
+  const [paidScope, setPaidScope] = useState<'month' | 'all'>('month')
+  const [overviewLayout, setOverviewLayout] = useState<'tabbed' | 'split'>('tabbed')
+  const [recurringScheduleFilter, setRecurringScheduleFilter] = useState<'unpaid' | 'paid' | 'all'>('unpaid')
 
   useEffect(() => {
     if (!user) return
@@ -95,10 +101,135 @@ export function PersonalFinancePage() {
   // 10-month plan contributes all ten of its rows, and a newly added bill
   // merges its rows into the same ordering.
   const scheduledPayments = useMemo(() => getScheduledPayments(data), [data])
-  /** The next payment still owed on a bill — its nearest dated row. */
-  const nextRowFor = (recurringId: string) => scheduledPayments.find(row => row.recurringId === recurringId && !row.paid)
-  const billsByNextDue = activeRecurring.slice().sort((a, b) =>
-    (nextRowFor(a.id)?.dueDate ?? '9999-12-31').localeCompare(nextRowFor(b.id)?.dueDate ?? '9999-12-31'))
+
+  // Pending (unpaid) recurring bills for Overview:
+  // When a payment is marked paid, it is removed from recurring payments.
+  const pendingRecurringThisMonth = useMemo(() => {
+    const list: {
+      r: PFRecurring
+      target: { id: string; dueDate: string; number: number; paid: boolean }
+      amount?: number | null
+      isOverdue: boolean
+      daysOverdue?: number
+      overdueCount: number
+      dueLabel?: string
+      dueDate: string
+    }[] = []
+
+    for (const r of activeRecurring) {
+      const finished = r.maxOccurrences !== null && r.runCount >= r.maxOccurrences
+      if (finished) continue
+
+      const itemOverdue = overduePayments.filter(op => op.recurringId === r.id)
+      const nextOverdue = itemOverdue[0]
+
+      if (nextOverdue) {
+        const target = {
+          id: nextOverdue.installmentId ?? '',
+          dueDate: nextOverdue.dueDate,
+          number: nextOverdue.installmentNumber ?? (r.runCount + 1),
+          paid: false,
+        }
+        list.push({
+          r,
+          target,
+          amount: nextOverdue.amount ?? r.expectedAmount,
+          isOverdue: true,
+          daysOverdue: nextOverdue.daysOverdue,
+          overdueCount: itemOverdue.length,
+          dueLabel: `${nextOverdue.daysOverdue}d overdue`,
+          dueDate: nextOverdue.dueDate,
+        })
+        continue
+      }
+
+      // Check if this recurring payment has already been paid for the current month:
+      if (r.installments && r.installments.length > 0) {
+        const nextInst = r.installments.find(i =>
+          !i.paid && !data.expenses.some(e => e.recurringId === r.id && e.paid && (e.installmentNumber === i.number || e.dueDate === i.dueDate))
+        )
+        if (!nextInst) continue
+
+        if (nextInst.dueDate.slice(0, 7) <= currentPeriod()) {
+          const unpaidAmounts = effectiveUnpaidAmounts(data, r)
+          const amount = unpaidAmounts.get(nextInst.id) ?? r.expectedAmount
+          const target = {
+            id: nextInst.id,
+            dueDate: nextInst.dueDate,
+            number: nextInst.number,
+            paid: false,
+          }
+          const nextRow = scheduledPayments.find(row => row.recurringId === r.id && row.installmentId === nextInst.id)
+          list.push({
+            r,
+            target,
+            amount,
+            isOverdue: false,
+            overdueCount: 0,
+            dueLabel: nextRow ? scheduledPaymentLabel(nextRow) : undefined,
+            dueDate: nextInst.dueDate,
+          })
+        }
+      } else {
+        const isPaidThisMonth = data.expenses.some(e =>
+          e.recurringId === r.id && e.paid && (e.period === currentPeriod() || (e.dueDate && e.dueDate.slice(0, 7) === currentPeriod()))
+        )
+        if (isPaidThisMonth) continue
+
+        const startPeriod = r.startDate ? r.startDate.slice(0, 7) : currentPeriod()
+        if (startPeriod > currentPeriod()) continue
+
+        const parsedDay = r.startDate ? Number(r.startDate.slice(8, 10)) : 1
+        const dueDay = (r.dueDay ?? parsedDay) || 1
+        const safeDueDay = Math.max(1, Math.min(28, dueDay))
+        const dueDate = `${currentPeriod()}-${String(safeDueDay).padStart(2, '0')}`
+        const unpaidAmounts = effectiveUnpaidAmounts(data, r)
+        const amount = unpaidAmounts.get(dueDate) ?? r.expectedAmount
+        const target = {
+          id: pfId(),
+          dueDate,
+          number: r.runCount + 1,
+          paid: false,
+        }
+        const nextRow = scheduledPayments.find(row => row.recurringId === r.id && row.dueDate === dueDate)
+        list.push({
+          r,
+          target,
+          amount,
+          isOverdue: false,
+          overdueCount: 0,
+          dueLabel: nextRow ? scheduledPaymentLabel(nextRow) : undefined,
+          dueDate,
+        })
+      }
+    }
+
+    return list.sort((a, b) => a.dueDate.localeCompare(b.dueDate))
+  }, [activeRecurring, overduePayments, data, scheduledPayments])
+
+  // Paid transactions: all paid expenses (including recurring payments and one-time expenses)
+  const allPaidExpenses = useMemo(() => {
+    return data.expenses
+      .filter(x => x.paid)
+      .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+  }, [data.expenses])
+
+  const paidTransactionsThisMonth = useMemo(() => {
+    return allPaidExpenses.filter(x =>
+      (x.date && x.date.slice(0, 7) === currentPeriod()) ||
+      (x.period && x.period === currentPeriod())
+    )
+  }, [allPaidExpenses])
+
+  const scopedPaidTransactions = useMemo(() => {
+    return paidScope === 'month' ? paidTransactionsThisMonth : allPaidExpenses
+  }, [paidScope, paidTransactionsThisMonth, allPaidExpenses])
+
+  const displayedPaidTransactions = useMemo(() => {
+    if (paidFilterMode === 'recurring') return scopedPaidTransactions.filter(x => Boolean(x.recurringId))
+    if (paidFilterMode === 'other') return scopedPaidTransactions.filter(x => !x.recurringId)
+    return scopedPaidTransactions
+  }, [paidFilterMode, scopedPaidTransactions])
   // The Recurring list section keeps the same order as the table's default:
   // the bill whose payment falls soonest comes first.
   const scheduleBills = useMemo(() => {
@@ -135,6 +266,12 @@ export function PersonalFinancePage() {
       return compareScheduledPayments(a, b)
     })
   }, [data, scheduledPayments, sortColumn, sortDir])
+
+  const displayedScheduleRows = useMemo(() => {
+    if (recurringScheduleFilter === 'paid') return scheduleRows.filter(r => r.paid)
+    if (recurringScheduleFilter === 'unpaid') return scheduleRows.filter(r => !r.paid)
+    return scheduleRows
+  }, [scheduleRows, recurringScheduleFilter])
   const toggleSort = (column: ScheduleColumn) => {
     if (column === sortColumn) setSortDir(dir => (dir === 'asc' ? 'desc' : 'asc'))
     else {
@@ -214,7 +351,205 @@ export function PersonalFinancePage() {
     <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-sm font-semibold uppercase tracking-[.2em] text-primary">Private workspace</p><h1 className="text-3xl font-bold tracking-tight">{displayName}'s Personal Tracker</h1><p className="text-muted-foreground">Your accounts, spending and income—all in one place.</p></div><div className="flex flex-wrap gap-2"><Button onClick={()=>setEntry('expense')}><ArrowUpRight className="mr-2 h-4 w-4"/>Expense</Button><Button variant="outline" onClick={()=>setEntry('income')}><ArrowDownLeft className="mr-2 h-4 w-4"/>Income</Button><Button variant="outline" onClick={()=>setEntry('transfer')}><ArrowLeftRight className="mr-2 h-4 w-4"/>Transfer</Button></div></div>
     <div className="flex gap-1 overflow-x-auto rounded-xl border bg-card p-1">{NAV.map(n=><Button key={n.id} variant={view===n.id?'default':'ghost'} size="sm" onClick={()=>setView(n.id)} className="shrink-0"><n.icon className="mr-2 h-4 w-4"/>{n.label}</Button>)}</div>
 
-    {view==='dashboard' && <><div className="grid gap-4 md:grid-cols-3"><Metric label="Total balance" value={m(total)} tone="blue"/><Metric label="Money in this month" value={m(moneyIn)} tone="green"/><Metric label="Money out this month" value={m(moneyOut)} tone="orange"/></div><div className="grid gap-6 lg:grid-cols-3"><Card className="lg:col-span-2"><CardHeader className="flex-row items-center justify-between"><CardTitle>Your accounts</CardTitle><Button size="sm" variant="outline" onClick={()=>setAccountOpen(true)}><Plus className="mr-1 h-4 w-4"/>Add</Button></CardHeader><CardContent><AccountGrid data={data} currency={currency}/>{!activeAccounts.length&&<Empty text="Add your first bank or e-wallet account."/>}</CardContent></Card><Card><CardHeader className="flex-row items-center justify-between"><CardTitle>Recurring this month</CardTitle>{overduePayments.length > 0 && <Badge variant="destructive" className="gap-1 text-[10px]"><AlertTriangle className="h-3 w-3" />{overduePayments.length} overdue</Badge>}</CardHeader><CardContent className="space-y-3">{billsByNextDue.slice(0,6).map(r=>{const itemOverdue = overduePayments.filter(op => op.recurringId === r.id); const nextOverdue = itemOverdue[0]; const nextRow = nextRowFor(r.id); const target = nextRow ? { id: nextRow.installmentId ?? '', dueDate: nextRow.dueDate, number: nextRow.installmentNumber, paid: false } : undefined; return <RecurringRow key={r.id} r={r} installment={target} amount={nextRow?.amount} isOverdue={Boolean(nextOverdue)} daysOverdue={nextOverdue?.daysOverdue} overdueCount={itemOverdue.length} dueLabel={nextRow ? scheduledPaymentLabel(nextRow) : undefined} data={data} currency={currency} onPay={()=>setPayRecurring({r, i: target, overduePayment: nextOverdue})}/>})}{!activeRecurring.length&&<Empty text="No active recurring payments."/>}</CardContent></Card></div></>}
+    {view==='dashboard' && (
+      <>
+        <div className="grid gap-4 md:grid-cols-3">
+          <Metric label="Total balance" value={m(total)} tone="blue"/>
+          <Metric label="Money in this month" value={m(moneyIn)} tone="green"/>
+          <Metric label="Money out this month" value={m(moneyOut)} tone="orange"/>
+        </div>
+
+        {overviewLayout === 'tabbed' ? (
+          <div className="grid gap-6 lg:grid-cols-3">
+            <Card className="lg:col-span-2">
+              <CardHeader className="flex-row items-center justify-between">
+                <div>
+                  <CardTitle>Your accounts</CardTitle>
+                  <CardDescription className="text-xs">Balances update automatically from paid transactions and transfers</CardDescription>
+                </div>
+                <Button size="sm" variant="outline" onClick={() => setAccountOpen(true)}>
+                  <Plus className="mr-1 h-4 w-4"/>Add
+                </Button>
+              </CardHeader>
+              <CardContent>
+                <AccountGrid data={data} currency={currency}/>
+                {!activeAccounts.length && <Empty text="Add your first bank or e-wallet account."/>}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between gap-2">
+                  <Tabs value={overviewTab} onValueChange={(v) => setOverviewTab(v as 'recurring' | 'paid')} className="w-full">
+                    <TabsList className="grid w-full grid-cols-2">
+                      <TabsTrigger value="recurring" className="gap-1.5 text-xs font-medium">
+                        <RefreshCw className="h-3.5 w-3.5" />
+                        Recurring ({pendingRecurringThisMonth.length})
+                      </TabsTrigger>
+                      <TabsTrigger value="paid" className="gap-1.5 text-xs font-medium">
+                        <CircleCheck className="h-3.5 w-3.5 text-emerald-600" />
+                        Paid transactions ({paidTransactionsThisMonth.length})
+                      </TabsTrigger>
+                    </TabsList>
+                  </Tabs>
+                  <Button
+                    variant="ghost"
+                    size="iconSm"
+                    onClick={() => setOverviewLayout('split')}
+                    title="Show as separate cards"
+                    aria-label="Show as separate cards"
+                    className="shrink-0"
+                  >
+                    <LayoutDashboard className="h-3.5 w-3.5 text-muted-foreground" />
+                  </Button>
+                </div>
+                {overviewTab === 'recurring' ? (
+                  <div className="mt-2 flex items-center justify-between">
+                    <div>
+                      <CardTitle className="text-base">Recurring payments</CardTitle>
+                      <CardDescription className="text-xs">Pending bills and subscriptions due this month</CardDescription>
+                    </div>
+                    {overduePayments.length > 0 && (
+                      <Badge variant="destructive" className="gap-1 text-[10px]">
+                        <AlertTriangle className="h-3 w-3" />
+                        {overduePayments.length} overdue
+                      </Badge>
+                    )}
+                  </div>
+                ) : (
+                  <div className="mt-2 flex items-center justify-between">
+                    <div>
+                      <CardTitle className="text-base">Paid transactions</CardTitle>
+                      <CardDescription className="text-xs">Settled recurring bills and expenses this month</CardDescription>
+                    </div>
+                    <Badge variant="success" className="gap-1 text-[10px]">
+                      <Check className="h-3 w-3" />
+                      {paidTransactionsThisMonth.length} paid
+                    </Badge>
+                  </div>
+                )}
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {overviewTab === 'recurring' ? (
+                  <OverviewRecurringContent
+                    pendingList={pendingRecurringThisMonth}
+                    overduePayments={overduePayments}
+                    data={data}
+                    currency={currency}
+                    paidCount={paidTransactionsThisMonth.length}
+                    onPay={(r, target, overduePayment) => setPayRecurring({ r, i: target, overduePayment })}
+                    onViewPaid={() => setOverviewTab('paid')}
+                  />
+                ) : (
+                  <OverviewPaidContent
+                    transactions={displayedPaidTransactions}
+                    totalScopedCount={scopedPaidTransactions.length}
+                    paidScope={paidScope}
+                    setPaidScope={setPaidScope}
+                    paidFilterMode={paidFilterMode}
+                    setPaidFilterMode={setPaidFilterMode}
+                    data={data}
+                    currency={currency}
+                    onDeleteTx={id => setDeleteTx({ type: 'expense', id })}
+                    onViewActivity={() => setView('activity')}
+                  />
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        ) : (
+          <div className="grid gap-6 lg:grid-cols-3">
+            <div className="space-y-6 lg:col-span-2">
+              <Card>
+                <CardHeader className="flex-row items-center justify-between">
+                  <div>
+                    <CardTitle>Your accounts</CardTitle>
+                    <CardDescription className="text-xs">Balances update automatically from paid transactions and transfers</CardDescription>
+                  </div>
+                  <Button size="sm" variant="outline" onClick={() => setAccountOpen(true)}>
+                    <Plus className="mr-1 h-4 w-4"/>Add
+                  </Button>
+                </CardHeader>
+                <CardContent>
+                  <AccountGrid data={data} currency={currency}/>
+                  {!activeAccounts.length && <Empty text="Add your first bank or e-wallet account."/>}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="flex-row items-center justify-between pb-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <CardTitle className="text-base">Paid transactions</CardTitle>
+                      <Badge variant="success" className="gap-1 text-xs">
+                        <Check className="h-3.5 w-3.5" />
+                        {paidTransactionsThisMonth.length} paid
+                      </Badge>
+                    </div>
+                    <CardDescription className="text-xs">Settled recurring bills and expenses this month</CardDescription>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <OverviewPaidContent
+                    transactions={displayedPaidTransactions}
+                    totalScopedCount={scopedPaidTransactions.length}
+                    paidScope={paidScope}
+                    setPaidScope={setPaidScope}
+                    paidFilterMode={paidFilterMode}
+                    setPaidFilterMode={setPaidFilterMode}
+                    data={data}
+                    currency={currency}
+                    onDeleteTx={id => setDeleteTx({ type: 'expense', id })}
+                    onViewActivity={() => setView('activity')}
+                  />
+                </CardContent>
+              </Card>
+            </div>
+
+            <div className="space-y-6">
+              <Card>
+                <CardHeader className="pb-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="text-base">Recurring payments</CardTitle>
+                      <CardDescription className="text-xs">Pending bills and subscriptions due this month</CardDescription>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      {overduePayments.length > 0 && (
+                        <Badge variant="destructive" className="gap-1 text-[10px]">
+                          <AlertTriangle className="h-3 w-3" />
+                          {overduePayments.length} overdue
+                        </Badge>
+                      )}
+                      <Button
+                        variant="ghost"
+                        size="iconSm"
+                        onClick={() => setOverviewLayout('tabbed')}
+                        title="Switch to tabbed card"
+                        aria-label="Switch to tabbed card"
+                      >
+                        <List className="h-3.5 w-3.5 text-muted-foreground" />
+                      </Button>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <OverviewRecurringContent
+                    pendingList={pendingRecurringThisMonth}
+                    overduePayments={overduePayments}
+                    data={data}
+                    currency={currency}
+                    paidCount={paidTransactionsThisMonth.length}
+                    onPay={(r, target, overduePayment) => setPayRecurring({ r, i: target, overduePayment })}
+                    onViewPaid={() => setOverviewLayout('tabbed')}
+                  />
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+        )}
+      </>
+    )}
 
     {view==='accounts' && <Card><CardHeader className="flex-row items-center justify-between"><div><CardTitle>Accounts</CardTitle><p className="text-sm text-muted-foreground">Balances calculate automatically from paid transactions and transfers.</p></div><Button onClick={()=>setAccountOpen(true)}><Plus className="mr-2 h-4 w-4"/>Add account</Button></CardHeader><CardContent><AccountGrid data={data} currency={currency} manage onArchive={(id)=>commit({...data,accounts:data.accounts.map(a=>a.id===id?{...a,archived:!a.archived}:a)})} onEdit={(id)=>{const a=data.accounts.find(x=>x.id===id);if(a)setEditAccount(a)}} onReconcile={(id)=>{const a=data.accounts.find(x=>x.id===id);if(a)setReconcileAccount(a)}}/><div className="mt-6 rounded-xl bg-primary p-5 text-primary-foreground"><p className="text-sm opacity-80">Total available</p><p className="text-3xl font-bold">{m(total)}</p></div></CardContent></Card>}
 
@@ -338,6 +673,46 @@ export function PersonalFinancePage() {
               {!data.recurring.length && <p className="text-xs text-muted-foreground">No recurring payments yet — add one to build its schedule.</p>}
             </div>
           )}
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-1 text-xs">
+              <button
+                type="button"
+                onClick={() => setRecurringScheduleFilter('unpaid')}
+                className={cn(
+                  "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+                  recurringScheduleFilter === 'unpaid' ? "bg-primary text-primary-foreground font-semibold" : "bg-muted text-muted-foreground hover:bg-muted/80"
+                )}
+              >
+                Pending ({scheduleRows.filter(r => !r.paid).length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setRecurringScheduleFilter('paid')}
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+                  recurringScheduleFilter === 'paid' ? "bg-primary text-primary-foreground font-semibold" : "bg-muted text-muted-foreground hover:bg-muted/80"
+                )}
+              >
+                <Check className="h-3 w-3" />
+                Paid ({scheduleRows.filter(r => r.paid).length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setRecurringScheduleFilter('all')}
+                className={cn(
+                  "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+                  recurringScheduleFilter === 'all' ? "bg-primary text-primary-foreground font-semibold" : "bg-muted text-muted-foreground hover:bg-muted/80"
+                )}
+              >
+                All ({scheduleRows.length})
+              </button>
+            </div>
+            {recurringScheduleFilter === 'unpaid' && scheduleRows.some(r => r.paid) && (
+              <p className="text-xs text-muted-foreground">
+                Paid payments are hidden from pending view.
+              </p>
+            )}
+          </div>
           <div className="overflow-x-auto rounded-lg border">
             <table className="w-full min-w-[860px] border-collapse text-sm">
               <thead>
@@ -373,7 +748,7 @@ export function PersonalFinancePage() {
                 </tr>
               </thead>
               <tbody>
-                {scheduleRows.map(row => {
+                {displayedScheduleRows.map(row => {
                   const category = categoryNameOf(data, row.recurring.categoryId)
                   return (
                     <tr key={row.key} className="border-t border-border/60 hover:bg-muted/30">
@@ -425,7 +800,17 @@ export function PersonalFinancePage() {
                 })}
               </tbody>
             </table>
-            {!scheduleRows.length && <Empty text="Add bills, loans, and subscriptions you pay regularly."/>}
+            {!displayedScheduleRows.length && (
+              <Empty
+                text={
+                  recurringScheduleFilter === 'unpaid'
+                    ? "No pending payments — all caught up!"
+                    : recurringScheduleFilter === 'paid'
+                    ? "No paid payments yet."
+                    : "Add bills, loans, and subscriptions you pay regularly."
+                }
+              />
+            )}
           </div>
         </CardContent>
       </Card>
@@ -489,7 +874,7 @@ export function PersonalFinancePage() {
     {reconcileAccount && <ReconcileDialog account={reconcileAccount} data={data} currency={currency} close={()=>setReconcileAccount(null)} commit={commit}/>}
     <ConfirmDialog open={!!deleteTx} onOpenChange={v=>{if(!v)setDeleteTx(null)}} title={deleteTxTitle} description={deleteTxExpense?.recurringId ? 'This payment was recorded from a recurring bill. Removing it reopens the installment — the paid count and total balance to pay go back to what they were.' : 'The transaction will be removed from your tracker. This cannot be undone.'} confirmLabel="Delete" onConfirm={doDeleteTx}/>
     <ConfirmDialog open={!!deleteRecurring} onOpenChange={v=>{if(!v)setDeleteRecurring(null)}} title={deleteRecurring ? `Delete ${deleteRecurring.name}?` : 'Delete recurring payment?'} description="This recurring payment will be removed from your tracker. Past transactions already recorded will be kept." confirmLabel="Delete" onConfirm={doDeleteRecurring}/>
-    {payRecurring && <PayRecurringDialog recurring={payRecurring.r} installment={payRecurring.i} overduePayment={payRecurring.overduePayment} data={data} currency={currency} close={()=>setPayRecurring(null)} commit={commit}/>}
+    {payRecurring && <PayRecurringDialog recurring={payRecurring.r} installment={payRecurring.i} overduePayment={payRecurring.overduePayment} data={data} currency={currency} close={()=>setPayRecurring(null)} commit={commit} onPaidSuccess={()=>setOverviewTab('paid')}/>}
   </main></div>
 }
 
@@ -553,7 +938,7 @@ function Filter({value,set,label,items}:{value:string;set:(v:string)=>void;label
 function AccountDialog({open,close,data,commit}:{open:boolean;close:()=>void;data:PFData;commit:(d:PFData)=>void}) { const submit=(e:FormEvent<HTMLFormElement>)=>{e.preventDefault();const f=new FormData(e.currentTarget);commit({...data,accounts:[...data.accounts,{id:pfId(),name:String(f.get('name')),purpose:String(f.get('purpose')),startingBalance:Number(f.get('balance')),archived:false}]});close()}; return <Dialog open={open} onOpenChange={close}><DialogContent><DialogHeader><DialogTitle>Add account</DialogTitle></DialogHeader><form className="space-y-4" onSubmit={submit}><Field label="Bank or e-wallet name"><Input name="name" required autoFocus/></Field><Field label="Purpose / label"><Input name="purpose" placeholder="For bills, salary, savings…"/></Field><Field label="Starting balance"><Input name="balance" type="number" step="0.01" required defaultValue="0"/></Field><Button className="w-full">Add account</Button></form></DialogContent></Dialog> }
 function EditAccountDialog({account,close,data,commit}:{account:PFAccount;close:()=>void;data:PFData;commit:(d:PFData)=>void}) { const submit=(e:FormEvent<HTMLFormElement>)=>{e.preventDefault();const f=new FormData(e.currentTarget);commit({...data,accounts:data.accounts.map(x=>x.id===account.id?{...x,name:String(f.get('name'))||x.name,purpose:String(f.get('purpose'))}:x)});close()}; return <Dialog open onOpenChange={close}><DialogContent><DialogHeader><DialogTitle>Edit account</DialogTitle></DialogHeader><form className="space-y-4" onSubmit={submit}><Field label="Bank or e-wallet name"><Input name="name" required defaultValue={account.name}/></Field><Field label="Purpose / label"><Input name="purpose" defaultValue={account.purpose} placeholder="For bills, salary, savings…"/></Field><Button className="w-full">Save changes</Button></form></DialogContent></Dialog> }
 function ReconcileDialog({account,data,currency,close,commit}:{account:PFAccount;data:PFData;currency:string;close:()=>void;commit:(d:PFData)=>void}) { const current=accountBalance(data,account.id); const submit=(e:FormEvent<HTMLFormElement>)=>{e.preventDefault();const desired=Number(new FormData(e.currentTarget).get('balance'));if(!Number.isFinite(desired))return;commit({...data,accounts:data.accounts.map(x=>x.id===account.id?{...x,startingBalance:x.startingBalance+(desired-current)}:x)});close()}; return <Dialog open onOpenChange={close}><DialogContent><DialogHeader><DialogTitle>Reconcile {account.name}</DialogTitle></DialogHeader><p className="text-sm text-muted-foreground">The tracker currently calculates a balance of <b>{money(current,currency)}</b>.</p><form className="space-y-4" onSubmit={submit}><Field label="Enter the correct current balance"><Input name="balance" type="number" step="0.01" required defaultValue={String(current)}/></Field><p className="text-xs text-muted-foreground">The difference is folded into the account's starting balance, so history stays intact.</p><Button className="w-full">Reconcile</Button></form></DialogContent></Dialog> }
-function PayRecurringDialog({recurring,installment,overduePayment,data,currency,close,commit}:{recurring:PFData['recurring'][number];installment?:{id:string;dueDate:string;number:number};overduePayment?:PFOverduePayment;data:PFData;currency:string;close:()=>void;commit:(d:PFData)=>void}) {
+function PayRecurringDialog({recurring,installment,overduePayment,data,currency,close,commit,onPaidSuccess}:{recurring:PFData['recurring'][number];installment?:{id:string;dueDate:string;number:number};overduePayment?:PFOverduePayment;data:PFData;currency:string;close:()=>void;commit:(d:PFData)=>void;onPaidSuccess?:()=>void}) {
   const accounts = data.accounts.filter(a => !a.archived)
   const target = (() => {
     if (installment) return { id: installment.id, dueDate: installment.dueDate, number: installment.number }
@@ -633,9 +1018,19 @@ function PayRecurringDialog({recurring,installment,overduePayment,data,currency,
       ]
     }
     void commit(next)
-    toast.success(covered
-      ? `${recurring.name} covered by your overpayment credit — marked paid.`
-      : `Payment for ${recurring.name} marked paid.`)
+    toast.success(
+      covered
+        ? `${recurring.name} covered by your overpayment credit — marked paid.`
+        : `Payment for ${recurring.name} marked paid. Moved to Paid transactions.`,
+      {
+        action: {
+          label: 'View paid',
+          onClick: () => {
+            onPaidSuccess?.()
+          },
+        },
+      }
+    )
     close()
   }
 
@@ -915,6 +1310,270 @@ function RecurringRow({
         ) : (
           <Badge variant="muted">Off</Badge>
         )}
+      </div>
+    </div>
+  )
+}
+
+function OverviewRecurringContent({
+  pendingList,
+  overduePayments,
+  data,
+  currency,
+  paidCount,
+  onPay,
+  onViewPaid,
+}: {
+  pendingList: {
+    r: PFRecurring
+    target: { id: string; dueDate: string; number: number; paid: boolean }
+    amount?: number | null
+    isOverdue: boolean
+    daysOverdue?: number
+    overdueCount: number
+    dueLabel?: string
+    dueDate: string
+  }[]
+  overduePayments: PFOverduePayment[]
+  data: PFData
+  currency: string
+  paidCount: number
+  onPay: (r: PFRecurring, target: { id: string; dueDate: string; number: number }, overduePayment?: PFOverduePayment) => void
+  onViewPaid: () => void
+}) {
+  if (pendingList.length === 0) {
+    return (
+      <div className="rounded-xl border border-dashed border-emerald-300 bg-emerald-50/50 p-6 text-center dark:border-emerald-800 dark:bg-emerald-950/20">
+        <div className="mx-auto mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-emerald-100 text-emerald-600 dark:bg-emerald-900 dark:text-emerald-300">
+          <Check className="h-5 w-5" />
+        </div>
+        <p className="font-semibold text-sm text-emerald-900 dark:text-emerald-100">All caught up!</p>
+        <p className="mt-1 text-xs text-emerald-700 dark:text-emerald-300">
+          {data.recurring.some(r => r.active)
+            ? 'All recurring payments for this month have been paid.'
+            : 'No active recurring payments. Add bills, loans, and subscriptions to track them.'}
+        </p>
+        {paidCount > 0 && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="mt-3 border-emerald-300 text-emerald-800 hover:bg-emerald-100 dark:border-emerald-700 dark:text-emerald-200"
+            onClick={onViewPaid}
+          >
+            <CircleCheck className="mr-1.5 h-4 w-4 text-emerald-600" />
+            View paid transactions ({paidCount})
+          </Button>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-3">
+      {pendingList.slice(0, 6).map(({ r, target, amount, isOverdue, daysOverdue, overdueCount, dueLabel }) => (
+        <RecurringRow
+          key={r.id}
+          r={r}
+          installment={target}
+          amount={amount}
+          isOverdue={isOverdue}
+          daysOverdue={daysOverdue}
+          overdueCount={overdueCount}
+          dueLabel={dueLabel}
+          data={data}
+          currency={currency}
+          onPay={() => onPay(r, target, overduePayments.find(op => op.recurringId === r.id))}
+        />
+      ))}
+      {paidCount > 0 && (
+        <div className="border-t pt-2 flex items-center justify-between text-xs text-muted-foreground">
+          <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-medium">
+            <Check className="h-3.5 w-3.5" />
+            {paidCount} payment{paidCount === 1 ? '' : 's'} paid this month
+          </span>
+          <button
+            type="button"
+            onClick={onViewPaid}
+            className="text-primary hover:underline font-medium"
+          >
+            View paid transactions →
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function OverviewPaidContent({
+  transactions,
+  totalScopedCount,
+  paidScope,
+  setPaidScope,
+  paidFilterMode,
+  setPaidFilterMode,
+  data,
+  currency,
+  onDeleteTx,
+  onViewActivity,
+}: {
+  transactions: PFExpense[]
+  totalScopedCount: number
+  paidScope: 'month' | 'all'
+  setPaidScope: (s: 'month' | 'all') => void
+  paidFilterMode: 'all' | 'recurring' | 'other'
+  setPaidFilterMode: (m: 'all' | 'recurring' | 'other') => void
+  data: PFData
+  currency: string
+  onDeleteTx: (id: string) => void
+  onViewActivity: () => void
+}) {
+  const m = (n: number) => money(n, currency)
+  const recurringCount = transactions.filter(x => Boolean(x.recurringId)).length
+  const otherCount = transactions.filter(x => !x.recurringId).length
+  const totalAmount = transactions.reduce((s, x) => s + x.amount, 0)
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b pb-2.5">
+        <div>
+          <p className="text-xs text-muted-foreground">
+            {paidScope === 'month' ? 'Total paid this month' : 'Total paid (all time)'}
+          </p>
+          <p className="text-lg font-bold text-foreground">{m(totalAmount)}</p>
+        </div>
+        <div className="flex items-center gap-1.5 text-xs">
+          <div className="inline-flex h-7 items-center rounded-md border bg-muted p-0.5">
+            <button
+              type="button"
+              onClick={() => setPaidScope('month')}
+              className={cn(
+                "rounded px-2 py-0.5 font-medium transition-colors",
+                paidScope === 'month' ? "bg-background text-foreground shadow-xs font-semibold" : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              This month
+            </button>
+            <button
+              type="button"
+              onClick={() => setPaidScope('all')}
+              className={cn(
+                "rounded px-2 py-0.5 font-medium transition-colors",
+                paidScope === 'all' ? "bg-background text-foreground shadow-xs font-semibold" : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              All time
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-1 text-xs">
+        <button
+          type="button"
+          onClick={() => setPaidFilterMode('all')}
+          className={cn(
+            "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+            paidFilterMode === 'all' ? "bg-primary text-primary-foreground font-semibold" : "bg-muted text-muted-foreground hover:bg-muted/80"
+          )}
+        >
+          All ({totalScopedCount})
+        </button>
+        <button
+          type="button"
+          onClick={() => setPaidFilterMode('recurring')}
+          className={cn(
+            "inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+            paidFilterMode === 'recurring' ? "bg-primary text-primary-foreground font-semibold" : "bg-muted text-muted-foreground hover:bg-muted/80"
+          )}
+        >
+          <RefreshCw className="h-3 w-3" />
+          Recurring ({recurringCount})
+        </button>
+        <button
+          type="button"
+          onClick={() => setPaidFilterMode('other')}
+          className={cn(
+            "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+            paidFilterMode === 'other' ? "bg-primary text-primary-foreground font-semibold" : "bg-muted text-muted-foreground hover:bg-muted/80"
+          )}
+        >
+          Other ({otherCount})
+        </button>
+      </div>
+
+      {transactions.length === 0 ? (
+        <div className="py-8 text-center text-muted-foreground">
+          <CircleCheck className="mx-auto h-8 w-8 text-muted-foreground/40 mb-2" />
+          <p className="text-sm font-medium">No paid transactions {paidScope === 'month' ? 'this month' : 'recorded'}.</p>
+          <p className="text-xs text-muted-foreground mt-1">
+            When recurring bills or expenses are marked paid, they will appear in this paid view.
+          </p>
+        </div>
+      ) : (
+        <div className="max-h-[380px] overflow-y-auto space-y-2 pr-1">
+          {transactions.map(x => {
+            const rec = x.recurringId ? data.recurring.find(r => r.id === x.recurringId) : undefined
+            const category = categoryNameOf(data, x.categoryId)
+            const account = accountNameOf(data, x.accountId)
+            return (
+              <div
+                key={x.id}
+                className="flex items-center justify-between gap-3 rounded-lg border bg-card p-2.5 shadow-2xs hover:bg-muted/20 transition-colors"
+              >
+                <div className="flex min-w-0 items-center gap-2.5">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400">
+                    <CategoryIcon name={category} className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <p className="font-semibold text-sm truncate">{x.name}</p>
+                      {x.recurringId && (
+                        <Badge variant="outline" className="gap-1 text-[10px] font-normal border-primary/30 text-primary">
+                          <RefreshCw className="h-2.5 w-2.5" />
+                          Recurring
+                          {x.installmentNumber ? ` · Inst. ${x.installmentNumber}${rec?.maxOccurrences ? `/${rec.maxOccurrences}` : ''}` : ''}
+                        </Badge>
+                      )}
+                      <Badge variant="success" className="gap-1 text-[10px] whitespace-nowrap">
+                        <Check className="h-3 w-3" />
+                        Paid
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-0.5 truncate">
+                      Paid {formatShortDate(x.date)} · via {account}
+                      {x.dueDate && x.dueDate !== x.date ? ` (due ${formatShortDate(x.dueDate)})` : ''}
+                      {x.note ? ` · ${x.note}` : ''}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <span className="font-semibold text-sm text-foreground">{m(x.amount)}</span>
+                  <Button
+                    size="iconSm"
+                    variant="ghost"
+                    className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                    onClick={() => onDeleteTx(x.id)}
+                    title={`Delete payment for ${x.name}`}
+                    aria-label={`Delete payment for ${x.name}`}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      <div className="border-t pt-2 text-right">
+        <Button
+          variant="link"
+          size="sm"
+          className="h-auto p-0 text-xs text-muted-foreground hover:text-foreground"
+          onClick={onViewActivity}
+        >
+          View all transactions in Transactions tab →
+        </Button>
       </div>
     </div>
   )

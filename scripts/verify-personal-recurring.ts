@@ -303,4 +303,179 @@ const listAfterWindow = (await localBackend.listNotifications()).data || []
 const phoneAfterWindow = listAfterWindow.filter(n => n.message.includes('Phone bill') && n.message.includes('2026-09-01'))
 assert(phoneAfterWindow.length === 1, `phone bill is still notified strictly once even when older than 20 items (got ${phoneAfterWindow.length})`)
 
+// ── Removing paid payments from recurring list & paid transactions view ──
+const scenarioData: PFData = normalizePFData({
+  ...emptyPFData(),
+  accounts: [{ id: 'acc-1', name: 'Bank Account', startingBalance: 10000, color: 'blue' }],
+  categories: [
+    { id: 'cat-bills', name: 'Bills', color: 'indigo', icon: 'zap' },
+    { id: 'cat-groceries', name: 'Groceries', color: 'green', icon: 'shopping-cart' },
+  ],
+  recurring: [
+    {
+      id: 'rec-phone',
+      name: 'Phone bill',
+      categoryId: 'cat-bills',
+      accountId: 'acc-1',
+      expectedAmount: 40,
+      dueDay: 1,
+      active: true,
+      maxOccurrences: 3,
+      runCount: 0,
+      startDate: '2026-09-01',
+      installments: [
+        { id: 'inst-1', dueDate: '2026-09-01', number: 1, paid: false },
+        { id: 'inst-2', dueDate: '2026-10-01', number: 2, paid: false },
+        { id: 'inst-3', dueDate: '2026-11-01', number: 3, paid: false },
+      ],
+    },
+    {
+      id: 'rec-gym',
+      name: 'Gym membership',
+      categoryId: 'cat-bills',
+      accountId: 'acc-1',
+      expectedAmount: 30,
+      dueDay: 10,
+      active: true,
+      maxOccurrences: null,
+      runCount: 0,
+      startDate: '2026-09-01',
+    },
+  ],
+  expenses: [],
+})
+
+// Function mimicking Overview pending recurring payments filter:
+const getPendingRecurringOverview = (data: PFData, thisPeriod: string) => {
+  return data.recurring.filter(r => r.active).flatMap(r => {
+    if (r.installments && r.installments.length > 0) {
+      const monthInst = r.installments.filter(i => i.dueDate.slice(0, 7) === thisPeriod && !i.paid)
+      if (monthInst.length > 0) {
+        return monthInst.map(i => ({ recurringId: r.id, name: r.name, installmentId: i.id }))
+      }
+      return []
+    }
+    const paidThisMonth = data.expenses.some(x => x.recurringId === r.id && x.period === thisPeriod && x.paid !== false)
+    if (!paidThisMonth) {
+      return [{ recurringId: r.id, name: r.name }]
+    }
+    return []
+  })
+}
+
+// Function mimicking Overview paid transactions list:
+const getPaidTransactionsOverview = (data: PFData, scope: 'month' | 'all', thisPeriod: string) => {
+  const allPaid = data.expenses.filter(x => x.paid !== false)
+  if (scope === 'month') {
+    return allPaid.filter(x => (x.period || x.date.slice(0, 7)) === thisPeriod)
+  }
+  return allPaid
+}
+
+const curMonth = '2026-09'
+
+// Initially both Phone bill and Gym membership are pending:
+let pendingOverview = getPendingRecurringOverview(scenarioData, curMonth)
+assert(pendingOverview.length === 2, `initially 2 recurring payments pending this month (got ${pendingOverview.length})`)
+let paidOverview = getPaidTransactionsOverview(scenarioData, 'month', curMonth)
+assert(paidOverview.length === 0, 'initially 0 paid transactions')
+
+// Mark Phone bill paid:
+const phoneInst1 = scenarioData.recurring[0].installments![0]
+const phoneExpense = {
+  id: 'exp-phone-1',
+  date: '2026-09-02',
+  dueDate: phoneInst1.dueDate,
+  name: scenarioData.recurring[0].name,
+  categoryId: scenarioData.recurring[0].categoryId,
+  amount: scenarioData.recurring[0].expectedAmount!,
+  accountId: scenarioData.recurring[0].accountId,
+  paid: true,
+  note: 'Recurring payment',
+  recurringId: scenarioData.recurring[0].id,
+  period: curMonth,
+  installmentNumber: phoneInst1.number,
+}
+const afterPhonePaid: PFData = {
+  ...scenarioData,
+  recurring: scenarioData.recurring.map(r =>
+    r.id === 'rec-phone'
+      ? {
+          ...r,
+          runCount: r.runCount + 1,
+          installments: r.installments!.map(i => (i.id === phoneInst1.id ? { ...i, paid: true } : i)),
+        }
+      : r
+  ),
+  expenses: [...scenarioData.expenses, phoneExpense],
+}
+
+// Verify Phone bill is removed from recurring payments:
+pendingOverview = getPendingRecurringOverview(afterPhonePaid, curMonth)
+assert(pendingOverview.length === 1, `after paying phone bill, exactly 1 recurring payment remains pending (got ${pendingOverview.length})`)
+assert(pendingOverview[0].recurringId === 'rec-gym', 'only Gym membership remains in pending recurring')
+assert(!pendingOverview.some(p => p.recurringId === 'rec-phone'), 'Phone bill is removed from recurring payments when paid')
+
+// Verify Phone bill appears in paid transactions view:
+paidOverview = getPaidTransactionsOverview(afterPhonePaid, 'month', curMonth)
+assert(paidOverview.length === 1, `paid transactions view now has 1 payment (got ${paidOverview.length})`)
+assert(paidOverview[0].recurringId === 'rec-phone', 'Phone bill payment is listed in paid transactions')
+assert(paidOverview[0].amount === 40, 'paid transaction has the correct amount')
+
+// Mark Gym membership paid:
+const gymExpense = {
+  id: 'exp-gym-1',
+  date: '2026-09-10',
+  dueDate: '2026-09-10',
+  name: 'Gym membership',
+  categoryId: 'cat-bills',
+  amount: 30,
+  accountId: 'acc-1',
+  paid: true,
+  note: 'Recurring payment',
+  recurringId: 'rec-gym',
+  period: curMonth,
+}
+const afterBothPaid: PFData = {
+  ...afterPhonePaid,
+  recurring: afterPhonePaid.recurring.map(r =>
+    r.id === 'rec-gym' ? { ...r, runCount: r.runCount + 1 } : r
+  ),
+  expenses: [...afterPhonePaid.expenses, gymExpense],
+}
+
+// Verify all recurring payments for the month are removed:
+pendingOverview = getPendingRecurringOverview(afterBothPaid, curMonth)
+assert(pendingOverview.length === 0, 'when all recurring payments are paid, recurring list for month is completely clear (all caught up)')
+
+// Verify paid transactions view contains both payments:
+paidOverview = getPaidTransactionsOverview(afterBothPaid, 'month', curMonth)
+assert(paidOverview.length === 2, `paid transactions view contains 2 payments (got ${paidOverview.length})`)
+assert(paidOverview.some(x => x.recurringId === 'rec-phone'), 'contains phone bill')
+assert(paidOverview.some(x => x.recurringId === 'rec-gym'), 'contains gym membership')
+
+// Add a one-time paid expense (e.g. Groceries):
+const groceryExpense = {
+  id: 'exp-groc-1',
+  date: '2026-09-12',
+  name: 'Supermarket Groceries',
+  categoryId: 'cat-groceries',
+  amount: 85,
+  accountId: 'acc-1',
+  paid: true,
+  period: curMonth,
+}
+const withGrocery: PFData = {
+  ...afterBothPaid,
+  expenses: [...afterBothPaid.expenses, groceryExpense],
+}
+
+// In paid transactions view:
+paidOverview = getPaidTransactionsOverview(withGrocery, 'month', curMonth)
+assert(paidOverview.length === 3, `paid transactions view includes non-recurring expenses as well (got ${paidOverview.length})`)
+const recurringOnlyPaid = paidOverview.filter(x => Boolean(x.recurringId))
+assert(recurringOnlyPaid.length === 2, 'filter recurring-only paid transactions yields exactly 2')
+const otherOnlyPaid = paidOverview.filter(x => !x.recurringId)
+assert(otherOnlyPaid.length === 1 && otherOnlyPaid[0].name === 'Supermarket Groceries', 'filter other paid transactions yields groceries')
+
 console.log('\nDone.')
