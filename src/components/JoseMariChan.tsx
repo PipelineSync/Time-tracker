@@ -39,7 +39,7 @@ export function JoseMariChan() {
 
   return (
     <div
-      className="pointer-events-none fixed bottom-24 left-[200px] z-20 hidden select-none lg:block"
+      className="pointer-events-none fixed bottom-24 left-[220px] z-20 hidden select-none lg:block"
       aria-hidden="true"
     >
       <div
@@ -52,7 +52,7 @@ export function JoseMariChan() {
         <img
           src="/jose-mari-chan/classic-peeking.png"
           alt="Jose Mari Chan"
-          className="h-auto w-36 drop-shadow-md sm:w-40 md:w-44"
+          className="h-auto w-20 drop-shadow-sm md:w-24"
           draggable={false}
           loading="eager"
         />
