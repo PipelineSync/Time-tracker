@@ -17,7 +17,8 @@ import { cn } from '@/lib/utils'
  *  4. Respects `prefers-reduced-motion` so users who request less motion
  *     see a steady peek with no sudden movement.
  *  5. Marked `pointer-events-none select-none` so he never intercepts clicks
- *     or blocks workspace controls.
+ *     or blocks workspace controls. Window-level pointer tracking hides him
+ *     while the pointer is over his stationary footprint, without flickering.
  */
 export function JoseMariChan() {
   const { pathname } = useLocation()
@@ -25,6 +26,32 @@ export function JoseMariChan() {
   const isFirstMount = useRef(true)
   const prevSection = useRef(sectionKey)
   const [animKey, setAnimKey] = useState(0)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [pointerOver, setPointerOver] = useState(false)
+
+  useEffect(() => {
+    const reset = () => setPointerOver(false)
+    const trackPointer = (event: PointerEvent) => {
+      const bounds = containerRef.current?.getBoundingClientRect()
+      setPointerOver(
+        event.pointerType !== 'touch' && !!bounds &&
+        bounds.width > 0 && bounds.height > 0 &&
+        event.clientX >= bounds.left && event.clientX <= bounds.right &&
+        event.clientY >= bounds.top && event.clientY <= bounds.bottom
+      )
+    }
+
+    // The decoration stays click-through; its unanimated wrapper keeps the
+    // hover area stable even when the image is hidden or sliding away.
+    window.addEventListener('pointermove', trackPointer, { passive: true })
+    document.documentElement.addEventListener('pointerleave', reset)
+    window.addEventListener('blur', reset)
+    return () => {
+      window.removeEventListener('pointermove', trackPointer)
+      document.documentElement.removeEventListener('pointerleave', reset)
+      window.removeEventListener('blur', reset)
+    }
+  }, [])
 
   useEffect(() => {
     if (isFirstMount.current) {
@@ -39,7 +66,11 @@ export function JoseMariChan() {
 
   return (
     <div
-      className="pointer-events-none fixed bottom-24 left-[220px] z-20 hidden select-none lg:block"
+      ref={containerRef}
+      className={cn(
+        'pointer-events-none fixed bottom-24 left-[220px] z-20 hidden select-none lg:block',
+        pointerOver && 'opacity-0'
+      )}
       aria-hidden="true"
     >
       <div
