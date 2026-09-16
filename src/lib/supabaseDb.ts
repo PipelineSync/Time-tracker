@@ -2977,13 +2977,13 @@ export const supabaseBackend: DataBackend = {
     }
 
     const runUpdate = async (withArchived: boolean, withClient: boolean) => {
-      let payload = { ...update }
+      const payload = { ...update }
       if (!withArchived) delete payload.archived_at
       if (!withClient) delete payload.client_id
       return sb.from('tasks').update(payload).eq('id', id).select().single() as PromiseLike<{ data: Task | null; error: { code?: string; message?: string } | null }>
     }
 
-    let { data, error } = await withClientColumn<Task>(async (withClient) => {
+    const { data, error } = await withClientColumn<Task>(async (withClient) => {
       let res = await runUpdate(true, withClient)
       if (res.error && isMissingColumn(res.error, 'archived_at')) {
         res = await runUpdate(false, withClient)
