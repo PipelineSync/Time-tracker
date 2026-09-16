@@ -53,10 +53,14 @@ export function EntryFormDialog({
   entry: TimeEntry | null
   defaultWorkerId?: string
 }) {
-  const { workers, activeClients, createEntry, updateEntry, settings } = useStore()
+  const { workers, activeClients, createEntry, updateEntry, settings, can } = useStore()
   const activeWorkers = workers.filter((w) => w.status === 'active')
   const pickable = activeWorkers.length > 0 ? activeWorkers : workers
   const noClients = activeClients.length === 0
+  // Same gate as the Tasks page and task form: only show the manage-control
+  // to accounts that can actually change the list — everyone else's attempts
+  // are refused by the backend.
+  const canManageClients = can('clients.manage')
   const [clientsOpen, setClientsOpen] = useState(false)
 
   const [form, setForm] = useState<FormState>({
@@ -234,13 +238,15 @@ export function EntryFormDialog({
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-2">
               <Label htmlFor="e-client">Client</Label>
-              <button
-                type="button"
-                onClick={() => setClientsOpen(true)}
-                className="text-xs font-medium text-primary underline-offset-2 hover:underline"
-              >
-                Manage clients
-              </button>
+              {canManageClients && (
+                <button
+                  type="button"
+                  onClick={() => setClientsOpen(true)}
+                  className="text-xs font-medium text-primary underline-offset-2 hover:underline"
+                >
+                  Manage clients
+                </button>
+              )}
             </div>
             <ClientSelect
               id="e-client"
@@ -277,7 +283,7 @@ export function EntryFormDialog({
         </form>
       </DialogContent>
 
-      <ManageClientsDialog open={clientsOpen} onOpenChange={setClientsOpen} />
+      {canManageClients && <ManageClientsDialog open={clientsOpen} onOpenChange={setClientsOpen} />}
     </Dialog>
   )
 }
