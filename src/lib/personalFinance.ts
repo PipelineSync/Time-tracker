@@ -282,7 +282,10 @@ export function getOverdueRecurringPayments(data: PFData, asOfDate: string = tod
   return overdue.sort((a, b) => a.dueDate.localeCompare(b.dueDate))
 }
 
-export type PFScheduleStatus = 'overdue' | 'due-today' | 'upcoming' | 'paid'
+export type PFScheduleStatus = 'overdue' | 'due-soon' | 'upcoming' | 'paid'
+
+/** A bill due today or within this many days reads as "Due Soon". */
+export const DUE_SOON_DAYS = 3
 
 /** One dated payment row in the schedule — a single installment of one bill. */
 export type PFScheduledPayment = {
@@ -329,10 +332,11 @@ function paidExpenseForPeriod(data: PFData, recurringId: string, period: string,
   )
 }
 
-function scheduleStatus(paid: boolean, daysFromReference: number): PFScheduleStatus {
+/** Schedule status: Overdue → Due soon (due today or within DUE_SOON_DAYS) → Upcoming → Paid. */
+export function scheduleStatus(paid: boolean, daysFromReference: number): PFScheduleStatus {
   if (paid) return 'paid'
   if (daysFromReference < 0) return 'overdue'
-  return daysFromReference === 0 ? 'due-today' : 'upcoming'
+  return daysFromReference <= DUE_SOON_DAYS ? 'due-soon' : 'upcoming'
 }
 
 /**

@@ -472,10 +472,9 @@ type ScheduleColumn = (typeof SCHEDULE_COLUMNS)[number]['id']
 const categoryNameOf = (data: PFData, id: string) => data.categories.find(c => c.id === id)?.name ?? 'Uncategorised'
 const accountNameOf = (data: PFData, id: string) => data.accounts.find(a => a.id === id)?.name ?? 'No account'
 
-/** A row due today or within this many days reads as "Due Soon". */
-const DUE_SOON_DAYS = 3
+/** Ranking for the Status sort: Overdue → Due Soon → Upcoming → Paid. */
 const statusRank = (row: PFScheduledPayment) =>
-  row.paid ? 3 : row.status === 'overdue' ? 0 : row.daysFromReference <= DUE_SOON_DAYS ? 1 : 2
+  row.paid ? 3 : row.status === 'overdue' ? 0 : row.status === 'due-soon' ? 1 : 2
 
 /** A small glyph per category, picked from its name (Utilities → bolt, Rent → house…). */
 function CategoryIcon({ name, className }: { name: string; className?: string }) {
@@ -504,7 +503,7 @@ function StatusBadge({ row }: { row: PFScheduledPayment }) {
   if (row.status === 'overdue') {
     return <Badge variant="destructive" className="gap-1 whitespace-nowrap"><AlarmClock className="h-3.5 w-3.5"/>Overdue</Badge>
   }
-  if (row.daysFromReference <= DUE_SOON_DAYS) {
+  if (row.status === 'due-soon') {
     return <Badge className="gap-1 whitespace-nowrap border-transparent bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300"><AlarmClock className="h-3.5 w-3.5"/>Due Soon</Badge>
   }
   return <Badge className="gap-1 whitespace-nowrap border-transparent bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300"><Clock className="h-3.5 w-3.5"/>Upcoming</Badge>
