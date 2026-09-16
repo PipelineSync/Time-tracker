@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { AlarmClock, AlertTriangle, ArrowDown, ArrowDownLeft, ArrowLeft, ArrowLeftRight, ArrowUp, ArrowUpRight, Building2, Car, Check, ChevronsUpDown, CircleCheck, Clock, CreditCard, Download, Droplet, GraduationCap, Home, Landmark, LayoutDashboard, List, MoreHorizontal, Plus, Receipt, RefreshCw, Settings, Shield, Smartphone, Trash2, Users, WalletCards, Wifi, Zap } from 'lucide-react'
 import { toast } from 'sonner'
 import { useStore } from '@/lib/store'
+import { AvatarBubble } from '@/components/AvatarBubble'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -27,7 +28,7 @@ const NAV: { id: View; label: string; icon: typeof LayoutDashboard }[] = [
 ]
 
 export function PersonalFinancePage() {
-  const { user, workers, settings, checkOverdueRecurring } = useStore()
+  const { user, workers, settings, checkOverdueRecurring, isAdmin } = useStore()
   const navigate = useNavigate()
   // The personal tracker follows the workspace currency when one is set, and
   // defaults to PHP (the tracker was built for PHP) otherwise.
@@ -83,7 +84,11 @@ export function PersonalFinancePage() {
       toast.error(e instanceof Error ? e.message : 'Could not save')
     }
   }
-  const workerName = user?.workerId ? workers.find(w => w.id === user?.workerId)?.name : null
+  const myWorker = user?.workerId
+    ? workers.find((w) => w.id === user.workerId)
+    : workers.find((w) => user?.id && w.user_id === user.id)
+  const accountAvatar = (isAdmin ? settings?.avatar_url : null) || myWorker?.avatar_url || null
+  const workerName = myWorker?.name
   const displayName = workerName || user?.email.split('@')[0] || 'My'
   const activeAccounts = data.accounts.filter(a => !a.archived)
   const activeRecurring = data.recurring.filter(r => r.active)
@@ -205,7 +210,7 @@ export function PersonalFinancePage() {
   }
   if (!ready) return <div className="py-20 text-center text-muted-foreground">Loading your private tracker…</div>
 
-  return <div className="min-h-screen bg-background"><header className="border-b bg-card"><div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3 sm:px-6"><div className="flex items-center gap-3"><span className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary text-primary-foreground"><WalletCards className="h-5 w-5"/></span><div><p className="font-bold">{displayName}'s Personal Tracker</p><p className="text-xs text-muted-foreground">Private finance workspace</p></div></div><div className="flex items-center gap-2"><NotificationsBell /><Button variant="outline" size="sm" onClick={()=>navigate('/')}><ArrowLeft className="mr-2 h-4 w-4"/>Work tracker</Button></div></div></header>
+  return <div className="min-h-screen bg-background"><header className="border-b bg-card"><div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3 sm:px-6"><div className="flex items-center gap-3"><AvatarBubble name={displayName} avatarUrl={accountAvatar} className="h-10 w-10 text-sm" /><div><p className="font-bold">{displayName}'s Personal Tracker</p><p className="text-xs text-muted-foreground">Private finance workspace</p></div></div><div className="flex items-center gap-2"><NotificationsBell /><Button variant="outline" size="sm" onClick={()=>navigate('/')}><ArrowLeft className="mr-2 h-4 w-4"/>Work tracker</Button></div></div></header>
     {stale && <div className="border-b border-amber-300 bg-amber-50 px-4 py-2 text-center text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200">Couldn't reach the server just now — you're looking at your last saved data, not necessarily the latest.</div>}
     <main className="mx-auto max-w-7xl space-y-6 px-4 py-6 pb-24 sm:px-6">
     <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-sm font-semibold uppercase tracking-[.2em] text-primary">Private workspace</p><h1 className="text-3xl font-bold tracking-tight">{displayName}'s Personal Tracker</h1><p className="text-muted-foreground">Your accounts, spending and income—all in one place.</p></div><div className="flex flex-wrap gap-2"><Button onClick={()=>setEntry('expense')}><ArrowUpRight className="mr-2 h-4 w-4"/>Expense</Button><Button variant="outline" onClick={()=>setEntry('income')}><ArrowDownLeft className="mr-2 h-4 w-4"/>Income</Button><Button variant="outline" onClick={()=>setEntry('transfer')}><ArrowLeftRight className="mr-2 h-4 w-4"/>Transfer</Button></div></div>
