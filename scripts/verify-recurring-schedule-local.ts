@@ -84,7 +84,7 @@ const asOf = '2026-09-15'
 const homeCreditSchedule = getScheduledPayments(dataWith(homeCredit), asOf)
 assert(homeCreditSchedule.length === 10, `all ten Home Credit payments are listed as rows (got ${homeCreditSchedule.length})`)
 assert(homeCreditSchedule[0].dueDate === '2026-09-15', 'the nearest date leads the schedule')
-assert(homeCreditSchedule[0].status === 'due-today', 'a payment dated today is flagged as due today')
+assert(homeCreditSchedule[0].status === 'due-soon', 'a payment dated today is flagged as due soon')
 assert(homeCreditSchedule[9].dueDate === '2027-06-15', 'the last row is the final month of the plan')
 assert(
   homeCreditSchedule.every((row, index) => index === 0 || row.dueDate >= homeCreditSchedule[index - 1].dueDate),
