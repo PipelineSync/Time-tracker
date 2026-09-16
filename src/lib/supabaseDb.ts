@@ -805,19 +805,6 @@ async function unsettledWithoutStampColumn(workerId: string): Promise<BackendRes
   return ok(boundary ? rows.filter((e) => e.end_time > boundary) : rows)
 }
 
-/** Position that puts a new card at the bottom of its worker's column. */
-async function nextTaskPosition(workerId: string, status: TaskStatus): Promise<number> {
-  const { data } = await client()
-    .from('tasks')
-    .select('position')
-    .eq('worker_id', workerId)
-    .eq('status', status)
-    .order('position', { ascending: false })
-    .limit(1)
-  const top = ((data as Array<{ position: number }> | null) ?? [])[0]?.position
-  return typeof top === 'number' ? top + 1 : 0
-}
-
 async function pushNotification(recipientUserId: string, n: { entry_id: string | null; type: AppNotification['type']; message: string }) {
   const insert = (row: { entry_id: string | null; type: AppNotification['type']; message: string }) =>
     client().from('notifications').insert({
@@ -2895,8 +2882,14 @@ export const supabaseBackend: DataBackend = {
     if (!workerId) return fail('Choose who the task is for.')
     const status: TaskStatus = input.status ?? 'todo'
     const sb = client()
-    // Bottom of the column.
-    const position = await nextTaskPosition(workerId, status)
+    // Top of the column: the new card takes position 0 and everyone already
+    // there moves down a slot (best-effort re-index once the row is in).
+    const { data: columnRows } = await sb
+      .from('tasks')
+      .select('id')
+      .eq('worker_id', workerId)
+      .eq('status', status)
+    const columnIds = ((columnRows as Array<{ id: string }> | null) ?? []).map((r) => r.id)
     const { data, error } = await withClientColumn<Task>((withClient) => sb
       .from('tasks')
       .insert({
@@ -2907,13 +2900,18 @@ export const supabaseBackend: DataBackend = {
         status,
         priority: input.priority ?? 'medium',
         due_date: input.due_date || null,
-        position,
+        position: 0,
         created_by_role: me.data!.role,
         completed_at: status === 'completed' ? new Date().toISOString() : null,
       })
       .select()
       .single() as PromiseLike<{ data: Task | null; error: { code?: string; message?: string } | null }>)
     if (error) return fail(error.message ?? 'Could not add the task.')
+    // Best-effort re-index so the column numbering stays gap-free with the
+    // new card on top; a failure only affects ordering.
+    await Promise.all(
+      columnIds.map((rowId, i) => sb.from('tasks').update({ position: i + 1 }).eq('id', rowId))
+    )
     // Tell the worker when the admin assigns them something.
     if (me.data!.role === 'admin') {
       const recipient = await getWorkerUserId(workerId)
@@ -2948,8 +2946,19 @@ export const supabaseBackend: DataBackend = {
     }
     const nextWorker = (update.worker_id as string | undefined) ?? task.worker_id
     const nextStatus = (update.status as TaskStatus | undefined) ?? task.status
+    // Landing on a new stage (or with a new assignee) puts the card on top:
+    // it takes position 0 and everyone already there shifts down a slot.
+    let shiftIds: string[] = []
     if (nextWorker !== task.worker_id || nextStatus !== task.status) {
-      update.position = await nextTaskPosition(nextWorker, nextStatus)
+      update.position = 0
+      const { data: columnRows } = await sb
+        .from('tasks')
+        .select('id')
+        .eq('worker_id', nextWorker)
+        .eq('status', nextStatus)
+      shiftIds = ((columnRows as Array<{ id: string }> | null) ?? [])
+        .map((r) => r.id)
+        .filter((rowId) => rowId !== id)
     }
 
     const { data, error } = await withClientColumn<Task>((withClient) => {
@@ -2957,6 +2966,13 @@ export const supabaseBackend: DataBackend = {
       return sb.from('tasks').update(payload).eq('id', id).select().single() as PromiseLike<{ data: Task | null; error: { code?: string; message?: string } | null }>
     })
     if (error) return fail(error.message ?? 'Could not save the task.')
+    // Best-effort re-index of the column the card just landed on top of; a
+    // failure only affects ordering.
+    if (shiftIds.length) {
+      await Promise.all(
+        shiftIds.map((rowId, i) => sb.from('tasks').update({ position: i + 1 }).eq('id', rowId))
+      )
+    }
     return ok(data as Task)
   },
 

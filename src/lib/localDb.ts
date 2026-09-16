@@ -214,12 +214,6 @@ function sortTasks(rows: Task[]): Task[] {
   return [...rows].sort((a, b) => a.position - b.position || b.created_at.localeCompare(a.created_at))
 }
 
-/** Position that puts a task at the bottom of its worker's column. */
-function nextTaskPosition(tasks: Task[], workerId: string, status: TaskStatus): number {
-  const column = tasks.filter((t) => t.worker_id === workerId && t.status === status)
-  return column.reduce((max, t) => Math.max(max, t.position), -1) + 1
-}
-
 /**
  * Re-number one worker's column so `movedId` sits at `index` and every other
  * card keeps its relative order with a gap-free position.
@@ -2294,14 +2288,17 @@ export const localBackend: DataBackend = {
       status,
       priority: normalizeTaskPriority(input.priority),
       due_date: input.due_date || null,
-      // New tasks land at the bottom of their column.
-      position: nextTaskPosition(c.data.tasks, workerId, status),
+      // New tasks land at the very top of their column.
+      position: 0,
       created_by_role: c.user.role,
       completed_at: status === 'completed' ? now : null,
       created_at: now,
       updated_at: now,
     }
     c.data.tasks.push(task)
+    // Renumber the column so the new card sits on top and the rest keep
+    // their relative order one slot lower.
+    reindexTaskColumn(c.data.tasks, workerId, status, task.id, 0)
     // Tell the worker when the admin assigns them something.
     if (c.user.role === 'admin') {
       const recipient = workerUserId(workerId)
@@ -2339,11 +2336,11 @@ export const localBackend: DataBackend = {
       created_at: current.created_at,
       updated_at: now,
     })
-    // Moving column (or worker) puts it at the bottom of the new one.
-    if (status !== current.status || workerId !== current.worker_id) {
-      next.position = nextTaskPosition(c.data.tasks.filter((t) => t.id !== id), workerId, status)
-    }
     c.data.tasks[idx] = next
+    // Moving column (or worker) puts it at the top of the new one.
+    if (status !== current.status || workerId !== current.worker_id) {
+      reindexTaskColumn(c.data.tasks, workerId, status, id, 0)
+    }
     save(c.data)
     return { data: next, error: null }
   },
