@@ -12,6 +12,9 @@
 --   2. adds client_id to tasks, time_entries and active_timers
 --   3. backfills every existing task/entry to an "Unassigned" client so no
 --      work is left without a label
+--   4. upgrades the clients.color constraint on databases created before
+--      custom colours existed, so a re-run (or the standalone
+--      supabase/client-custom-colors.sql) enables any-hex colour tags
 --
 -- Access model (mirrors the rest of the app):
 --   * the admin (workspace owner) adds / renames / re-colours / retires clients
@@ -36,6 +39,15 @@ create table if not exists public.clients (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+-- Databases created before custom colours existed still carry the preset-only
+-- check, which the create-table-if-not-exists above cannot replace. Dropping
+-- and re-adding it makes a re-run of this file upgrade them in place (this
+-- is also exactly what supabase/client-custom-colors.sql does).
+alter table public.clients drop constraint if exists clients_color_check;
+alter table public.clients add constraint clients_color_check
+  check (color in ('blue','aqua','violet','emerald','amber','orange','rose','slate')
+         or color ~* '^#([0-9a-f]{3}|[0-9a-f]{6})$');
 
 create index if not exists clients_user_idx on public.clients (user_id);
 create index if not exists clients_user_status_idx on public.clients (user_id, status);

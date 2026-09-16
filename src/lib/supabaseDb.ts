@@ -646,6 +646,26 @@ function normalizeTicketRow(t: Ticket): Ticket {
 const TICKET_LIST_COLUMNS =
   'id, number, subject, description, category, priority, status, requester_user_id, requester_name, assignee_user_id, assignee_name, reply_count, created_at, updated_at, resolved_at'
 
+/**
+ * True when Postgres rejected a client write because the LIVE database still
+ * enforces the ORIGINAL preset-only colour check — i.e. it predates custom
+ * colours and has not run supabase/client-custom-colors.sql yet. Without this
+ * check the toast would show the raw constraint error, which reads as
+ * "the colour tag can't be changed" even though one small migration fixes it.
+ * 23514 = check-constraint violation; the auto-named constraint is
+ * clients_color_check.
+ */
+function isLegacyColorConstraint(error: { code?: string; message?: string }): boolean {
+  return error.code === '23514' && /clients_color_check/i.test(error.message ?? '')
+}
+
+/** The one-time fix for the legacy constraint, phrased for the toast. */
+const LEGACY_COLOR_CONSTRAINT_MESSAGE =
+  'This database only allows the eight built-in colour tags — the custom-colour ' +
+  'upgrade has not been applied. Open Supabase → SQL Editor, run ' +
+  'supabase/client-custom-colors.sql once, then try again. The eight built-in ' +
+  'tags work either way.'
+
 /** Defensive defaults for client rows written before/outside the app. */
 function normalizeClientRow(c: Client): Client {
   return {
@@ -2224,6 +2244,7 @@ export const supabaseBackend: DataBackend = {
       }
       // 23505 = unique violation on clients_user_name_key.
       if ((error as { code?: string }).code === '23505') return fail(`"${name}" is already on the list.`)
+      if (isLegacyColorConstraint(error as { code?: string; message?: string })) return fail(LEGACY_COLOR_CONSTRAINT_MESSAGE)
       return fail(error.message)
     }
     return ok(normalizeClientRow(data as Client))
@@ -2244,6 +2265,7 @@ export const supabaseBackend: DataBackend = {
     const { data, error } = await client().from('clients').update(update).eq('id', id).select().single()
     if (error) {
       if ((error as { code?: string }).code === '23505') return fail(`"${String(update.name)}" is already on the list.`)
+      if (isLegacyColorConstraint(error as { code?: string; message?: string })) return fail(LEGACY_COLOR_CONSTRAINT_MESSAGE)
       return fail(error.message)
     }
     return ok(normalizeClientRow(data as Client))

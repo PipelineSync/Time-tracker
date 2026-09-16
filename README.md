@@ -246,6 +246,8 @@ This creates the `workers`, `time_entries`, `active_timers`, `settings`, `paymen
 >
 > For **Clients**, run **`supabase/clients.sql`** once. It creates the `clients` table (name, colour tag, active/inactive) with RLS policies that let the **admin manage the list** while **workers may only read it**, adds `client_id` to `tasks`, `time_entries` and `active_timers`, and **backfills** every existing task/entry to an **"Unassigned"** client so nothing is left untagged. Fresh installs get the table from `schema.sql`. Safe to re-run. Until it is applied the app still runs — it just reports an empty client list and leaves work untagged.
 >
+> For **custom client colours** (any hex, not just the eight built-in tags), run **`supabase/client-custom-colors.sql`** once on an **existing** database. A database created before custom colours existed still enforces a preset-only `clients_color_check`, so saving a custom colour is refused — the app now names the fix in that case — and until the migration runs only the eight built-in tags can be stored. Fresh installs get the widened check from `schema.sql`. Safe to re-run; re-running `supabase/clients.sql` (or the RUN-THIS bundle) applies the same upgrade.
+>
 > **Shortcut:** if you have an existing database that predates both the Clients feature and per-worker access, **`supabase/RUN-THIS-clients-and-permissions.sql`** is a single copy-paste bundle of the two migrations below, in the right order, with verification queries at the end.
 >
 > For the **Finance** section, run **`supabase/finance.sql`** once. It creates the `finance_items` ledger (subscriptions, per-worker monthly payroll and one-off bills, all with due dates) with RLS that keeps it **admin-only**: a worker can read it only with `finance.view` and write only with `finance.manage`, both off by default. If the per-worker-permissions migration below has not been applied yet, the table is simply locked to the admin; re-run this file after it. Fresh installs get everything from `schema.sql`. Safe to re-run. Until it is applied the app still runs — the Finance section just reports an empty ledger. On an **existing** database this migration also widens the `workers` permission allow-list: run it **before granting the Finance tick boxes** on the Workers page, otherwise saving reports that the Finance access was skipped (everything else still saves).
@@ -421,6 +423,7 @@ time-tracker/
 ├─ supabase/tasks.sql           # One-time migration: Tasks kanban board (+ per-role RLS)
 ├─ supabase/finance.sql         # One-time migration: Finance ledger (subs, payroll, due dates)
 ├─ supabase/clients.sql         # One-time migration: Clients master list + client_id backfill
+├─ supabase/client-custom-colors.sql     # One-time migration: allow any-hex client colour tags (existing DBs)
 ├─ supabase/client-priority-board.sql    # One-time migration: client priority board (+ RLS)
 ├─ supabase/meetings.sql             # One-time migration: meetings schedule (+ RLS)
 ├─ supabase/client-invoicing.sql     # One-time migration: client invoicing board (+ RLS)

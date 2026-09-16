@@ -8,6 +8,12 @@
 -- picker), and clients.color is loosened to accept a #RGB/#RRGGBB hex
 -- alongside the eight tag names. New databases already get the
 -- loosened check from supabase/schema.sql. Safe to re-run.
+--
+-- (Re-running supabase/clients.sql or
+-- supabase/RUN-THIS-clients-and-permissions.sql applies the same upgrade —
+-- pick whichever file you find easiest.) Until this is applied, the app
+-- refuses custom colours with a message naming this file, while the eight
+-- built-in tags keep working.
 -- ============================================================
 
 -- The original constraint is named clients_color_check (Postgres auto-names

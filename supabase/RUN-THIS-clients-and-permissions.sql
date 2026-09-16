@@ -7,7 +7,8 @@
 --
 --    1. CLIENTS          (supabase/clients.sql)
 --       the client master list + client_id on tasks / time entries / timers,
---       and a backfill so nothing is left untagged
+--       a backfill so nothing is left untagged, and the upgrade that lets
+--       clients carry ANY custom colour (not just the eight built-in tags)
 --
 --    2. WORKER ACCESS    (supabase/worker-permissions.sql)
 --       workers.permissions + has_permission() + the RLS branches that let a
@@ -44,6 +45,9 @@
 --   2. adds client_id to tasks, time_entries and active_timers
 --   3. backfills every existing task/entry to an "Unassigned" client so no
 --      work is left without a label
+--   4. upgrades the clients.color constraint on databases created before
+--      custom colours existed, so a re-run (or the standalone
+--      supabase/client-custom-colors.sql) enables any-hex colour tags
 --
 -- Access model (mirrors the rest of the app):
 --   * the admin (workspace owner) adds / renames / re-colours / retires clients
@@ -68,6 +72,15 @@ create table if not exists public.clients (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+-- Databases created before custom colours existed still carry the preset-only
+-- check, which the create-table-if-not-exists above cannot replace. Dropping
+-- and re-adding it makes a re-run of this file upgrade them in place (this
+-- is also exactly what supabase/client-custom-colors.sql does).
+alter table public.clients drop constraint if exists clients_color_check;
+alter table public.clients add constraint clients_color_check
+  check (color in ('blue','aqua','violet','emerald','amber','orange','rose','slate')
+         or color ~* '^#([0-9a-f]{3}|[0-9a-f]{6})$');
 
 create index if not exists clients_user_idx on public.clients (user_id);
 create index if not exists clients_user_status_idx on public.clients (user_id, status);
@@ -537,3 +550,10 @@ from pg_tables
 where schemaname = 'public'
   and tablename in ('workers','time_entries','active_timers','settings','payments','tasks','clients','profiles')
 order by tablename;
+
+-- 5. The clients colour check now accepts any hex as well as the eight
+--    built-in tags (the definition should contain a #RRGGBB pattern).
+select conname, pg_get_constraintdef(oid)
+from pg_constraint
+where conrelid = 'public.clients'::regclass
+  and conname = 'clients_color_check';

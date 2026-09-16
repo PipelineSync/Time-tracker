@@ -10,10 +10,16 @@ export const state = {
   // Tasks created via the backend. Each task is the full row the Supabase
   // mock returns from .insert(...).select().single().
   tasks: [],
+  clients: [], // { id, user_id, name, color, status, created_at, updated_at }
   authUser: null, // { id, email } currently signed in
   getUserError: null, // injected error for auth.getUser
   profileQueryError: null, // injected error for profiles queries
   workerRowQueryError: null, // injected error for workers row-existence queries
+  // Simulates a database created before custom client colours existed: the
+  // original clients_color_check still rejects anything but the eight preset
+  // names, so client insert/update with a custom hex fails with the real
+  // Postgres error shape (code 23514).
+  legacyClientColorConstraint: false,
   fetchHandlers: {}, // url substring -> (url, opts) => { status?, body? }
   signOutCalls: 0,
   deletedWorkers: [], // worker ids deleted via from('workers').delete()
@@ -35,6 +41,8 @@ export function resetState() {
   state.profiles = []
   state.workers = []
   state.tasks = []
+  state.clients = []
+  state.legacyClientColorConstraint = false
   state.authUser = null
   state.getUserError = null
   state.profileQueryError = null
@@ -50,6 +58,27 @@ export function resetState() {
 
 function matches(row, filters) {
   return filters.every(([col, val]) => row[col] === val)
+}
+
+// The eight built-in client colour tags — exactly what the ORIGINAL
+// clients_color_check (before custom colours existed) allows.
+const PRESET_CLIENT_COLORS = ['blue', 'aqua', 'violet', 'emerald', 'amber', 'orange', 'rose', 'slate']
+
+/** The real Postgres error a legacy database raises for a custom colour. */
+function legacyColorConstraintError() {
+  return {
+    code: '23514',
+    message: 'new row for relation "clients" violates check constraint "clients_color_check"',
+  }
+}
+
+/** Non-null when this write would trip the legacy preset-only constraint. */
+function clientColorViolation(payload) {
+  if (!state.legacyClientColorConstraint) return null
+  const color = payload && payload.color
+  if (color == null) return null
+  if (PRESET_CLIENT_COLORS.includes(color)) return null
+  return legacyColorConstraintError()
 }
 
 function from(table) {
@@ -168,6 +197,30 @@ function from(table) {
           }),
         }
       }
+      // Clients: createClient inserts a single row and reads it back.
+      if (table === 'clients') {
+        return {
+          select: () => ({
+            single: async () => {
+              const violation = clientColorViolation(inserted[0])
+              if (violation) return { data: null, error: violation }
+              const row = inserted[0] || {}
+              const full = {
+                id: row.id || `client-${state.clients.length + 1}`,
+                user_id: state.authUser ? state.authUser.id : null,
+                name: row.name,
+                color: row.color ?? 'blue',
+                status: row.status ?? 'active',
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+                ...row,
+              }
+              state.clients.push(full)
+              return { data: full, error: null }
+            },
+          }),
+        }
+      }
       return {
         single: async () => ({ data: null, error: { message: 'insert not supported in mock' } }),
       }
@@ -180,6 +233,8 @@ function from(table) {
           return {
             select: () => ({
               single: async () => {
+                const violation = table === 'clients' ? clientColorViolation(payload) : null
+                if (violation) return { data: null, error: violation }
                 const idx = state[table]?.findIndex?.((r) => matches(r, filters))
                 if (idx == null || idx < 0) return { data: null, error: { message: 'no rows matched' } }
                 state[table][idx] = { ...state[table][idx], ...payload, updated_at: new Date().toISOString() }

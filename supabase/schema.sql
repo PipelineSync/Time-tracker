@@ -1125,6 +1125,14 @@ create table if not exists public.clients (
   updated_at timestamptz not null default now()
 );
 
+-- Databases created by an earlier schema.sql still carry the preset-only
+-- colour check, which the create-table-if-not-exists above cannot replace.
+-- Dropping and re-adding it makes a re-run upgrade them in place.
+alter table public.clients drop constraint if exists clients_color_check;
+alter table public.clients add constraint clients_color_check
+  check (color in ('blue','aqua','violet','emerald','amber','orange','rose','slate')
+         or color ~* '^#([0-9a-f]{3}|[0-9a-f]{6})$');
+
 create index if not exists clients_user_idx on public.clients (user_id);
 create index if not exists clients_user_status_idx on public.clients (user_id, status);
 create unique index if not exists clients_user_name_key
