@@ -989,6 +989,8 @@ export interface Task {
   created_by_role: Role
   /** When the task first landed in the Completed column. */
   completed_at: string | null
+  /** When the completed task was archived (null for active board tasks). */
+  archived_at: string | null
   created_at: string
   updated_at: string
 }

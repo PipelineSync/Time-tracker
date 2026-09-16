@@ -206,6 +206,7 @@ function normalizeTask(t: Task): Task {
     position: Number.isFinite(t.position) ? t.position : 0,
     created_by_role: t.created_by_role === 'admin' ? 'admin' : 'worker',
     completed_at: status === 'completed' ? (t.completed_at ?? t.updated_at ?? null) : null,
+    archived_at: status === 'completed' ? (t.archived_at ?? null) : null,
   }
 }
 
@@ -2292,6 +2293,7 @@ export const localBackend: DataBackend = {
       position: 0,
       created_by_role: c.user.role,
       completed_at: status === 'completed' ? now : null,
+      archived_at: null,
       created_at: now,
       updated_at: now,
     }
@@ -2332,13 +2334,14 @@ export const localBackend: DataBackend = {
       title: patch.title !== undefined ? String(patch.title).trim() || current.title : current.title,
       // Stamp the first time it reaches Completed; clear it when it moves back.
       completed_at: status === 'completed' ? (current.completed_at ?? now) : null,
+      archived_at: status === 'completed' ? (patch.archived_at !== undefined ? patch.archived_at : (current.archived_at ?? null)) : null,
       id: current.id,
       created_at: current.created_at,
       updated_at: now,
     })
     c.data.tasks[idx] = next
-    // Moving column (or worker) puts it at the top of the new one.
-    if (status !== current.status || workerId !== current.worker_id) {
+    // Moving column (or worker), or restoring from archive, puts it at the top of the column.
+    if (status !== current.status || workerId !== current.worker_id || (current.archived_at && !next.archived_at)) {
       reindexTaskColumn(c.data.tasks, workerId, status, id, 0)
     }
     save(c.data)
@@ -2357,6 +2360,9 @@ export const localBackend: DataBackend = {
     const now = new Date().toISOString()
     task.status = target
     task.completed_at = target === 'completed' ? (task.completed_at ?? now) : null
+    if (target !== 'completed') {
+      task.archived_at = null
+    }
     task.updated_at = now
     reindexTaskColumn(c.data.tasks, task.worker_id, target, id, position)
     save(c.data)
