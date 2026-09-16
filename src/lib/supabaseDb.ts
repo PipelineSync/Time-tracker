@@ -1856,6 +1856,29 @@ export const supabaseBackend: DataBackend = {
   async createNotification(recipientUserId: string, n: { entry_id?: string | null; type: AppNotification['type']; message: string }) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
+
+    // Deduplication guard: an overdue recurring payment notice for a given bill and due date
+    // should only be delivered once, even if called multiple times or concurrently.
+    if (n.type === 'payment' && n.message.toLowerCase().includes('overdue recurring payment')) {
+      const nameMatch = n.message.match(/Overdue recurring payment:\s*"([^"]+)"/i)
+      const dueMatch = n.message.match(/was due on\s+(\d{4}-\d{2}-\d{2})/i)
+      if (nameMatch && dueMatch) {
+        const billName = nameMatch[1]
+        const dueDate = dueMatch[1]
+        const { data: existing } = await client()
+          .from('notifications')
+          .select('id,message')
+          .eq('user_id', recipientUserId)
+          .eq('type', 'payment')
+          .ilike('message', `%${billName}%`)
+          .ilike('message', `%${dueDate}%`)
+          .limit(1)
+        if (existing && existing.length > 0) {
+          return ok(null)
+        }
+      }
+    }
+
     await pushNotification(recipientUserId, {
       entry_id: n.entry_id ?? null,
       type: n.type,
