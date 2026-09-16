@@ -374,3 +374,53 @@
     animation: none;
   }
 }
+
+/* ============================================================
+   Jose Mari Chan leaning on left side panel (Desktop only)
+   Sliding left transition when changing sections
+   ============================================================ */
+.jmc-peeking-motion {
+  will-change: transform;
+}
+
+@keyframes jmc-enter {
+  from {
+    transform: translateX(-120%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes jmc-slide-hide-reappear {
+  0% {
+    transform: translateX(0);
+  }
+  32% {
+    transform: translateX(-120%);
+  }
+  48% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(0);
+  }
+}
+
+.jmc-anim-enter {
+  animation: jmc-enter 450ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.jmc-anim-section-change {
+  animation: jmc-slide-hide-reappear 560ms cubic-bezier(0.25, 1, 0.5, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .jmc-anim-enter,
+  .jmc-anim-section-change {
+    animation: none !important;
+  }
+}
+
