@@ -1,5 +1,5 @@
 import type { Client } from '@/lib/types'
-import { ClientColorStyles } from '@/lib/types'
+import { clientColorStyles } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
 /**
@@ -17,7 +17,7 @@ export function ClientBadge({
   /** Append "(inactive)" when the client has been retired. */
   showInactive?: boolean
 }) {
-  const style = client ? ClientColorStyles[client.color] : null
+  const style = client ? clientColorStyles(client.color) : null
   return (
     <span
       className={cn(
@@ -26,9 +26,14 @@ export function ClientBadge({
         client?.status === 'inactive' && 'opacity-70',
         className
       )}
+      style={style?.badgeStyle}
       title={client ? client.name : 'No client'}
     >
-      <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', style ? style.dot : 'bg-muted-foreground/50')} aria-hidden />
+      <span
+        className={cn('h-1.5 w-1.5 shrink-0 rounded-full', style ? style.dot : 'bg-muted-foreground/50')}
+        style={style?.dotStyle}
+        aria-hidden
+      />
       <span className="truncate">{client ? client.name : 'No client'}</span>
       {showInactive && client?.status === 'inactive' && <span className="shrink-0 opacity-80">(inactive)</span>}
     </span>
@@ -37,10 +42,11 @@ export function ClientBadge({
 
 /** Just the coloured dot — for tight spots like table rows. */
 export function ClientDot({ client, className }: { client: Client | null | undefined; className?: string }) {
-  const style = client ? ClientColorStyles[client.color] : null
+  const style = client ? clientColorStyles(client.color) : null
   return (
     <span
       className={cn('inline-block h-2 w-2 shrink-0 rounded-full', style ? style.dot : 'bg-muted-foreground/40', className)}
+      style={style?.dotStyle}
       aria-hidden
     />
   )

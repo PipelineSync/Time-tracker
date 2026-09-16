@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { useStore } from '@/lib/store'
-import { ClientColorStyles } from '@/lib/types'
+import { clientColorStyles } from '@/lib/types'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 
@@ -55,15 +55,18 @@ export function ClientSelect({
       </SelectTrigger>
       <SelectContent>
         {includeAll && <SelectItem value="all">{allLabel}</SelectItem>}
-        {options.map((c) => (
+        {options.map((c) => {
+          const dot = clientColorStyles(c.color)
+          return (
           <SelectItem key={c.id} value={c.id}>
             <span className="flex items-center gap-2">
-              <span className={cn('h-2 w-2 shrink-0 rounded-full', ClientColorStyles[c.color].dot)} aria-hidden />
+              <span className={cn('h-2 w-2 shrink-0 rounded-full', dot.dot)} style={dot.dotStyle} aria-hidden />
               <span className="truncate">{c.name}</span>
               {c.status === 'inactive' && <span className="text-xs text-muted-foreground">(inactive)</span>}
             </span>
           </SelectItem>
-        ))}
+          )
+        })}
       </SelectContent>
     </Select>
   )

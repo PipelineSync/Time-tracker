@@ -1,3 +1,5 @@
+import type { CSSProperties } from 'react'
+
 export type WorkerStatus = 'active' | 'inactive'
 
 export type Role = 'admin' | 'worker'
@@ -570,14 +572,58 @@ export type ClientStatus = 'active' | 'inactive'
  * its slice of the "Hours by client" chart. Deliberately a small fixed set so
  * the board stays legible and the palette survives a theme switch.
  */
-export type ClientColor = 'blue' | 'aqua' | 'violet' | 'emerald' | 'amber' | 'orange' | 'rose' | 'slate'
+/**
+ * The eight colour tags that ship out of the box — a row of swatches on the
+ * Clients dialog.
+ */
+export type ClientColorPreset = 'blue' | 'aqua' | 'violet' | 'emerald' | 'amber' | 'orange' | 'rose' | 'slate'
 
-export const CLIENT_COLORS: ClientColor[] = ['blue', 'aqua', 'violet', 'emerald', 'amber', 'orange', 'rose', 'slate']
+export const CLIENT_COLORS: ClientColorPreset[] = ['blue', 'aqua', 'violet', 'emerald', 'amber', 'orange', 'rose', 'slate']
 
-export const DEFAULT_CLIENT_COLOR: ClientColor = 'blue'
+export const DEFAULT_CLIENT_COLOR: ClientColorPreset = 'blue'
 
-/** Badge / dot classes plus the hex recharts needs for the client charts. */
-export const ClientColorStyles: Record<ClientColor, { badge: string; dot: string; chart: string }> = {
+/**
+ * Colour tag on a client, used for its badge on kanban cards / entries and for
+ * its slice of the "Hours by client" chart. One of the eight presets above, or
+ * a custom `#RGB` / `#RRGGBB` hex picked with the custom swatch when adding a
+ * client, so the palette is not capped at eight. The `string & {}` arm keeps
+ * autocomplete for the presets while still accepting a hex string.
+ */
+export type ClientColor = ClientColorPreset | (string & {})
+
+/** True for one of the eight built-in tags (anything else is a custom hex). */
+export function isClientColorPreset(color: ClientColor): color is ClientColorPreset {
+  return (CLIENT_COLORS as string[]).includes(color)
+}
+
+/** True when a stored value is a usable tag: a preset name, or a #RGB / #RRGGBB hex. */
+export function isValidClientColor(value: unknown): value is ClientColor {
+  if (typeof value !== 'string' || !value) return false
+  if (isClientColorPreset(value)) return true
+  return /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(value)
+}
+
+/**
+ * Everything a badge, dot or chart needs to render a client's colour: the
+ * Tailwind classes for a preset, and inline styles for a custom hex — Tailwind
+ * cannot know a dynamic hex at build time, so those travel as `style` props.
+ * `chart` is the hex the "Hours by client" charts paint that slice with.
+ */
+export interface ClientColorStyle {
+  /** Tailwind badge classes — empty for a custom colour (see `badgeStyle`). */
+  badge: string
+  /** Tailwind dot classes — empty for a custom colour (see `dotStyle`). */
+  dot: string
+  /** Inline badge styles — set for custom colours only. */
+  badgeStyle?: CSSProperties
+  /** Inline dot styles — set for custom colours only. */
+  dotStyle?: CSSProperties
+  /** Hex for recharts. */
+  chart: string
+}
+
+/** Badge / dot classes plus the hex recharts needs, for the eight presets. */
+export const ClientColorStyles: Record<ClientColorPreset, ClientColorStyle> = {
   blue: { badge: 'border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-300', dot: 'bg-blue-500', chart: '#0868D9' },
   aqua: { badge: 'border-cyan-500/30 bg-cyan-500/10 text-cyan-700 dark:text-cyan-300', dot: 'bg-cyan-500', chart: '#36B7C9' },
   violet: { badge: 'border-violet-500/30 bg-violet-500/10 text-violet-700 dark:text-violet-300', dot: 'bg-violet-500', chart: '#8B5CF6' },
@@ -586,6 +632,27 @@ export const ClientColorStyles: Record<ClientColor, { badge: string; dot: string
   orange: { badge: 'border-orange-500/30 bg-orange-500/10 text-orange-700 dark:text-orange-300', dot: 'bg-orange-500', chart: '#F77A0A' },
   rose: { badge: 'border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-300', dot: 'bg-rose-500', chart: '#F43F5E' },
   slate: { badge: 'border-slate-500/30 bg-slate-500/10 text-slate-700 dark:text-slate-300', dot: 'bg-slate-500', chart: '#64748B' },
+}
+
+/**
+ * Resolves any client colour — preset or custom hex — to renderable classes
+ * and styles. A custom hex gets a 10% tint behind the badge name, a 30% border
+ * and the colour itself as the text (which reads on light and dark surfaces
+ * alike); a malformed value falls back to the default tag rather than
+ * rendering grey.
+ */
+export function clientColorStyles(color: ClientColor): ClientColorStyle {
+  if (isClientColorPreset(color)) return ClientColorStyles[color]
+  if (!isValidClientColor(color)) return ClientColorStyles[DEFAULT_CLIENT_COLOR]
+  // Expand #abc to #aabbcc so the alpha suffixes below stay 6-digit.
+  const hex = color.toLowerCase().replace(/^#([0-9a-f])([0-9a-f])([0-9a-f])$/, '#$1$1$2$2$3$3')
+  return {
+    badge: '',
+    dot: '',
+    badgeStyle: { backgroundColor: `${hex}1a`, borderColor: `${hex}4d`, color: hex },
+    dotStyle: { backgroundColor: hex },
+    chart: hex,
+  }
 }
 
 /**

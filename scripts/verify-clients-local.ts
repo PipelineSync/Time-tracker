@@ -1,6 +1,7 @@
 /**
  * Ad-hoc verification of the Clients feature in demo mode (local storage):
  *  - the admin owns the master list: add, rename, re-colour, activate/deactivate
+ *  - a client's colour is a built-in tag or ANY custom hex (the custom swatch)
  *  - only ACTIVE clients are offered for new work (the UI reads that list)
  *  - a client that labels existing work cannot be deleted, only deactivated
  *  - tasks carry a client; a timer carries one and passes it to the entry
@@ -55,6 +56,14 @@ async function main() {
   assert(!!blank.error, 'a blank client name is refused')
   const renamed = (await localBackend.updateClient(created.id, { name: 'Umbrella Group', color: 'violet' })).data!
   assert(renamed.name === 'Umbrella Group' && renamed.color === 'violet', 'admin renames and re-colours a client')
+  const custom = (await localBackend.createClient({ name: 'Hexworks', color: '#1D4ED8' })).data!
+  assert(custom.color === '#1D4ED8', 'admin can tag a client with a custom colour (any hex)')
+  const customReread = ((await localBackend.listClients()).data || []).find((c) => c.id === custom.id)!
+  assert(customReread.color === '#1D4ED8', 'the custom colour survives a re-read')
+  const customRecoloured = (await localBackend.updateClient(custom.id, { color: '#ff6347' })).data!
+  assert(customRecoloured.color === '#ff6347', 'a custom colour can be changed to another hex')
+  const garbage = (await localBackend.createClient({ name: 'BadHex', color: 'not-a-colour' })).data!
+  assert(garbage.color === 'blue', 'an invalid colour value falls back to the default tag')
 
   // 3) Tasks are tagged with a client.
   const workers = (await localBackend.listWorkers()).data || []

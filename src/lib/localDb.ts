@@ -37,7 +37,6 @@ import type {
   BillingCycle,
 } from './types'
 import {
-  CLIENT_COLORS,
   CLIENT_PRIORITY_LANES,
   INVOICE_STAGES,
   DEFAULT_CLIENT_COLOR,
@@ -49,6 +48,7 @@ import {
   TEAM_VIEW_PERMISSIONS,
   ALL_ENTRIES_VIEW_PERMISSIONS,
   normalizePermissions,
+  isValidClientColor,
   TASK_STATUSES,
   UNASSIGNED_CLIENT_NAME,
 } from './types'
@@ -233,9 +233,9 @@ function reindexTaskColumn(tasks: Task[], workerId: string, status: TaskStatus, 
   column.forEach((t, i) => { t.position = i })
 }
 
-/** Valid colour tag, defaulting anything unknown to the first brand colour. */
+/** Valid colour tag — a built-in preset or a custom #hex — defaulting anything else to the default. */
 function normalizeClientColor(color: unknown): ClientColor {
-  return CLIENT_COLORS.includes(color as ClientColor) ? (color as ClientColor) : DEFAULT_CLIENT_COLOR
+  return isValidClientColor(color) ? color : DEFAULT_CLIENT_COLOR
 }
 
 function normalizeClientStatus(status: unknown): ClientStatus {
