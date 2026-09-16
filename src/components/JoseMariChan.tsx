@@ -17,8 +17,9 @@ import { cn } from '@/lib/utils'
  *  4. Respects `prefers-reduced-motion` so users who request less motion
  *     see a steady peek with no sudden movement.
  *  5. Marked `pointer-events-none select-none` so he never intercepts clicks
- *     or blocks workspace controls. Window-level pointer tracking hides him
- *     while the pointer is over his stationary footprint, without flickering.
+ *     or blocks workspace controls. Window-level pointer tracking slides him
+ *     behind the sidebar while the pointer is over his stationary footprint,
+ *     without flickering.
  */
 export function JoseMariChan() {
   const { pathname } = useLocation()
@@ -68,8 +69,7 @@ export function JoseMariChan() {
     <div
       ref={containerRef}
       className={cn(
-        'pointer-events-none fixed bottom-24 left-[220px] z-20 hidden select-none lg:block',
-        pointerOver && 'opacity-0'
+        'pointer-events-none fixed bottom-24 left-[220px] z-20 hidden select-none lg:block'
       )}
       aria-hidden="true"
     >
@@ -83,7 +83,10 @@ export function JoseMariChan() {
         <img
           src="/jose-mari-chan/classic-peeking.png"
           alt="Jose Mari Chan"
-          className="h-auto w-20 drop-shadow-sm md:w-24"
+          className={cn(
+            'jmc-hover-image h-auto w-20 drop-shadow-sm md:w-24',
+            pointerOver && 'jmc-hover-hide'
+          )}
           draggable={false}
           loading="eager"
         />

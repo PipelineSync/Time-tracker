@@ -383,6 +383,24 @@
   will-change: transform;
 }
 
+/* Keep the hover footprint on the fixed wrapper, while the image itself
+   retreats behind the sidebar. This lets the pointer stay over the same spot
+   without making the image pop back in and out as it moves. */
+.jmc-hover-image {
+  display: block;
+  transform: translateX(0);
+  opacity: 1;
+  transition:
+    transform 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 180ms ease;
+  will-change: transform, opacity;
+}
+
+.jmc-hover-image.jmc-hover-hide {
+  transform: translateX(-125%);
+  opacity: 0;
+}
+
 @keyframes jmc-enter {
   from {
     transform: translateX(-120%);
@@ -421,6 +439,10 @@
   .jmc-anim-enter,
   .jmc-anim-section-change {
     animation: none !important;
+  }
+
+  .jmc-hover-image {
+    transition: none;
   }
 }
 
