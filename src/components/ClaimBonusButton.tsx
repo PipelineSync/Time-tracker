@@ -16,6 +16,9 @@ import { SantaHat } from '@/components/SantaHat'
  * click handler at all — it cannot be activated by keyboard or AT either.
  *
  * Christmas-only: the caller renders it behind `isChristmasTheme()`.
+ * Desktop-only: the anchor carries `hidden lg:block`, so phones and tablets
+ * running the mobile shell never see the prank (a dodge game is no fun when
+ * every tap is a finger, and the button would just be tap-bait on a phone).
  */
 
 /** How close (px) the cursor may get to the button's edge before it flees. */
@@ -82,6 +85,10 @@ export function ClaimBonusButton({ containerRef }: { containerRef: RefObject<HTM
     const c = container.getBoundingClientRect()
     const bw = anchor.offsetWidth
     const bh = anchor.offsetHeight
+    // Below `lg` the anchor is `display: none`, which measures 0×0. Bail out so
+    // the hidden button never runs the dodge maths or fires taunt toasts on a
+    // phone — nothing to place, nothing to say.
+    if (bw === 0 || bh === 0) return null
     const maxX = c.width - bw - EDGE_PAD * 2
     // Never rest below the fold: the section can run taller than the viewport
     // on phones, and a bonus the worker never sees is no joke at all. Sample
@@ -240,7 +247,7 @@ export function ClaimBonusButton({ containerRef }: { containerRef: RefObject<HTM
   return (
     <div
       ref={anchorRef}
-      className="xmas-bonus-anchor"
+      className="xmas-bonus-anchor hidden lg:block"
       aria-hidden="true"
       style={{
         visibility: pos ? 'visible' : 'hidden',
