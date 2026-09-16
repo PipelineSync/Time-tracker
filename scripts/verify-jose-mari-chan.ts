@@ -23,6 +23,11 @@ assert(jmc.includes('sectionKeyFor'), 'Hooks into sectionKeyFor to detect sectio
 assert(jmc.includes('pointer-events-none'), 'pointer-events-none prevents blocking app interactions')
 assert(jmc.includes('classic-peeking.png'), 'References classic-peeking.png image')
 assert(jmc.includes('jmc-anim-section-change'), 'Applies section change animation')
+assert(jmc.includes("window.addEventListener('pointermove', trackPointer"), 'Tracks hover without intercepting clicks')
+assert(jmc.includes('containerRef.current?.getBoundingClientRect()'), 'Uses the stationary wrapper as the hover area')
+assert(jmc.includes("pointerOver && 'opacity-0'"), 'Hides the wrapper while hovered without collapsing its hover area')
+assert(jmc.includes("event.pointerType !== 'touch'"), 'Touch interactions do not leave the decoration hidden')
+assert(jmc.includes("window.removeEventListener('pointermove', trackPointer)"), 'Cleans up pointer tracking on unmount')
 
 console.log('--- AppLayout integration ---')
 const layout = read('src/components/AppLayout.tsx')
