@@ -186,8 +186,17 @@ function from(table) {
               },
             }),
             // update().eq() without an explicit select() — used by the
-            // password reset etc. Just apply the patch and return ok.
-            then: (resolve) => resolve({ data: null, error: null }),
+            // password reset etc. Apply the patch to every matching row and
+            // return ok (PostgREST updates all matches, not just the first).
+            then: (resolve) => {
+              const rows = state[table]
+              if (Array.isArray(rows)) {
+                rows.forEach((r, i) => {
+                  if (matches(r, filters)) rows[i] = { ...r, ...payload, updated_at: new Date().toISOString() }
+                })
+              }
+              resolve({ data: null, error: null })
+            },
           }
         },
       }
