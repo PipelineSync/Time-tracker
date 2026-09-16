@@ -251,12 +251,6 @@ await localBackend.signIn('admin', 'admin.pipelinesync')
 const me = (await localBackend.getSession()).data!
 assert(me !== null, 'admin is signed in for notification tests')
 
-// Clear notifications for a clean test slate
-const notifsBefore = (await localBackend.listNotifications()).data || []
-for (const n of notifsBefore) {
-  // mark read or start fresh
-}
-
 // 1. First overdue bill notification created
 const res1 = await localBackend.createNotification(me.id, {
   type: 'payment',
