@@ -19,6 +19,16 @@ updates:
       capacitor:
         patterns:
           - '@capacitor/*'
+    ignore:
+      # Major bumps need manual testing — don't re-propose them every week.
+      # sonner 2.x / date-fns 4.x change runtime behavior; @eslint/js 10
+      # currently breaks `npm ci` (peer conflict). Revisit by hand.
+      - dependency-name: "sonner"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "date-fns"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@eslint/js"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
