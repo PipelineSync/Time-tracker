@@ -31,7 +31,6 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { BrandLogo } from '@/components/BrandLogo'
 import { NotificationsBell } from '@/components/NotificationsBell'
 import { SectionTransition } from '@/components/SectionTransition'
-import { JoseMariChan } from '@/components/JoseMariChan'
 import { ChangePasswordDialog } from '@/components/ChangePasswordDialog'
 import {
   DropdownMenu,
@@ -256,9 +255,6 @@ export function AppLayout() {
           </div>
         </div>
       </aside>
-
-      {/* Jose Mari Chan leaning half body on the left side panel (desktop only) */}
-      <JoseMariChan />
 
       {/* Mobile header — padded out of the notch when installed / native */}
       <header className="sticky top-0 z-30 border-b border-border bg-background/95 backdrop-blur lg:hidden">
