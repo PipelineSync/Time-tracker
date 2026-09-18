@@ -166,7 +166,18 @@ export function FinancePage() {
       : f.name || 'Untitled'
 
   async function markPaid(item: FinanceItem, paid: boolean) {
-    const res = await updateFinanceItem(item.id, { status: paid ? 'paid' : 'unpaid' })
+    let payment_method: 'cash' | 'qr' | null = null
+    if (paid && item.kind === 'payroll') {
+      const worker = workers.find((w) => w.id === item.worker_id)
+      const options = worker?.payment_methods?.length ? worker.payment_methods.join(' / ') : 'cash / qr'
+      const choice = window.prompt(`Payment method for ${worker?.name || 'this worker'} (${options}):`, worker?.payment_methods?.length === 1 ? worker.payment_methods[0] : 'cash')?.trim().toLowerCase()
+      if (choice !== 'cash' && choice !== 'qr') {
+        toast.error('Choose Cash or QR Code to mark payroll paid.')
+        return
+      }
+      payment_method = choice
+    }
+    const res = await updateFinanceItem(item.id, { status: paid ? 'paid' : 'unpaid', payment_method })
     if (res) toast.success(paid ? `Marked paid — ${money(item.amount, currency)}.` : 'Moved back to unpaid.')
   }
 
@@ -498,6 +509,7 @@ export function FinancePage() {
                       <th className="px-3 py-2 font-medium">Amount</th>
                       <th className="px-3 py-2 font-medium">Pay day</th>
                       <th className="px-3 py-2 font-medium">Status</th>
+                      <th className="px-3 py-2 font-medium">Paid via</th>
                       {canManage && <th className="px-3 py-2 text-right font-medium">Actions</th>}
                     </tr>
                   </thead>
@@ -513,6 +525,7 @@ export function FinancePage() {
                           )}
                         </td>
                         <td className="px-3 py-3"><FinanceStatusLabel item={item} /></td>
+                        <td className="px-3 py-3 text-sm">{item.status === 'paid' && item.payment_method ? (item.payment_method === 'qr' ? 'QR Code' : 'Cash') : <span className="text-muted-foreground">—</span>}</td>
                         {canManage && (
                           <td className="px-3 py-3">
                             <div className="flex items-center justify-end gap-1.5">

@@ -1076,6 +1076,8 @@ export interface FinanceItem {
   status: FinanceStatus
   /** When a payroll run or bill was marked paid (subscriptions never use it). */
   paid_at: string | null
+  /** How a payroll run was paid. */
+  payment_method?: PaymentMethod | null
   note: string | null
   /**
    * Subscriptions only: how many times the subscription bills before it
