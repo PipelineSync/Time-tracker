@@ -132,6 +132,7 @@ export interface CreateFinanceItemInput {
   /** 'YYYY-MM-DD'. */
   due_date: string
   status?: FinanceStatus
+  payment_method?: PaymentMethod | null
   note?: string | null
   /**
    * Subscriptions only: how many times it bills before pausing by itself
