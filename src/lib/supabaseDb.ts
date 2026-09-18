@@ -1026,9 +1026,13 @@ export const supabaseBackend: DataBackend = {
     // behaviour) made a freshly saved tick box look like it had snapped
     // back to off — the database was correct, the round-trip was just
     // dropping the column.
-    const columns = 'id, name, email, hourly_rate, status, position, payment_methods, permissions, created_at, updated_at'
+    const columns = 'id, name, email, hourly_rate, status, position, payment_methods, qr_code_url, permissions, created_at, updated_at'
+    // QR codes are not profile avatars: admins need the worker's QR image in
+    // the Mark paid dialog so they can scan it. Keep it in the worker list;
+    // avatar images are still loaded separately to avoid making this query
+    // needlessly large.
     const stripImages = (rows: Worker[]): Worker[] =>
-      normalizeWorkers(rows).map((w) => ({ ...w, avatar_url: null, qr_code_url: null }))
+      normalizeWorkers(rows).map((w) => ({ ...w, avatar_url: null }))
     const fetchRows = async () => {
       // A worker with no team-wide capability only sees their own row.
       if (!canSeeTeam(me.data!) && me.data!.workerId) {
@@ -2115,6 +2119,7 @@ export const supabaseBackend: DataBackend = {
       due_date: input.due_date,
       status,
       paid_at: status === 'paid' ? now : null,
+      payment_method: input.kind === 'payroll' && status === 'paid' ? (input.payment_method ?? null) : null,
       note: input.note?.trim() || null,
     }
     // The occurrence limit rides along only when the database has the
