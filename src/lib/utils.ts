@@ -128,3 +128,31 @@ export function computeEarnings(totalMinutes: number, hourlyRate: number): numbe
 export function toISO(d: Date): string {
   return d.toISOString()
 }
+
+// ---- Task due dates ---------------------------------------------------------
+// Pure date-string helpers shared by the Tasks dashboard panels (stats strip,
+// workload, "needs attention") and the kanban cards.
+
+/** Midnight of today in local time. */
+export function startOfToday(): Date {
+  const d = new Date()
+  d.setHours(0, 0, 0, 0)
+  return d
+}
+
+/** True when an (non-completed) task's due date is before today. */
+export function isOverdueDate(dueDateISO: string | null): boolean {
+  if (!dueDateISO) return false
+  return new Date(`${dueDateISO.slice(0, 10)}T00:00:00`).getTime() < startOfToday().getTime()
+}
+
+/**
+ * Whole days from today to the due date: negative = past (overdue),
+ * 0 = today, 1 = tomorrow. Null when there is no due date.
+ */
+export function daysUntilDue(dueDateISO: string | null): number | null {
+  if (!dueDateISO) return null
+  return Math.round(
+    (new Date(`${dueDateISO.slice(0, 10)}T00:00:00`).getTime() - startOfToday().getTime()) / 86_400_000
+  )
+}
