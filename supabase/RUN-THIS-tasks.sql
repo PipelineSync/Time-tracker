@@ -35,7 +35,7 @@ create table if not exists public.tasks (
   title           text not null check (length(btrim(title)) between 1 and 200),
   description     text,
   status          text not null default 'todo'
-                    check (status in ('todo','in_progress','waiting','approval','completed')),
+                    check (status in ('todo','in_progress','waiting','for_review','rework','completed')),
   priority        text not null default 'medium'
                     check (priority in ('low','medium','high')),
   due_date        date,
@@ -63,9 +63,11 @@ create index if not exists tasks_worker_status_position_idx
 -- Re-assert the allowed stages. This is what upgrades a database that ran an
 -- earlier 3-stage version of this file (To Do / In Progress / Completed) to
 -- also allow Waiting and Approval.
+-- Rename legacy 'approval' rows first so the wider check can land.
+update public.tasks set status = 'for_review' where status = 'approval';
 alter table public.tasks drop constraint if exists tasks_status_check;
 alter table public.tasks add constraint tasks_status_check
-  check (status in ('todo','in_progress','waiting','approval','completed'));
+  check (status in ('todo','in_progress','waiting','for_review','rework','completed'));
 
 
 -- ---------- 4. row level security ----------

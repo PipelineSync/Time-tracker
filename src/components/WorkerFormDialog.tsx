@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Permission, Worker } from '@/lib/types'
-import { normalizePermissions } from '@/lib/types'
+import { normalizePermissions, normalizeWorkdays, normalizeWeeklyCapacity, WEEKDAY_NAMES } from '@/lib/types'
 import { useStore } from '@/lib/store'
 import {
   Dialog,
@@ -38,6 +38,9 @@ export function WorkerFormDialog({
   const [password, setPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [permissions, setPermissions] = useState<Permission[]>([])
+  // Workweek used by schedule-aware workload (Team KPI): Mon–Fri / 40h default.
+  const [workdays, setWorkdays] = useState<number[]>([1, 2, 3, 4, 5])
+  const [capacity, setCapacity] = useState('40')
   const [saving, setSaving] = useState(false)
   const seededKeyRef = useRef<string | null>(null)
 
@@ -64,6 +67,8 @@ export function WorkerFormDialog({
     setPassword('')
     setNewPassword('')
     setPermissions(normalizePermissions(worker?.permissions))
+    setWorkdays(normalizeWorkdays(worker?.workdays))
+    setCapacity(String(normalizeWeeklyCapacity(worker?.weekly_capacity_hours)))
   }, [open, worker, settings])
 
   async function handleSubmit(e: React.FormEvent) {
@@ -94,6 +99,8 @@ export function WorkerFormDialog({
         status,
         position: position.trim(),
         permissions,
+        workdays: normalizeWorkdays(workdays),
+        weekly_capacity_hours: normalizeWeeklyCapacity(capacity),
         newPassword: newPassword || undefined,
       })
       setSaving(false)
@@ -112,6 +119,8 @@ export function WorkerFormDialog({
       status,
       position: position.trim(),
       permissions,
+      workdays: normalizeWorkdays(workdays),
+      weekly_capacity_hours: normalizeWeeklyCapacity(capacity),
       accountEmail: accountEmail.trim(),
       accountPassword: password,
     })
@@ -177,6 +186,60 @@ export function WorkerFormDialog({
                 Their position or role, shown on their profile. Time entries are tagged with the
                 client they pick when clocking in.
               </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Workweek *</Label>
+              <div className="flex flex-wrap gap-1.5">
+                {[1, 2, 3, 4, 5, 6, 0].map((d) => {
+                  const on = workdays.includes(d)
+                  return (
+                    <button
+                      key={d}
+                      type="button"
+                      aria-pressed={on}
+                      disabled={saving}
+                      onClick={() =>
+                        setWorkdays((prev) => {
+                          const next = on ? prev.filter((x) => x !== d) : [...prev, d]
+                          // At least one day — an empty week would show 0h available.
+                          return next.length === 0 ? prev : next
+                        })
+                      }
+                      className={
+                        'h-9 min-w-11 rounded-lg border px-2 text-xs font-semibold transition ' +
+                        (on
+                          ? 'border-primary bg-primary text-primary-foreground'
+                          : 'bg-background hover:bg-muted')
+                      }
+                      title={WEEKDAY_NAMES[d]}
+                    >
+                      {WEEKDAY_NAMES[d]}
+                    </button>
+                  )
+                })}
+              </div>
+              <div className="flex items-end gap-3">
+                <div className="grid w-36 gap-1.5">
+                  <Label htmlFor="w-cap" className="text-xs text-muted-foreground">
+                    Weekly capacity (hours)
+                  </Label>
+                  <Input
+                    id="w-cap"
+                    type="number"
+                    min="1"
+                    max="80"
+                    step="0.5"
+                    value={capacity}
+                    onChange={(e) => setCapacity(e.target.value)}
+                    disabled={saving}
+                  />
+                </div>
+                <p className="pb-2 flex-1 text-xs leading-snug text-muted-foreground">
+                  Workload on Team KPI compares open estimated hours against THIS workweek — e.g.
+                  Tue–Sat still totals 40h if the capacity says so.
+                </p>
+              </div>
             </div>
 
             <div className="space-y-2">

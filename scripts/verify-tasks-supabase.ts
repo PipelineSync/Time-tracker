@@ -81,8 +81,8 @@ async function main() {
   assert(!me.error && me.data?.role === 'admin', 'admin can sign in')
 
   // 1) Two tasks created one after another: the SECOND must be on top.
-  const a = await supabaseBackend.createTask({ worker_id: JOHN, client_id: null, title: 'VT-A created first', status: 'todo' })
-  const b = await supabaseBackend.createTask({ worker_id: JOHN, client_id: null, title: 'VT-B created second', status: 'todo' })
+  const a = await supabaseBackend.createTask({ due_date: '2099-12-31', worker_id: JOHN, client_id: null, title: 'VT-A created first', status: 'todo' })
+  const b = await supabaseBackend.createTask({ due_date: '2099-12-31', worker_id: JOHN, client_id: null, title: 'VT-B created second', status: 'todo' })
   assert(!a.error && !b.error, 'both test tasks created')
   assert(b.data!.position === 0, 'new task is inserted at position 0')
   const todo = columnOrder(JOHN, 'todo')
@@ -100,7 +100,7 @@ async function main() {
   assert(prog[0]?.id === a.data!.id, 'task that changed stage is at the TOP of the new column')
 
   // …and a second arrival is stacked above the first one, not below.
-  const c = await supabaseBackend.createTask({ worker_id: JOHN, client_id: null, title: 'VT-C', status: 'in_progress' })
+  const c = await supabaseBackend.createTask({ due_date: '2099-12-31', worker_id: JOHN, client_id: null, title: 'VT-C', status: 'in_progress' })
   assert(!c.error, 'task created straight into the destination stage')
   prog = columnOrder(JOHN, 'in_progress')
   assert(prog[0]?.id === c.data!.id && prog[1]?.id === a.data!.id, 'a later arrival stacks ABOVE earlier ones')
@@ -124,7 +124,7 @@ async function main() {
   assert(prog.every((t, i) => t.position === i), 'positions stay gap-free after the explicit drop')
 
   // 5) Archiving & restoring completed tasks.
-  const comp1 = await supabaseBackend.createTask({ worker_id: JOHN, client_id: null, title: 'VT-Supabase-Comp', status: 'completed' })
+  const comp1 = await supabaseBackend.createTask({ due_date: '2099-12-31', worker_id: JOHN, client_id: null, title: 'VT-Supabase-Comp', status: 'completed' })
   assert(!comp1.error, 'completed task created')
   assert(comp1.data!.archived_at === null, 'task starts unarchived')
 

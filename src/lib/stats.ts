@@ -102,6 +102,8 @@ export function hoursByWorker(entries: TimeEntry[], workers: Worker[]) {
         payment_methods: [],
         qr_code_url: null,
         permissions: [],
+        workdays: [1, 2, 3, 4, 5],
+        weekly_capacity_hours: 40,
         created_at: '',
         updated_at: '',
       } as Worker)

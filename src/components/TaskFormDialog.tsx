@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useStore } from '@/lib/store'
-import type { Task, TaskPriority, TaskStatus } from '@/lib/types'
-import { TASK_STATUSES, TaskPriorityNames, TaskStatusNames } from '@/lib/types'
+import type { Task, TaskPriority, TaskStatus, WaitingReason } from '@/lib/types'
+import { TASK_STATUSES, TaskPriorityNames, TaskStatusNames, WAITING_REASONS, WaitingReasonNames } from '@/lib/types'
 import {
   Dialog,
   DialogContent,
@@ -27,6 +27,10 @@ interface FormState {
   status: TaskStatus
   priority: TaskPriority
   dueDate: string
+  /** Estimated hours — drives schedule-aware workload on the Team KPI page. */
+  estimatedHours: string
+  /** Why the work is blocked (only meaningful on the Waiting column). */
+  waitingReason: WaitingReason | ''
 }
 
 const emptyForm = (status: TaskStatus): FormState => ({
@@ -37,6 +41,8 @@ const emptyForm = (status: TaskStatus): FormState => ({
   status,
   priority: 'medium',
   dueDate: '',
+  estimatedHours: '',
+  waitingReason: '',
 })
 
 /**
@@ -86,6 +92,8 @@ export function TaskFormDialog({
         status: task.status,
         priority: task.priority,
         dueDate: task.due_date ? task.due_date.slice(0, 10) : '',
+        estimatedHours: task.estimated_hours != null ? String(task.estimated_hours) : '',
+        waitingReason: task.waiting_reason ?? '',
       })
     } else {
       // Seed the assignee. Managers (anyone with tasks.manage_all) may put a
@@ -139,6 +147,20 @@ export function TaskFormDialog({
       toast.error(noClients ? 'Add a client first — every task belongs to one.' : 'Choose the client this task is for.')
       return
     }
+    // §4: a due date is required for every NEW task — the on-time KPI depends
+    // on it. Editing an old card may leave it blank (legacy stays excluded).
+    if (!task && !form.dueDate) {
+      toast.error('Every new task needs a due date.')
+      return
+    }
+    const estimatedHours =
+      form.estimatedHours.trim() === ''
+        ? null
+        : Number(form.estimatedHours)
+    if (estimatedHours != null && (!Number.isFinite(estimatedHours) || estimatedHours < 0)) {
+      toast.error('Estimated hours must be a positive number.')
+      return
+    }
     setSaving(true)
     try {
       if (task) {
@@ -149,6 +171,10 @@ export function TaskFormDialog({
           status: form.status,
           priority: form.priority,
           due_date: form.dueDate || null,
+          estimated_hours: estimatedHours,
+          ...(form.status === 'waiting' && form.waitingReason
+            ? { waiting_reason: form.waitingReason }
+            : {}),
           ...(canAssign ? { worker_id: form.workerId } : {}),
         })
         if (!saved) return
@@ -161,7 +187,11 @@ export function TaskFormDialog({
           description: form.description.trim() || null,
           status: form.status,
           priority: form.priority,
-          due_date: form.dueDate || null,
+          due_date: form.dueDate,
+          estimated_hours: estimatedHours,
+          ...(form.status === 'waiting' && form.waitingReason
+            ? { waiting_reason: form.waitingReason }
+            : {}),
         })
         if (!created) return
         toast.success('Task added.')
@@ -280,14 +310,56 @@ export function TaskFormDialog({
               </div>
 
               <div className="grid gap-2">
-                <Label htmlFor="task-due">Due date</Label>
+                <Label htmlFor="task-due">Due date{task ? '' : ' *'}</Label>
                 <Input
                   id="task-due"
                   type="date"
                   value={form.dueDate}
                   onChange={(e) => set('dueDate', e.target.value)}
+                  required={!task}
                 />
+                {!task && (
+                  <p className="text-[11px] text-muted-foreground">Required for the on-time KPI.</p>
+                )}
               </div>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-2">
+                <Label htmlFor="task-est">Estimated hours</Label>
+                <Input
+                  id="task-est"
+                  type="number"
+                  min="0"
+                  step="0.25"
+                  value={form.estimatedHours}
+                  onChange={(e) => set('estimatedHours', e.target.value)}
+                  placeholder="e.g. 6.5"
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Drives the schedule-aware workload view on Team KPI.
+                </p>
+              </div>
+
+              {form.status === 'waiting' && (
+                <div className="grid gap-2">
+                  <Label htmlFor="task-wait">Why is it waiting?</Label>
+                  <Select
+                    value={form.waitingReason || 'client'}
+                    onValueChange={(v) => set('waitingReason', v as WaitingReason)}
+                  >
+                    <SelectTrigger id="task-wait"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {WAITING_REASONS.map((r) => (
+                        <SelectItem key={r} value={r}>{WaitingReasonNames[r]}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-[11px] text-muted-foreground">
+                    Client-caused waits don’t count against the employee.
+                  </p>
+                </div>
+              )}
             </div>
           </div>
 

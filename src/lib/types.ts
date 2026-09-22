@@ -34,8 +34,42 @@ export interface Worker {
    * Enforced in the app, in both backends and — with Supabase — in RLS.
    */
   permissions: Permission[]
+  /**
+   * The days this worker actually works — 0=Sun … 6=Sat. Workload capacity,
+   * due-date aging and every business-day calculation respect this instead of
+   * assuming a Mon–Fri week (e.g. Tue–Sat staff have no Monday, but do have a
+   * Saturday). Defaults to `DEFAULT_WORKDAYS` when a row predates the column.
+   */
+  workdays: number[]
+  /**
+   * Planned hours per week on those days (the budget behind the workload
+   * percentage). Defaults to `DEFAULT_WEEKLY_CAPACITY_HOURS`.
+   */
+  weekly_capacity_hours: number
   created_at: string
   updated_at: string
+}
+
+/** Mon–Fri — the default workweek when nobody has set one yet. */
+export const DEFAULT_WORKDAYS: number[] = [1, 2, 3, 4, 5]
+
+/** 40 hours/week — the default capacity behind workload percentages. */
+export const DEFAULT_WEEKLY_CAPACITY_HOURS = 40
+
+/** Every weekday label, in calendar order, for the schedule editor. */
+export const WEEKDAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const
+
+/** Keep a workday list usable: known weekday numbers only, sorted, at least one day. */
+export function normalizeWorkdays(value: unknown): number[] {
+  if (!Array.isArray(value)) return [...DEFAULT_WORKDAYS]
+  const days = [...new Set(value.filter((d): d is number => Number.isInteger(d) && d >= 0 && d <= 6))].sort()
+  return days.length > 0 ? days : [...DEFAULT_WORKDAYS]
+}
+
+/** Keep a weekly capacity usable: a positive finite number of hours. */
+export function normalizeWeeklyCapacity(value: unknown): number {
+  const n = Number(value)
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_WEEKLY_CAPACITY_HOURS
 }
 
 export interface TimeEntry {
@@ -148,6 +182,7 @@ export type Permission =
   | 'clients.manage'
   | 'settings.manage'
   | 'it_support.manage'
+  | 'team_kpi.view'
 
 export const PERMISSIONS: Permission[] = [
   'dashboard.view',
@@ -174,6 +209,10 @@ export const PERMISSIONS: Permission[] = [
   // it to a worker, and because it is a key the worker's row may carry; every
   // IT Support gate uses `isItSupport()` instead of `can()`.
   'it_support.manage',
+  // The Team KPI dashboard: the admin (Owner) always holds it, and it is what
+  // the Project Manager gets ticked. Bonus approval stays admin-only on top
+  // of this — see saveBonusDecision in the backends.
+  'team_kpi.view',
 ]
 
 /**
@@ -192,6 +231,9 @@ export const TEAM_VIEW_PERMISSIONS: Permission[] = [
   'finance.subscription',
   'finance.payroll',
   'reports.view',
+  // A KPI dashboard without the team list to go with the names would be
+  // numbers with nobody attached — same rule as the other team-wide screens.
+  'team_kpi.view',
 ]
 
 /**
@@ -251,6 +293,18 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
     items: [
       { key: 'tasks.view_all', label: "View everyone's board", hint: 'Otherwise they only see the tasks assigned to them.' },
       { key: 'tasks.manage_all', label: "Assign and edit anyone's tasks", hint: 'Create tasks for other workers, move, edit and delete their cards.', requires: 'tasks.view_all' },
+    ],
+  },
+  {
+    key: 'team_kpi',
+    label: 'Team KPI',
+    description: 'The management dashboard for performance, workload and quality.',
+    items: [
+      {
+        key: 'team_kpi.view',
+        label: 'Use the Team KPI dashboard',
+        hint: 'See the whole team’s KPI scores, on-time %, workload, QA, rework, goals and Needs Attention — plus QA scoring and monthly targets. For the Project Manager. Bonus approval stays admin-only.',
+      },
     ],
   },
   {
@@ -361,7 +415,7 @@ export const PERMISSION_PRESETS: Record<PermissionPreset, { label: string; descr
   },
   manager: {
     label: 'Manager',
-    description: 'Supervisor plus time entries, clients, payments, finance (read) and reports.',
+    description: 'Supervisor plus time entries, clients, payments, finance (read), reports and Team KPI.',
     permissions: [
       'dashboard.view',
       'workers.view',
@@ -374,6 +428,7 @@ export const PERMISSION_PRESETS: Record<PermissionPreset, { label: string; descr
       'finance.view',
       'reports.view',
       'clients.manage',
+      'team_kpi.view',
     ],
   },
   full: {
@@ -504,8 +559,10 @@ export type SlackEvent =
   | 'task_created'
   | 'task_moved'
   // Approval-stage automation (posted to the dedicated Approval webhook): a
-  // task that lands on the Approval column, whether it was created there or
-  // moved onto it — a heads-up for the admin to review, whoever triggered it.
+  // task that lands on the For Review column, whether it was created there or
+  // moved onto it — a heads-up for the Owner/PM to run QA, whoever triggered
+  // it. (Event keys keep their historical `approval` name so stored Slack
+  // settings stay valid; the stage is now "For Review".)
   | 'task_approval_created'
   | 'task_approval_moved'
 
@@ -518,8 +575,8 @@ export const SlackEventNames: Record<SlackEvent, string> = {
   payment_paid: 'Payment paid',
   task_created: 'Task created',
   task_moved: 'Task stage changed',
-  task_approval_created: 'Task created in Approval',
-  task_approval_moved: 'Task moved to Approval',
+  task_approval_created: 'Task created in For Review',
+  task_approval_moved: 'Task moved to For Review',
 }
 
 /**
@@ -938,17 +995,134 @@ export interface UpdateTicketInput {
 /**
  * Columns of the task board. Tasks move between them by drag & drop (or the
  * "Move to" menu on touch devices); the order is the order they appear in.
+ *
+ * The workflow these encode:
+ *   TO DO → IN PROGRESS → WAITING → FOR REVIEW → REWORK → COMPLETED
+ * Waiting is a side-pile (blocked on someone/something) and Rework is a loop
+ * back to the employee after QA — the linear order here is the board's column
+ * order, not a strict state machine (drag & drop stays free).
  */
-export type TaskStatus = 'todo' | 'in_progress' | 'waiting' | 'approval' | 'completed'
+export type TaskStatus = 'todo' | 'in_progress' | 'waiting' | 'for_review' | 'rework' | 'completed'
 
-export const TASK_STATUSES: TaskStatus[] = ['todo', 'in_progress', 'waiting', 'approval', 'completed']
+export const TASK_STATUSES: TaskStatus[] = ['todo', 'in_progress', 'waiting', 'for_review', 'rework', 'completed']
 
 export const TaskStatusNames: Record<TaskStatus, string> = {
   todo: 'To Do',
   in_progress: 'In Progress',
   waiting: 'Waiting',
-  approval: 'Approval',
+  for_review: 'For Review',
+  rework: 'Rework',
   completed: 'Completed',
+}
+
+/**
+ * Map a stored status onto the current stage vocabulary. The pre-KPI board
+ * called the QA column `approval`; those rows keep working by reading as
+ * `for_review`. Anything unrecognised falls back to To Do (same rule both
+ * backends already applied for unknown values).
+ */
+export function normalizeTaskStage(value: unknown): TaskStatus {
+  if (value === 'approval') return 'for_review'
+  return TASK_STATUSES.includes(value as TaskStatus) ? (value as TaskStatus) : 'todo'
+}
+
+/** Why a task sits in Waiting — kept on the card so blocked aging is explainable. */
+export type WaitingReason =
+  | 'client'
+  | 'manager'
+  | 'teammate'
+  | 'access'
+  | 'approval'
+  | 'external'
+  | 'other'
+
+export const WAITING_REASONS: WaitingReason[] = ['client', 'manager', 'teammate', 'access', 'approval', 'external', 'other']
+
+export const WaitingReasonNames: Record<WaitingReason, string> = {
+  client: 'Waiting on Client',
+  manager: 'Waiting on Manager',
+  teammate: 'Waiting on Teammate',
+  access: 'Waiting on Access',
+  approval: 'Waiting on Approval',
+  external: 'External Dependency',
+  other: 'Other',
+}
+
+/** Reasons a reviewer can pick when sending work back — split by whose fault. */
+export type ReworkType =
+  // Counts against the employee's KPI:
+  | 'incorrect_work'
+  | 'missing_requirement'
+  | 'incomplete_work'
+  | 'did_not_follow_instructions'
+  | 'qa_correction'
+  // Does NOT count against the employee:
+  | 'client_requested_change'
+  | 'scope_changed'
+  | 'new_requirement'
+  | 'missing_client_info'
+  | 'access_issue'
+
+export const REWORK_TYPES: ReworkType[] = [
+  'incorrect_work',
+  'missing_requirement',
+  'incomplete_work',
+  'did_not_follow_instructions',
+  'qa_correction',
+  'client_requested_change',
+  'scope_changed',
+  'new_requirement',
+  'missing_client_info',
+  'access_issue',
+]
+
+export const ReworkTypeNames: Record<ReworkType, string> = {
+  incorrect_work: 'Incorrect work',
+  missing_requirement: 'Missing requirement',
+  incomplete_work: 'Incomplete work',
+  did_not_follow_instructions: 'Did not follow instructions',
+  qa_correction: 'QA correction',
+  client_requested_change: 'Client requested change',
+  scope_changed: 'Scope changed',
+  new_requirement: 'New requirement',
+  missing_client_info: 'Missing client information',
+  access_issue: 'Access/system issue',
+}
+
+/** The rework reasons that are the employee's responsibility (see §11). */
+export const EMPLOYEE_CAUSED_REWORK: ReworkType[] = [
+  'incorrect_work',
+  'missing_requirement',
+  'incomplete_work',
+  'did_not_follow_instructions',
+  'qa_correction',
+]
+
+/** True when a rework reason counts against the employee's KPI. */
+export function isEmployeeCausedRework(type: ReworkType | null | undefined): boolean {
+  return !!type && EMPLOYEE_CAUSED_REWORK.includes(type)
+}
+
+/** QA scale: 5 Excellent → 1 Major rework. */
+export type QaScore = 1 | 2 | 3 | 4 | 5
+
+export const QA_SCORE_NAMES: Record<QaScore, string> = {
+  5: 'Excellent — no corrections',
+  4: 'Good — minor correction',
+  3: 'Acceptable — several corrections',
+  2: 'Significant correction',
+  1: 'Major rework',
+}
+
+/** One hop on a task's stage history — the audit trail behind every KPI number. */
+export interface TaskStageEvent {
+  /** Stage the task came from (null when the task was created into `to`). */
+  from: TaskStatus | null
+  to: TaskStatus
+  /** ISO instant of the hop. */
+  at: string
+  /** Who moved it (display name), best-effort. */
+  by: string | null
 }
 
 export type TaskPriority = 'low' | 'medium' | 'high'
@@ -981,8 +1155,39 @@ export interface Task {
   description: string | null
   status: TaskStatus
   priority: TaskPriority
-  /** Optional deadline (ISO date, no time component needed). */
+  /** Optional deadline (ISO date, no time component needed). Required on new
+   *  tasks; null only on legacy rows predating the rule — those are marked
+   *  "Legacy / No Due Date" and excluded from on-time KPI math. */
   due_date: string | null
+  /**
+   * The due date the task first MISSED, preserved when a deadline is pushed
+   * after it has already passed — so KPI history can't be silently rewritten
+   * by extending a date the task was already late against.
+   */
+  original_due_date: string | null
+  /** Estimated hours — the primary workload input (see Team KPI). */
+  estimated_hours: number | null
+  /** Stage timestamps, stamped automatically on the transitions below. */
+  assigned_at: string | null
+  started_at: string | null
+  waiting_since: string | null
+  submitted_for_review_at: string | null
+  rework_started_at: string | null
+  // completed_at is declared below with the rest of the row metadata.
+  /** Why the task is Waiting (set while it sits in that column). */
+  waiting_reason: WaitingReason | null
+  /** QA score 1–5 left by the Owner/PM when the review finished. */
+  qa_score: QaScore | null
+  qa_reviewed_at: string | null
+  /** Display name of whoever scored it (reviewer responsible). */
+  qa_reviewed_by: string | null
+  /** Did the reviewer send it back? null = not reviewed yet. */
+  rework_required: boolean | null
+  /** Why it went back — drives whether the rework counts against the employee. */
+  rework_type: ReworkType | null
+  rework_notes: string | null
+  /** Every stage hop since creation (created → … → current). */
+  stage_history: TaskStageEvent[]
   /** Manual ordering inside a column (smaller sorts first). */
   position: number
   /** Who created the task — used for the "Added by admin" hint. */
@@ -993,6 +1198,71 @@ export interface Task {
   archived_at: string | null
   created_at: string
   updated_at: string
+}
+
+// ---- Team KPI: monthly goals, bonus decisions, audit trail -----------------
+
+/**
+ * One employee's targets for one month ('YYYY-MM'). The management inputs on
+ * the Team KPI dashboard are exactly these (plus QA scores and bonus
+ * approval) — no employee ever types a KPI number. A missing row means the
+ * defaults: 90% on-time, 90% QA, and no output target yet (the goal component
+ * stays out of the KPI score until a target exists).
+ */
+export interface MonthlyGoal {
+  id: string
+  worker_id: string
+  /** 'YYYY-MM'. */
+  month: string
+  /** Planned output for the month (deliverables/tasks, role-specific). */
+  target: number | null
+  /** On-time % target — 90 by default, 95 for e.g. the Social Media Manager. */
+  on_time_target: number | null
+  /** QA % target (90 by default). */
+  qa_target: number | null
+  note: string | null
+  created_at: string
+  updated_at: string
+}
+
+/** Bonus review state. NEVER auto-set from the KPI score — manual only. */
+export type BonusEligibility = 'pending' | 'yes' | 'no'
+
+/**
+ * The Owner's manual bonus decision for one employee for one month. Defaults
+ * to 'pending' when no row exists yet. Editing requires the admin role — a
+ * Project Manager with `team_kpi.view` may read but not change it.
+ */
+export interface BonusDecision {
+  id: string
+  worker_id: string
+  /** 'YYYY-MM'. */
+  month: string
+  eligible: BonusEligibility
+  /** Optional approved amount in the workspace currency. */
+  approved_amount: number | null
+  /** Display name of who approved (audit). */
+  approved_by: string | null
+  note: string | null
+  created_at: string
+  updated_at: string
+}
+
+/** Append-only audit entries for everything KPI-sensitive (QA, rework, due
+ *  dates, bonus) — the history that stops KPI records being rewritten quietly. */
+export interface KpiAuditEvent {
+  id: string
+  entity_type: 'task' | 'bonus' | 'goal'
+  entity_id: string
+  /** The employee the event is about, for per-person filtering. */
+  worker_id: string | null
+  /** Short machine action: 'qa_scored' | 'rework_classified' | 'due_date_changed' | 'bonus_decided' | … */
+  action: string
+  /** Human-readable line for the audit list. */
+  detail: string
+  /** Display name of the actor. */
+  actor: string
+  created_at: string
 }
 
 export interface Payment {

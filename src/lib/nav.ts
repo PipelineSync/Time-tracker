@@ -29,6 +29,7 @@ export type NavKey =
   | 'entriesMine'
   | 'tasksAll'
   | 'tasksMine'
+  | 'teamKpi'
   | 'priorityBoard'
   | 'meetings'
   | 'invoicing'
@@ -80,6 +81,8 @@ export function buildNavPlan(
         'dashboard',
         'entriesAll',
         'tasksAll',
+        // Between Tasks and Invoicing, per the KPI spec.
+        'teamKpi',
         'priorityBoard',
         'meetings',
         'invoicing',
@@ -106,6 +109,8 @@ export function buildNavPlan(
   if (can('dashboard.view')) granted.push('dashboard')
   if (can('entries.view_all')) granted.push('entriesAll')
   if (can('tasks.view_all')) granted.push('tasksAll')
+  // Team KPI: Owner (admin implies it) + Project Managers with `team_kpi.view`.
+  if (can('team_kpi.view')) granted.push('teamKpi')
   if (can('priority_board.view')) granted.push('priorityBoard')
   if (can('meetings.view')) granted.push('meetings')
   if (can('invoices.view')) granted.push('invoicing')

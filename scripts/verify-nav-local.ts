@@ -97,18 +97,28 @@ function main() {
   assert(financed.includes('finance'), 'finance.view adds "Finance"')
   assert(financed.includes('payroll'), 'a worker keeps their own "Payroll" (own payments) alongside Finance')
 
+  // ---- Team KPI: Owner always; a Project Manager only with the grant -----
+  const pm = buildNavPlan(false, canFor(['team_kpi.view']))
+  const pmKeys = keysOf(pm)
+  assert(pmKeys.includes('teamKpi'), 'team_kpi.view adds "Team KPI"')
+  assert(
+    !!pm.find((sec) => sec.title === 'Access Granted')?.items.includes('teamKpi'),
+    'Team KPI sits under "Access Granted" for a granted Project Manager',
+  )
+  assert(!plainKeys.includes('teamKpi'), 'a worker with no grants gets no Team KPI')
+
   // ---- 4. the admin: one full section, no headings, nothing personal -----
   const admin = buildNavPlan(true, () => true)
   const adminKeys = keysOf(admin)
   assert(admin.length === 1 && admin[0].title === '', 'the admin gets a single heading-less section')
-  for (const key of ['dashboard', 'entriesAll', 'tasksAll', 'priorityBoard', 'meetings', 'invoicing', 'notepad', 'finance', 'workers', 'reports', 'settings'] as NavKey[]) {
+  for (const key of ['dashboard', 'entriesAll', 'tasksAll', 'teamKpi', 'priorityBoard', 'meetings', 'invoicing', 'notepad', 'finance', 'workers', 'reports', 'settings'] as NavKey[]) {
     assert(adminKeys.includes(key), `the admin keeps "${key}"`)
   }
   assert(!adminKeys.includes('entriesMine') && !adminKeys.includes('tasksMine'), 'the admin nav has no worker-only twins')
   assert(new Set(adminKeys).size === adminKeys.length, 'the admin nav has no duplicates either')
 
   // ---- 5. a worker never sees an admin-only destination ------------------
-  const workerAdminScreens: NavKey[] = ['dashboard', 'workers', 'reports', 'priorityBoard', 'meetings', 'invoicing', 'finance']
+  const workerAdminScreens: NavKey[] = ['dashboard', 'workers', 'reports', 'teamKpi', 'priorityBoard', 'meetings', 'invoicing', 'finance']
   assert(
     workerAdminScreens.every((k) => !plainKeys.includes(k)),
     'a worker with no grants sees no admin-only destination',

@@ -48,8 +48,8 @@ async function main() {
   const client = clients.data!.find((c) => c.status === 'active')!
 
   // 2) Two tasks created one after another: the SECOND must be on top.
-  const a = await localBackend.createTask({ worker_id: john.id, client_id: client.id, title: 'VT-A created first', status: 'todo' })
-  const b = await localBackend.createTask({ worker_id: john.id, client_id: client.id, title: 'VT-B created second', status: 'todo' })
+  const a = await localBackend.createTask({ due_date: '2099-12-31', worker_id: john.id, client_id: client.id, title: 'VT-A created first', status: 'todo' })
+  const b = await localBackend.createTask({ due_date: '2099-12-31', worker_id: john.id, client_id: client.id, title: 'VT-B created second', status: 'todo' })
   assert(!a.error && !b.error, 'both test tasks created')
   let todo = columnOrder((await localBackend.listTasks()).data!, john.id, 'todo')
   assert(todo[0]?.title === 'VT-B created second', 'newest task sits at the very TOP of the column (not the bottom)')
@@ -75,7 +75,7 @@ async function main() {
   assert(sarahTodo[0]?.id === b.data!.id, "reassigned task is at the TOP of the new worker's column")
 
   // 5) An explicit drag-drop position is still honoured (NOT forced to top).
-  const c = await localBackend.createTask({ worker_id: john.id, client_id: client.id, title: 'VT-C', status: 'todo' })
+  const c = await localBackend.createTask({ due_date: '2099-12-31', worker_id: john.id, client_id: client.id, title: 'VT-C', status: 'todo' })
   assert(!c.error, 'another task created')
   todo = columnOrder((await localBackend.listTasks()).data!, john.id, 'todo')
   const bottom = todo.length - 1
@@ -85,8 +85,8 @@ async function main() {
   assert(todo[bottom]?.id === c.data!.id, 'explicit drop index is honoured (card dropped at the bottom stays at the bottom)')
 
   // 6) Archiving & restoring completed tasks.
-  const comp1 = await localBackend.createTask({ worker_id: john.id, client_id: client.id, title: 'VT-Comp-1', status: 'completed' })
-  const comp2 = await localBackend.createTask({ worker_id: john.id, client_id: client.id, title: 'VT-Comp-2', status: 'completed' })
+  const comp1 = await localBackend.createTask({ due_date: '2099-12-31', worker_id: john.id, client_id: client.id, title: 'VT-Comp-1', status: 'completed' })
+  const comp2 = await localBackend.createTask({ due_date: '2099-12-31', worker_id: john.id, client_id: client.id, title: 'VT-Comp-2', status: 'completed' })
   assert(!comp1.error && !comp2.error, 'completed tasks created')
   assert(comp1.data!.completed_at !== null, 'completed task has completed_at timestamp')
   assert(comp1.data!.archived_at === null, 'newly completed task starts unarchived')

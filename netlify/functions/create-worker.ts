@@ -34,6 +34,8 @@ const PERMISSIONS = [
   // own capability set (the queue belongs to whoever runs support), but it is
   // still a key the admin may hand to a worker.
   'it_support.manage',
+  // Team KPI dashboard (Owner implies it; this is the Project Manager's tick).
+  'team_kpi.view',
 ] as const
 
 /** Never trust the client with the grant list — keep only known keys. */
@@ -52,6 +54,8 @@ export default async function handler(request: Request) {
   try {
     const body = await request.json() as {
       name?: string; email?: string; hourly_rate?: number; status?: 'active' | 'inactive';
+      position?: string | null;
+      workdays?: unknown; weekly_capacity_hours?: unknown;
       permissions?: unknown; accountEmail?: string; accountPassword?: string
     }
     const name = (body.name || '').trim()
@@ -60,6 +64,19 @@ export default async function handler(request: Request) {
     const status = body.status === 'inactive' ? 'inactive' : 'active'
     const password = body.accountPassword || ''
     const permissions = cleanPermissions(body.permissions)
+    const position = (body.position || '').trim() || null
+    // Schedule (Team KPI workload): day indexes 0–6 (Sun–Sat) and a positive
+    // weekly capacity, defaulting to the standard Mon–Fri / 40h week.
+    const days = Array.isArray(body.workdays)
+      ? [...new Set(body.workdays.filter((d): d is number => Number.isInteger(d) && d >= 0 && d <= 6))].sort()
+      : []
+    const schedule = {
+      workdays: days.length > 0 ? days : [1, 2, 3, 4, 5],
+      weekly_capacity_hours:
+        Number.isFinite(Number(body.weekly_capacity_hours)) && Number(body.weekly_capacity_hours) > 0
+          ? Number(body.weekly_capacity_hours)
+          : 40,
+    }
 
     if (!name) return json(400, { error: 'Worker name is required.' })
     if (!email) return json(400, { error: 'Worker login email is required.' })
@@ -74,13 +91,26 @@ export default async function handler(request: Request) {
     if (authError || !authData.user) return json(400, { error: authError?.message || 'Could not create worker login.' })
 
     const authUserId = authData.user.id
-    const row = { user_id: userId, name, email, hourly_rate: hourlyRate, status }
+    const row = { user_id: userId, name, email, hourly_rate: hourlyRate, status, position }
     let { data: worker, error: workerError } = await sb
       .from('workers')
-      .insert({ ...row, permissions })
+      .insert({ ...row, permissions, ...schedule })
       .select()
       .single()
     let warning: string | undefined
+    if (workerError && /workdays|weekly_capacity_hours/i.test(workerError.message || '')) {
+      // Database without supabase/RUN-THIS-team-kpi.sql: create the worker
+      // anyway — normalizeWorker() will fill the default Mon–Fri / 40h week.
+      ;({ data: worker, error: workerError } = await sb
+        .from('workers')
+        .insert({ ...row, permissions })
+        .select()
+        .single())
+      if (!workerError) {
+        warning =
+          'Work schedule was not saved: run supabase/RUN-THIS-team-kpi.sql to set per-worker workweeks for Team KPI.'
+      }
+    }
     if (
       workerError &&
       workerError.message &&
@@ -106,6 +136,11 @@ export default async function handler(request: Request) {
       // Database without supabase/worker-permissions.sql: still create the
       // worker, just without the extra access.
       ;({ data: worker, error: workerError } = await sb.from('workers').insert(row).select().single())
+    }
+    if (workerError && /position/i.test(workerError.message || '')) {
+      // Very old workers table without the position column.
+      const { user_id: _u, position: _p, ...bare } = row
+      ;({ data: worker, error: workerError } = await sb.from('workers').insert(bare).select().single())
     }
     if (workerError || !worker) {
       await sb.auth.admin.deleteUser(authUserId)

@@ -14,10 +14,12 @@ import {
   BadgeCheck,
   KanbanSquare,
   Search,
+  SearchCheck,
   X,
   Archive,
   ArchiveRestore,
   RotateCcw,
+  Timer,
 } from 'lucide-react'
 import { useStore } from '@/lib/store'
 import type { Task, TaskPriority, TaskStatus } from '@/lib/types'
@@ -29,6 +31,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/EmptyState'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { TaskFormDialog } from '@/components/TaskFormDialog'
+import { QaReviewDialog } from '@/components/QaReviewDialog'
 import { ClientBadge } from '@/components/ClientBadge'
 import { ClientSelect } from '@/components/ClientSelect'
 import { AvatarBubble } from '@/components/AvatarBubble'
@@ -36,6 +39,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { cn, formatDate, isOverdueDate } from '@/lib/utils'
 import { applyTaskFilters, isAnyBoardFilterActive, DEFAULT_BOARD_FILTERS, type BoardFilters } from '@/lib/taskFilters'
+import { taskHealthBadges } from '@/lib/kpi'
 import { toast } from 'sonner'
 
 /** Column accents — the board reads at a glance without a legend. */
@@ -43,19 +47,21 @@ const columnStyles: Record<TaskStatus, { icon: typeof Circle; dot: string; ring:
   todo: { icon: Circle, dot: 'bg-slate-400', ring: 'ring-slate-400/40' },
   in_progress: { icon: Loader2, dot: 'bg-amber-500', ring: 'ring-amber-500/40' },
   waiting: { icon: PauseCircle, dot: 'bg-orange-500', ring: 'ring-orange-500/40' },
-  approval: { icon: BadgeCheck, dot: 'bg-violet-500', ring: 'ring-violet-500/40' },
+  for_review: { icon: BadgeCheck, dot: 'bg-violet-500', ring: 'ring-violet-500/40' },
+  rework: { icon: RotateCcw, dot: 'bg-rose-500', ring: 'ring-rose-500/40' },
   completed: { icon: CheckCircle2, dot: 'bg-emerald-500', ring: 'ring-emerald-500/40' },
 }
 
 /**
  * Soft column tints — each stage sits in its own gently coloured lane, so the
- * five columns read as five piles at a glance.
+ * six columns read as six piles at a glance.
  */
 const columnTint: Record<TaskStatus, string> = {
   todo: 'bg-slate-100/80 dark:bg-slate-400/10',
   in_progress: 'bg-sky-100/80 dark:bg-sky-400/10',
   waiting: 'bg-amber-100/80 dark:bg-amber-400/10',
-  approval: 'bg-violet-100/80 dark:bg-violet-400/10',
+  for_review: 'bg-violet-100/80 dark:bg-violet-400/10',
+  rework: 'bg-rose-100/80 dark:bg-rose-400/10',
   completed: 'bg-emerald-100/80 dark:bg-emerald-400/10',
 }
 
@@ -104,6 +110,9 @@ export function TaskBoard({
   // both, a worker has whatever was ticked on their row.
   const canViewAll = can('tasks.view_all')
   const canManageAll = can('tasks.manage_all')
+  // QA is the Owner's and the Project Manager's job (§10): anyone who can run
+  // the KPI dashboard can also score the cards waiting in For Review.
+  const canReview = can('team_kpi.view')
 
   const [activeTab, setActiveTab] = useState<'board' | 'archive'>('board')
   const [formOpen, setFormOpen] = useState(false)
@@ -112,6 +121,8 @@ export function TaskBoard({
   const [deleting, setDeleting] = useState<Task | null>(null)
   const [confirmArchiveAll, setConfirmArchiveAll] = useState(false)
   const [confirmRestoreAll, setConfirmRestoreAll] = useState(false)
+  /** The card whose QA review dialog is open (the For Review pile's action). */
+  const [reviewing, setReviewing] = useState<Task | null>(null)
 
   const patch = (p: Partial<BoardFilters>) => onFiltersChange({ ...filters, ...p })
 
@@ -152,6 +163,7 @@ export function TaskBoard({
 
   const workerName = (id: string) => workers.find((w) => w.id === id)?.name || 'Worker'
   const workerAvatar = (id: string) => workers.find((w) => w.id === id)?.avatar_url ?? null
+  const workerById = (id: string) => workers.find((w) => w.id === id)
   const clientOf = (id: string | null) => (id ? clients.find((c) => c.id === id) ?? null : null)
 
   const searchActive = filters.search.trim().length > 0
@@ -407,6 +419,13 @@ export function TaskBoard({
                 {formatDate(task.due_date)}
               </Badge>
             )}
+            {/* Estimated hours ride the card — they feed the workload %. */}
+            {task.estimated_hours != null && task.estimated_hours > 0 && (
+              <Badge variant="muted" className="gap-1 text-[10px]">
+                <Timer className="h-3 w-3" />
+                {task.estimated_hours}h
+              </Badge>
+            )}
             {/* On a team-wide board every card names its owner. */}
             {canViewAll && (
               <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
@@ -418,6 +437,20 @@ export function TaskBoard({
               <span className="text-[11px] text-muted-foreground">Assigned by admin</span>
             )}
           </div>
+
+          {/* Compact health chips: Due Today / 2 Days Overdue / Waiting 4 Days / … */}
+          {(() => {
+            const health = taskHealthBadges(task, workerById(task.worker_id)?.workdays ?? [1, 2, 3, 4, 5])
+            return health.length > 0 ? (
+              <div className="mt-1.5 flex flex-wrap gap-1">
+                {health.map((b) => (
+                  <span key={b.label} className={cn('rounded-full border px-1.5 py-0.5 text-[10px] font-semibold', b.tone)}>
+                    {b.label}
+                  </span>
+                ))}
+              </div>
+            ) : null
+          })()}
         </div>
 
         {/* Card actions stay out of sight until the card is hovered — the
@@ -425,6 +458,17 @@ export function TaskBoard({
         <div className="mt-2 flex items-center justify-between gap-1 border-t pt-2 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100">
           {/* Touch-friendly alternative to dragging. */}
           <div className="flex items-center gap-0.5">
+            {task.status === 'for_review' && canReview && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 gap-1 px-2 text-xs font-semibold text-violet-600 hover:text-violet-700 dark:text-violet-400"
+                aria-label={`Review "${task.title}"`}
+                onClick={() => setReviewing(task)}
+              >
+                <SearchCheck className="h-3.5 w-3.5" /> Review
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="icon"
@@ -1009,6 +1053,9 @@ export function TaskBoard({
         defaultWorkerId={canManageAll && filters.worker !== 'all' ? filters.worker : undefined}
         defaultClientId={filters.client !== 'all' ? filters.client : undefined}
       />
+
+      {/* QA scoring: accept → Completed, or send back → Rework (§10). */}
+      <QaReviewDialog open={!!reviewing} onOpenChange={(v) => !v && setReviewing(null)} task={reviewing} />
 
       {/* Delete task dialog */}
       <ConfirmDialog

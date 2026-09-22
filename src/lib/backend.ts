@@ -34,6 +34,10 @@ import type {
   FinanceKind,
   BillingCycle,
   FinanceStatus,
+  MonthlyGoal,
+  BonusDecision,
+  BonusEligibility,
+  KpiAuditEvent,
 } from './types'
 
 export interface BackendResult<T> {
@@ -53,6 +57,10 @@ export interface CreateWorkerInput {
   position?: string
   /** Admin capabilities to grant this worker (default: none). */
   permissions?: Permission[]
+  /** Workdays (0=Sun…6=Sat); defaults to Mon–Fri. */
+  workdays?: number[]
+  /** Weekly capacity in hours; defaults to 40. */
+  weekly_capacity_hours?: number
   // Login details for the worker's account (admin-created).
   accountEmail?: string
   accountPassword?: string
@@ -75,7 +83,32 @@ export interface CreateTaskInput {
   description?: string | null
   status?: TaskStatus
   priority?: Task['priority']
+  /** Required on new tasks (§4) — legacy rows are the only null due dates. */
   due_date?: string | null
+  /** Estimated hours — the primary workload input. */
+  estimated_hours?: number | null
+}
+
+/** Management input: one employee's targets for one month (§9). */
+export interface CreateMonthlyGoalInput {
+  worker_id: string
+  /** 'YYYY-MM'. */
+  month: string
+  /** Planned output for the month; null/undefined keeps the previous value. */
+  target?: number | null
+  on_time_target?: number | null
+  qa_target?: number | null
+  note?: string | null
+}
+
+/** Owner-only: the manual bonus decision for one employee for one month. */
+export interface SaveBonusDecisionInput {
+  worker_id: string
+  /** 'YYYY-MM'. */
+  month: string
+  eligible?: BonusEligibility
+  approved_amount?: number | null
+  note?: string | null
 }
 
 /**
@@ -321,10 +354,22 @@ export interface DataBackend {
   updateTask(id: string, patch: Partial<Omit<Task, 'id' | 'created_at' | 'updated_at'>>): Promise<BackendResult<Task>>
   /**
    * Drag & drop: move a task into `status` at index `position` of that column.
-   * Kept separate from updateTask so the backend owns the re-indexing.
+   * Kept separate from updateTask so the backend owns the re-indexing. Also
+   * stamps the stage timestamps and appends to stage_history (§3).
    */
   moveTask(id: string, status: TaskStatus, position: number): Promise<BackendResult<Task>>
   deleteTask(id: string): Promise<BackendResult<null>>
+
+  // ---- Team KPI (Owner + Project Manager via `team_kpi.view`) ----
+  /** One row per employee per month of configured targets. Empty for anyone without the grant. */
+  listMonthlyGoals(): Promise<BackendResult<MonthlyGoal[]>>
+  /** Upsert one employee's targets for one month. `team_kpi.view` required. */
+  saveMonthlyGoal(input: CreateMonthlyGoalInput): Promise<BackendResult<MonthlyGoal>>
+  /** Manual bonus decisions. Readable with `team_kpi.view`; writing is Owner-only. */
+  listBonusDecisions(): Promise<BackendResult<BonusDecision[]>>
+  saveBonusDecision(input: SaveBonusDecisionInput): Promise<BackendResult<BonusDecision>>
+  /** Append-only QA / due-date / bonus audit history (newest first). */
+  listKpiAudit(limit?: number): Promise<BackendResult<KpiAuditEvent[]>>
 
   /**
    * The client priority board's rows (which column + rank each ranked client

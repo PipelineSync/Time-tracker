@@ -1,5 +1,5 @@
 import type { Task, TaskPriority, TaskStatus } from '@/lib/types'
-import { TASK_STATUSES } from '@/lib/types'
+import { normalizeTaskStage, TASK_STATUSES } from '@/lib/types'
 import { daysUntilDue, isOverdueDate } from '@/lib/utils'
 
 /**
@@ -115,7 +115,9 @@ export function boardFiltersFromParams(p: URLSearchParams): BoardFilters {
   const worker = p.get('worker')
   if (worker) f.worker = worker
   const stage = p.get('stage')
-  if (stage && (TASK_STATUSES as string[]).includes(stage)) f.stage = stage as TaskStatus
+  // Old links may still say `approval` — the QA column is now `for_review`.
+  if (stage === 'approval') f.stage = 'for_review'
+  else if (stage && (TASK_STATUSES as string[]).includes(stage)) f.stage = normalizeTaskStage(stage)
   const client = p.get('client')
   if (client) f.client = client
   const priority = p.get('priority')
