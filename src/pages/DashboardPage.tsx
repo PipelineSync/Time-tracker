@@ -30,7 +30,7 @@ type Period = 'all' | 'week' | 'month' | 'custom'
 
 /**
  * The team task tracker: the team's command centre. Five big summary cards
- * (overdue, due today, high priority, waiting/blocked, needs approval) plus
+ * (overdue, due today, high priority, waiting/blocked, awaiting review) plus
  * an auto-generated "Today's focus" on top, a collapsible "on the clock"
  * strip, and the Team Workload Overview table.
  *
@@ -80,15 +80,15 @@ export function DashboardPage() {
     let dueToday = 0
     let high = 0
     let waiting = 0
-    let approval = 0
+    let forReview = 0
     for (const t of activeTasks) {
       if (t.status !== 'completed' && isOverdueDate(t.due_date)) overdue++
       if (t.status !== 'completed' && daysUntilDue(t.due_date) === 0) dueToday++
       if (t.priority === 'high') high++
       if (t.status === 'waiting') waiting++
-      if (t.status === 'approval') approval++
+      if (t.status === 'for_review') forReview++
     }
-    return { overdue, dueToday, high, waiting, approval }
+    return { overdue, dueToday, high, waiting, forReview }
   }, [activeTasks])
 
   /** When the newest visible task last changed — the "Last updated" stamp. */
@@ -99,24 +99,33 @@ export function DashboardPage() {
     if (!canViewAll) return []
     const countsFor = new Map<
       string,
-      { todo: number; in_progress: number; waiting: number; approval: number; overdue: number; lastUpdated: string }
+      {
+        todo: number
+        in_progress: number
+        waiting: number
+        for_review: number
+        rework: number
+        overdue: number
+        lastUpdated: string
+      }
     >()
     for (const w of workers)
-      countsFor.set(w.id, { todo: 0, in_progress: 0, waiting: 0, approval: 0, overdue: 0, lastUpdated: '' })
+      countsFor.set(w.id, { todo: 0, in_progress: 0, waiting: 0, for_review: 0, rework: 0, overdue: 0, lastUpdated: '' })
     for (const t of activeTasks) {
       const row = countsFor.get(t.worker_id)
       if (!row) continue
       if (t.status === 'todo') row.todo++
       else if (t.status === 'in_progress') row.in_progress++
       else if (t.status === 'waiting') row.waiting++
-      else if (t.status === 'approval') row.approval++
+      else if (t.status === 'for_review') row.for_review++
+      else if (t.status === 'rework') row.rework++
       if (t.status !== 'completed' && isOverdueDate(t.due_date)) row.overdue++
       if (t.updated_at > row.lastUpdated) row.lastUpdated = t.updated_at
     }
     return workers
       .map((w) => {
-        const c = countsFor.get(w.id) ?? { todo: 0, in_progress: 0, waiting: 0, approval: 0, overdue: 0, lastUpdated: '' }
-        const total = c.todo + c.in_progress + c.waiting + c.approval
+        const c = countsFor.get(w.id) ?? { todo: 0, in_progress: 0, waiting: 0, for_review: 0, rework: 0, overdue: 0, lastUpdated: '' }
+        const total = c.todo + c.in_progress + c.waiting + c.for_review + c.rework
         return { worker: w, counts: c, total, overdue: c.overdue, lastUpdated: c.lastUpdated || undefined }
       })
       // Inactive members stay off the panel unless they still carry tasks.
@@ -151,11 +160,11 @@ export function DashboardPage() {
         label: `Check ${stats.waiting} blocked item${stats.waiting === 1 ? '' : 's'}`,
         onClick: () => goToBoard({ stage: 'waiting' }),
       })
-    if (stats.approval > 0)
+    if (stats.forReview > 0)
       items.push({
-        id: 'approvals',
-        label: `Approve ${stats.approval} pending task${stats.approval === 1 ? '' : 's'}`,
-        onClick: () => goToBoard({ stage: 'approval' }),
+        id: 'reviews',
+        label: `Review ${stats.forReview} task${stats.forReview === 1 ? '' : 's'} waiting for QA`,
+        onClick: () => goToBoard({ stage: 'for_review' }),
       })
     // Workload balance: one member heavy while another has room.
     if (canViewAll) {
@@ -319,11 +328,11 @@ export function DashboardPage() {
         <DashboardStatCard
           icon={BadgeCheck}
           iconCls="bg-violet-500/10 text-violet-600 dark:text-violet-400"
-          value={stats.approval}
-          label="Needs Approval"
-          sub={stats.approval > 0 ? 'Awaiting review' : 'Queue is clear'}
-          onClick={() => goToBoard({ stage: 'approval' })}
-          hint="Open the board filtered to the Approval column"
+          value={stats.forReview}
+          label="Awaiting Review"
+          sub={stats.forReview > 0 ? 'Waiting for QA' : 'Queue is clear'}
+          onClick={() => goToBoard({ stage: 'for_review' })}
+          hint="Open the board filtered to the For Review column"
           loading={loading}
         />
         <div className="min-w-0 sm:col-span-2 md:col-span-3 xl:col-span-1">

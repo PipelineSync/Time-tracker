@@ -75,6 +75,7 @@ async function main() {
   const clients = (await localBackend.listClients()).data || []
   const client = clients.find((c) => c.status === 'active')!
   const patTask = (await localBackend.createTask({
+    due_date: '2099-12-31',
     worker_id: plain.id,
     client_id: client.id,
     title: "Pat's own job",
@@ -110,7 +111,7 @@ async function main() {
     'they only see their own payments'
   )
 
-  const stolenTask = await localBackend.createTask({ worker_id: other.id, client_id: client.id, title: 'Not mine' })
+  const stolenTask = await localBackend.createTask({ due_date: '2099-12-31', worker_id: other.id, client_id: client.id, title: 'Not mine' })
   assert(stolenTask.data?.worker_id === plain.id, 'a task they create is forced onto their own board')
   const patAddsWorker = await localBackend.createWorker({ name: 'Ghost', hourly_rate: 1 })
   assert(!!patAddsWorker.error && patAddsWorker.error.includes('permission'), 'they cannot add workers')
@@ -142,7 +143,7 @@ async function main() {
   assert(lenaEntries.some((e) => e.worker_id === other.id), "they see other workers' time")
   const lenaTasks = (await localBackend.listTasks()).data || []
   assert(lenaTasks.some((t) => t.id === patTask.id), "they see other workers' tasks")
-  const assigned = await localBackend.createTask({ worker_id: plain.id, client_id: client.id, title: 'For Pat' })
+  const assigned = await localBackend.createTask({ due_date: '2099-12-31', worker_id: plain.id, client_id: client.id, title: 'For Pat' })
   assert(assigned.data?.worker_id === plain.id, 'they can assign work to someone else')
   const moved = await localBackend.updateTask(patTask.id, { status: 'in_progress' })
   assert(!moved.error, "they can move another worker's card")
@@ -245,6 +246,7 @@ async function main() {
   await localBackend.updateWorker(lead.id, { permissions: [...PERMISSION_PRESETS.supervisor.permissions] })
   await localBackend.signIn('lena@example.com', 'worker123')
   const ownTask = await localBackend.createTask({
+    due_date: '2099-12-31',
     // worker_id deliberately omitted — mirrors what the form used to send
     // when its `canAssign` was briefly out of sync with the backend.
     client_id: client.id,
@@ -258,7 +260,7 @@ async function main() {
   // And a regular worker (no tasks.manage_all) without a worker_id still
   // lands on their own board — that path has not changed.
   await localBackend.signIn('pat@example.com', 'worker123')
-  const patOwnTask = await localBackend.createTask({ client_id: client.id, title: 'Pat\'s own task (no worker_id)' })
+  const patOwnTask = await localBackend.createTask({ due_date: '2099-12-31', client_id: client.id, title: 'Pat\'s own task (no worker_id)' })
   assert(
     !patOwnTask.error && patOwnTask.data?.worker_id === plain.id,
     `a regular worker without worker_id still gets a task on their own board (got: ${patOwnTask.error})`,

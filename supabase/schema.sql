@@ -15,11 +15,34 @@ create table if not exists public.workers (
   email       text,
   hourly_rate numeric(10,2) not null default 0 check (hourly_rate >= 0),
   status      text not null default 'active' check (status in ('active','inactive')),
+  -- Workweek used by schedule-aware Team KPI workload: day indexes
+  -- 0=Sun … 6=Sat, and the weekly hour capacity (default Mon–Fri / 40h).
+  workdays    smallint[] not null default '{1,2,3,4,5}',
+  weekly_capacity_hours numeric not null default 40,
   created_at  timestamptz not null default now(),
-  updated_at  timestamptz not null default now()
+  updated_at  timestamptz not null default now(),
+  constraint workers_schedule_valid check (
+    coalesce(array_length(workdays, 1), 0) between 1 and 7
+    and workdays <@ array[0,1,2,3,4,5,6]::smallint[]
+    and weekly_capacity_hours > 0
+    and weekly_capacity_hours <= 168
+  )
 );
 
 create index if not exists workers_user_id_idx on public.workers (user_id);
+
+-- Databases created before the schedule columns existed (safe re-run).
+alter table public.workers add column if not exists workdays smallint[]
+  not null default '{1,2,3,4,5}';
+alter table public.workers add column if not exists weekly_capacity_hours numeric
+  not null default 40;
+alter table public.workers drop constraint if exists workers_schedule_valid;
+alter table public.workers add constraint workers_schedule_valid check (
+  coalesce(array_length(workdays, 1), 0) between 1 and 7
+  and workdays <@ array[0,1,2,3,4,5,6]::smallint[]
+  and weekly_capacity_hours > 0
+  and weekly_capacity_hours <= 168
+);
 
 -- ---------- time_entries ----------
 create table if not exists public.time_entries (
@@ -186,9 +209,37 @@ create table if not exists public.tasks (
   worker_id       uuid not null references public.workers (id) on delete cascade,
   title           text not null check (length(btrim(title)) between 1 and 200),
   description     text,
-  status          text not null default 'todo' check (status in ('todo','in_progress','waiting','approval','completed')),
+  -- The six Team KPI stages: To Do → In Progress → Waiting → For Review →
+  -- Rework → Completed ('approval' was renamed to 'for_review').
+  status          text not null default 'todo' check (status in ('todo','in_progress','waiting','for_review','rework','completed')),
   priority        text not null default 'medium' check (priority in ('low','medium','high')),
   due_date        date,
+  -- Original due date before an edit (first change wins) — due-date audits.
+  original_due_date date,
+  -- Estimated hours → schedule-aware workload on the Team KPI page.
+  estimated_hours numeric check (estimated_hours is null or estimated_hours >= 0),
+  -- Stage timestamps (auto-set by the app as cards move).
+  assigned_at       timestamptz,
+  started_at        timestamptz,
+  waiting_since     timestamptz,
+  waiting_reason    text check (waiting_reason is null or waiting_reason in (
+                      'client','manager','teammate','access','approval','external','other')),
+  submitted_for_review_at timestamptz,
+  rework_started_at       timestamptz,
+  -- QA review: score 1–5, when/who recorded it, and the rework classification
+  -- (employee-caused vs not — only the former counts against the KPI).
+  qa_score       smallint check (qa_score is null or qa_score between 1 and 5),
+  qa_reviewed_at timestamptz,
+  qa_reviewed_by text,
+  rework_required boolean,
+  rework_type    text check (rework_type is null or rework_type in (
+                   'incorrect_work','missing_requirement','incomplete_work',
+                   'did_not_follow_instructions','qa_correction',
+                   'client_requested_change','scope_changed','new_requirement',
+                   'missing_client_info','access_issue')),
+  rework_notes   text,
+  -- Append-only stage history: [{from,to,at,by}, …].
+  stage_history  jsonb not null default '[]'::jsonb,
   -- Manual ordering inside a column (smaller sorts first).
   position        integer not null default 0,
   created_by_role text not null default 'worker' check (created_by_role in ('admin','worker')),
@@ -199,6 +250,28 @@ create table if not exists public.tasks (
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now()
 );
+
+-- Databases created before Team KPI existed: same columns + checks, plus the
+-- 'approval' → 'for_review' rename (RUN-THIS-team-kpi.sql does this too).
+alter table public.tasks add column if not exists original_due_date date;
+alter table public.tasks add column if not exists estimated_hours numeric;
+alter table public.tasks add column if not exists assigned_at timestamptz;
+alter table public.tasks add column if not exists started_at timestamptz;
+alter table public.tasks add column if not exists waiting_since timestamptz;
+alter table public.tasks add column if not exists waiting_reason text;
+alter table public.tasks add column if not exists submitted_for_review_at timestamptz;
+alter table public.tasks add column if not exists rework_started_at timestamptz;
+alter table public.tasks add column if not exists qa_score smallint;
+alter table public.tasks add column if not exists qa_reviewed_at timestamptz;
+alter table public.tasks add column if not exists qa_reviewed_by text;
+alter table public.tasks add column if not exists rework_required boolean;
+alter table public.tasks add column if not exists rework_type text;
+alter table public.tasks add column if not exists rework_notes text;
+alter table public.tasks add column if not exists stage_history jsonb not null default '[]'::jsonb;
+update public.tasks set status = 'for_review' where status = 'approval';
+alter table public.tasks drop constraint if exists tasks_status_check;
+alter table public.tasks add constraint tasks_status_check
+  check (status in ('todo','in_progress','waiting','for_review','rework','completed'));
 
 create index if not exists tasks_user_idx on public.tasks (user_id);
 create index if not exists tasks_worker_idx on public.tasks (worker_id);
@@ -1220,7 +1293,10 @@ alter table public.workers add constraint workers_permissions_valid check (
     'settings.manage',
     -- The support desk. Deliberately a capability the admin does NOT hold:
     -- see public.is_it_support() below and the tickets section at the end.
-    'it_support.manage'
+    'it_support.manage',
+    -- Team KPI dashboard: the Owner implies it; this is the Project
+    -- Manager's grant (bonus approval stays admin-only on top of it).
+    'team_kpi.view'
   ]::text[]
 );
 
@@ -1268,7 +1344,8 @@ as $$
       or public.has_permission('finance.view')
       or public.has_permission('finance.subscription')
       or public.has_permission('finance.payroll')
-      or public.has_permission('reports.view');
+      or public.has_permission('reports.view')
+      or public.has_permission('team_kpi.view');
 $$;
 
 grant execute on function public.has_team_view() to authenticated;
@@ -1422,6 +1499,8 @@ create policy "tasks_select" on public.tasks
     ((select auth.uid()) = user_id and (select public.is_admin()))
     or worker_id = (select public.current_worker_id())
     or (user_id = (select public.workspace_owner_id()) and (select public.has_permission('tasks.view_all')))
+    -- A Project Manager with `team_kpi.view` aggregates the team's tasks.
+    or (user_id = (select public.workspace_owner_id()) and (select public.has_permission('team_kpi.view')))
   );
 
 -- A worker with tasks.manage_all may put a card on anyone's board.
@@ -1912,7 +1991,9 @@ alter table public.workers add constraint workers_permissions_valid check (
     'clients.manage',
     'settings.manage',
     -- The support desk. Note what it is NOT: a capability the admin holds.
-    'it_support.manage'
+    'it_support.manage',
+    -- Team KPI dashboard (Owner implies it; Project Manager's grant).
+    'team_kpi.view'
   ]::text[]
 );
 
@@ -2229,3 +2310,152 @@ create trigger ticket_replies_notify
 -- ---------- 9. table privileges (RLS narrows them per row) ----------
 grant select, insert, update, delete on public.tickets to authenticated;
 grant select, insert on public.ticket_replies to authenticated;
+
+
+-- ============================================================================
+-- Team KPI — monthly goals, bonus decisions, audit trail
+-- See supabase/RUN-THIS-team-kpi.sql (the same statements for existing
+-- databases). Scores/on-time/workload are COMPUTED from tasks — these tables
+-- hold only the management inputs: targets, manual bonus decisions, and the
+-- append-only audit of QA / rework / due changes / approvals.
+-- ============================================================================
+
+-- ---------- monthly goals ----------
+create table if not exists public.monthly_goals (
+  id             uuid primary key default gen_random_uuid(),
+  user_id        uuid not null references auth.users (id) on delete cascade,
+  worker_id      uuid not null references public.workers (id) on delete cascade,
+  month          text not null check (month ~ '^[0-9]{4}-[0-9]{2}$'),
+  target         integer check (target is null or target >= 0),
+  on_time_target numeric(5,2) check (on_time_target is null or (on_time_target >= 0 and on_time_target <= 100)),
+  qa_target      numeric(5,2) check (qa_target is null or (qa_target >= 0 and qa_target <= 100)),
+  note           text,
+  created_at     timestamptz not null default now(),
+  updated_at     timestamptz not null default now(),
+  unique (user_id, worker_id, month)
+);
+create index if not exists monthly_goals_user_month_idx
+  on public.monthly_goals (user_id, month);
+
+alter table public.monthly_goals enable row level security;
+drop policy if exists "monthly_goals_select" on public.monthly_goals;
+create policy "monthly_goals_select" on public.monthly_goals
+  for select using (
+    ((select auth.uid()) = user_id and (select public.is_admin()))
+    or (user_id = (select public.workspace_owner_id()) and (select public.has_permission('team_kpi.view')))
+  );
+drop policy if exists "monthly_goals_insert" on public.monthly_goals;
+create policy "monthly_goals_insert" on public.monthly_goals
+  for insert with check (
+    ((select auth.uid()) = user_id and (select public.is_admin()))
+    or (user_id = (select public.workspace_owner_id()) and (select public.has_permission('team_kpi.view')))
+  );
+drop policy if exists "monthly_goals_update" on public.monthly_goals;
+create policy "monthly_goals_update" on public.monthly_goals
+  for update using (
+    ((select auth.uid()) = user_id and (select public.is_admin()))
+    or (user_id = (select public.workspace_owner_id()) and (select public.has_permission('team_kpi.view')))
+  )
+  with check (
+    ((select auth.uid()) = user_id and (select public.is_admin()))
+    or (user_id = (select public.workspace_owner_id()) and (select public.has_permission('team_kpi.view')))
+  );
+drop policy if exists "monthly_goals_delete" on public.monthly_goals;
+create policy "monthly_goals_delete" on public.monthly_goals
+  for delete using (
+    ((select auth.uid()) = user_id and (select public.is_admin()))
+    or (user_id = (select public.workspace_owner_id()) and (select public.has_permission('team_kpi.view')))
+  );
+drop trigger if exists trg_monthly_goals_user on public.monthly_goals;
+create trigger trg_monthly_goals_user before insert on public.monthly_goals
+  for each row execute function public.set_user_id();
+drop trigger if exists trg_monthly_goals_updated on public.monthly_goals;
+create trigger trg_monthly_goals_updated before update on public.monthly_goals
+  for each row execute function public.set_updated_at();
+
+-- ---------- bonus decisions (Owner-only writes) ----------
+create table if not exists public.bonus_decisions (
+  id              uuid primary key default gen_random_uuid(),
+  user_id         uuid not null references auth.users (id) on delete cascade,
+  worker_id       uuid not null references public.workers (id) on delete cascade,
+  month           text not null check (month ~ '^[0-9]{4}-[0-9]{2}$'),
+  eligible        text not null default 'pending' check (eligible in ('pending','yes','no')),
+  approved_amount numeric(12,2) check (approved_amount is null or approved_amount >= 0),
+  approved_by     text,
+  note            text,
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now(),
+  unique (user_id, worker_id, month)
+);
+create index if not exists bonus_decisions_user_month_idx
+  on public.bonus_decisions (user_id, month);
+
+alter table public.bonus_decisions enable row level security;
+-- Reads follow the KPI grant; writes are is_admin() only (§12).
+drop policy if exists "bonus_decisions_select" on public.bonus_decisions;
+create policy "bonus_decisions_select" on public.bonus_decisions
+  for select using (
+    ((select auth.uid()) = user_id and (select public.is_admin()))
+    or (user_id = (select public.workspace_owner_id()) and (select public.has_permission('team_kpi.view')))
+  );
+drop policy if exists "bonus_decisions_insert" on public.bonus_decisions;
+create policy "bonus_decisions_insert" on public.bonus_decisions
+  for insert with check ((select auth.uid()) = user_id and (select public.is_admin()));
+drop policy if exists "bonus_decisions_update" on public.bonus_decisions;
+create policy "bonus_decisions_update" on public.bonus_decisions
+  for update using ((select auth.uid()) = user_id and (select public.is_admin()))
+  with check ((select auth.uid()) = user_id and (select public.is_admin()));
+drop policy if exists "bonus_decisions_delete" on public.bonus_decisions;
+create policy "bonus_decisions_delete" on public.bonus_decisions
+  for delete using ((select auth.uid()) = user_id and (select public.is_admin()));
+drop trigger if exists trg_bonus_decisions_user on public.bonus_decisions;
+create trigger trg_bonus_decisions_user before insert on public.bonus_decisions
+  for each row execute function public.set_user_id();
+drop trigger if exists trg_bonus_decisions_updated on public.bonus_decisions;
+create trigger trg_bonus_decisions_updated before update on public.bonus_decisions
+  for each row execute function public.set_updated_at();
+
+-- ---------- KPI audit trail ----------
+create table if not exists public.kpi_audit_events (
+  id          uuid primary key default gen_random_uuid(),
+  user_id     uuid not null references auth.users (id) on delete cascade,
+  entity_type text not null check (entity_type in ('task','goal','bonus','worker')),
+  entity_id   text not null,
+  worker_id   uuid references public.workers (id) on delete set null,
+  action      text not null,
+  detail      text,
+  actor       text,
+  created_at  timestamptz not null default now()
+);
+create index if not exists kpi_audit_events_user_created_idx
+  on public.kpi_audit_events (user_id, created_at desc);
+create index if not exists kpi_audit_events_worker_idx
+  on public.kpi_audit_events (worker_id);
+
+alter table public.kpi_audit_events enable row level security;
+drop policy if exists "kpi_audit_events_select" on public.kpi_audit_events;
+create policy "kpi_audit_events_select" on public.kpi_audit_events
+  for select using (
+    ((select auth.uid()) = user_id and (select public.is_admin()))
+    or (user_id = (select public.workspace_owner_id()) and (select public.has_permission('team_kpi.view')))
+  );
+drop policy if exists "kpi_audit_events_insert" on public.kpi_audit_events;
+create policy "kpi_audit_events_insert" on public.kpi_audit_events
+  for insert with check (
+    ((select auth.uid()) = user_id and (select public.is_admin()))
+    or (user_id = (select public.workspace_owner_id()) and (select public.has_permission('team_kpi.view')))
+  );
+drop policy if exists "kpi_audit_events_update" on public.kpi_audit_events;
+create policy "kpi_audit_events_update" on public.kpi_audit_events
+  for update using ((select auth.uid()) = user_id and (select public.is_admin()))
+  with check ((select auth.uid()) = user_id and (select public.is_admin()));
+drop policy if exists "kpi_audit_events_delete" on public.kpi_audit_events;
+create policy "kpi_audit_events_delete" on public.kpi_audit_events
+  for delete using ((select auth.uid()) = user_id and (select public.is_admin()));
+drop trigger if exists trg_kpi_audit_events_user on public.kpi_audit_events;
+create trigger trg_kpi_audit_events_user before insert on public.kpi_audit_events
+  for each row execute function public.set_user_id();
+
+grant select, insert, update, delete on public.monthly_goals to authenticated;
+grant select, insert, update, delete on public.bonus_decisions to authenticated;
+grant select, insert, update, delete on public.kpi_audit_events to authenticated;

@@ -69,6 +69,7 @@ async function main() {
   const workers = (await localBackend.listWorkers()).data || []
   const worker = workers.find((w) => w.email === 'john@example.com')!
   const task = (await localBackend.createTask({
+    due_date: '2099-12-31',
     worker_id: worker.id,
     client_id: created.id,
     title: 'Replace the pump seal',

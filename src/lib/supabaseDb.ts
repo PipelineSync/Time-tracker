@@ -28,8 +28,25 @@ import type {
   TicketAssignee,
   CreateTicketInput,
   UpdateTicketInput,
+  MonthlyGoal,
+  BonusDecision,
+  KpiAuditEvent,
 } from './types'
-import { CLIENT_PRIORITY_LANES, DEFAULT_SLACK_SETTINGS, DEFAULT_CLIENT_COLOR, DEFAULT_NOTE_COLOR, NOTE_COLORS, PERMISSIONS, TEAM_VIEW_PERMISSIONS, ALL_ENTRIES_VIEW_PERMISSIONS, normalizePermissions, isValidClientColor } from './types'
+import {
+  CLIENT_PRIORITY_LANES,
+  DEFAULT_SLACK_SETTINGS,
+  DEFAULT_CLIENT_COLOR,
+  DEFAULT_NOTE_COLOR,
+  NOTE_COLORS,
+  PERMISSIONS,
+  TEAM_VIEW_PERMISSIONS,
+  ALL_ENTRIES_VIEW_PERMISSIONS,
+  normalizePermissions,
+  isValidClientColor,
+  normalizeTaskStage,
+  normalizeWorkdays,
+  normalizeWeeklyCapacity,
+} from './types'
 import {
   IT_SUPPORT_PERMISSION,
   MAX_TICKET_ATTACHMENTS,
@@ -39,8 +56,19 @@ import {
   normalizeTicketStatus,
   sortTickets,
 } from './tickets'
-import type { BackendResult, DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, CreateFinanceItemInput, CreateMeetingInput, CreateNoteInput, CreateInvoiceInput } from './backend'
+import type { BackendResult, DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, CreateFinanceItemInput, CreateMeetingInput, CreateNoteInput, CreateInvoiceInput, CreateMonthlyGoalInput, SaveBonusDecisionInput } from './backend'
 import { ACCOUNT_DEACTIVATED_MESSAGE } from './backend'
+import {
+  applyDueDateChange,
+  applyStageTransition,
+  hydrateTask,
+  initialStageFields,
+  normalizeEstimatedHours,
+  normalizeQaScore,
+  normalizeReworkType,
+  normalizeWaitingReason,
+  patchTouchesQa,
+} from './taskWorkflow'
 import {
   createClient,
   type Session,
@@ -54,6 +82,12 @@ const url = import.meta.env.VITE_SUPABASE_URL as string | undefined
 const anonKey = (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY) as string | undefined
 
 /** Shown when the admin edits access on a database without the migration. */
+const TEAM_KPI_PERMISSIONS_MIGRATION_MESSAGE =
+  'Team KPI access was not saved: run supabase/RUN-THIS-team-kpi.sql in the Supabase SQL editor to widen the allowed permission keys.'
+
+const TEAM_KPI_MIGRATION_MESSAGE =
+  'Team KPI data is unavailable: run supabase/RUN-THIS-team-kpi.sql in the Supabase SQL editor first.'
+
 const PERMISSIONS_MIGRATION_MESSAGE =
   'Worker access levels need the database migration supabase/worker-permissions.sql to be applied. Everything else was saved.'
 
@@ -185,6 +219,10 @@ function normalizeWorker(w: Worker): Worker {
     payment_methods: methods,
     qr_code_url: methods.includes('qr') ? (w.qr_code_url ?? null) : null,
     permissions: normalizePermissions(w.permissions),
+    // Databases without the Team KPI migration load with the defaults
+    // (Mon–Fri, 40h) so workload math never sees an empty schedule.
+    workdays: normalizeWorkdays(w.workdays),
+    weekly_capacity_hours: normalizeWeeklyCapacity(w.weekly_capacity_hours),
   }
 }
 const normalizeWorkers = (rows: Worker[] | null): Worker[] => (rows ?? []).map(normalizeWorker)
@@ -503,6 +541,37 @@ function normalizeReferenceNumber(value: unknown): string | null {
   if (typeof value !== 'string') return null
   const trimmed = value.trim()
   return trimmed ? trimmed.slice(0, 64) : null
+}
+
+/**
+ * Append one KPI audit row (best-effort: a database without the migration
+ * simply loses the line rather than failing the action that produced it).
+ */
+async function appendKpiAudit(event: Omit<KpiAuditEvent, 'id' | 'created_at'>): Promise<void> {
+  try {
+    const { error } = await client().from('kpi_audit_events').insert({
+      ...event,
+      id: (globalThis.crypto?.randomUUID?.() ?? `kpi-${Date.now()}-${Math.random().toString(36).slice(2)}`),
+      created_at: new Date().toISOString(),
+    })
+    if (error && !isMissingTable(error, 'kpi_audit_events')) console.warn('[work-tracker] kpi audit append failed:', error.message)
+  } catch (e) {
+    console.warn('[work-tracker] kpi audit append failed:', e)
+  }
+}
+
+/**
+ * Display name for audit lines and stage history: "Owner" for the admin,
+ * the worker's name (best-effort read) for a worker account.
+ */
+async function actorLabelFor(user: AuthUser): Promise<string> {
+  if (user.role === 'admin') return 'Owner'
+  if (user.workerId) {
+    const { data } = await client().from('workers').select('name').eq('id', user.workerId).maybeSingle()
+    const name = (data as { name?: string } | null)?.name
+    if (name) return name
+  }
+  return user.email || 'Someone'
 }
 
 async function requireUser(opts?: { force?: boolean }): Promise<BackendResult<AuthUser>> {
@@ -1026,31 +1095,39 @@ export const supabaseBackend: DataBackend = {
     // behaviour) made a freshly saved tick box look like it had snapped
     // back to off — the database was correct, the round-trip was just
     // dropping the column.
-    const columns = 'id, name, email, hourly_rate, status, position, payment_methods, qr_code_url, permissions, created_at, updated_at'
+    const columns = 'id, name, email, hourly_rate, status, position, payment_methods, qr_code_url, permissions, workdays, weekly_capacity_hours, created_at, updated_at'
     // QR codes are not profile avatars: admins need the worker's QR image in
     // the Mark paid dialog so they can scan it. Keep it in the worker list;
     // avatar images are still loaded separately to avoid making this query
     // needlessly large.
     const stripImages = (rows: Worker[]): Worker[] =>
       normalizeWorkers(rows).map((w) => ({ ...w, avatar_url: null }))
-    const fetchRows = async () => {
+    const fetchRows = async (cols: string) => {
       // A worker with no team-wide capability only sees their own row.
       if (!canSeeTeam(me.data!) && me.data!.workerId) {
-        return client().from('workers').select(columns).eq('id', me.data!.workerId)
+        return client().from('workers').select(cols).eq('id', me.data!.workerId)
       }
-      return client().from('workers').select(columns).order('name')
+      return client().from('workers').select(cols).order('name')
     }
-    let { data, error } = await fetchRows()
+    let { data, error } = (await fetchRows(columns)) as { data: Worker[] | null; error: { code?: string; message?: string } | null }
+    if (error && (isMissingColumn(error as { code?: string; message?: string }, 'workdays') ||
+        isMissingColumn(error as { code?: string; message?: string }, 'weekly_capacity_hours'))) {
+      // Database without supabase/RUN-THIS-team-kpi.sql: read the rest and
+      // let normalizeWorker() fill the default Mon–Fri / 40h schedule.
+      console.warn('[workers] schedule columns are missing — run supabase/RUN-THIS-team-kpi.sql to set per-worker workweeks.')
+      const noSchedule = columns.replace('workdays, ', '').replace('weekly_capacity_hours, ', '')
+      const retry = (await fetchRows(noSchedule)) as { data: Worker[] | null; error: { code?: string; message?: string } | null }
+      data = retry.data
+      error = retry.error
+    }
     if (error && isMissingColumn(error as { code?: string; message?: string }, 'permissions')) {
       // Database without supabase/worker-permissions.sql: drop the column and
       // warn in the console. The store still loads (with permissions: []),
       // and the access tick boxes explain what to run.
       console.warn('[workers] the workers.permissions column is missing — run supabase/worker-permissions.sql to enable per-worker access.')
-      const noPermColumns = columns.replace('permissions, ', '')
-      const retry = await (canSeeTeam(me.data!) || !me.data!.workerId
-        ? client().from('workers').select(noPermColumns).order('name')
-        : client().from('workers').select(noPermColumns).eq('id', me.data!.workerId))
-      data = (retry.data as Worker[] | null) ?? null
+      const noPermColumns = columns.replace('permissions, ', '').replace('workdays, ', '').replace('weekly_capacity_hours, ', '')
+      const retry = (await fetchRows(noPermColumns)) as { data: Worker[] | null; error: { code?: string; message?: string } | null }
+      data = retry.data
       error = retry.error
     }
     if (!error) return ok(stripImages((data as Worker[]) ?? []))
@@ -1063,7 +1140,7 @@ export const supabaseBackend: DataBackend = {
       if (legacy.error) return fail(legacy.error.message)
       return ok(stripImages((legacy.data as Worker[]) ?? []))
     }
-    return fail(error.message)
+    return fail(error.message ?? 'Could not load workers.')
   },
 
   async listWorkerAvatars() {
@@ -1107,6 +1184,8 @@ export const supabaseBackend: DataBackend = {
           status: input.status || 'active',
           position: input.position?.trim() || null,
           permissions: normalizePermissions(input.permissions),
+          workdays: normalizeWorkdays(input.workdays),
+          weekly_capacity_hours: normalizeWeeklyCapacity(input.weekly_capacity_hours),
           accountEmail,
           accountPassword: input.accountPassword,
         }),
@@ -1158,6 +1237,19 @@ export const supabaseBackend: DataBackend = {
       dropped.add('invoices.view')
       upd = await client().from('workers').update({ ...rest, permissions: normalizePermissions(rest.permissions.filter((p) => !dropped.has(p))) }).eq('id', id).select().single()
       if (!upd.error) return fail(INVOICES_PERMISSIONS_MIGRATION_MESSAGE)
+    }
+    if (upd.error && isPermissionsCheckViolation(upd.error) && rest.permissions?.includes('team_kpi.view') && !dropped.has('team_kpi.view')) {
+      // Same story for the Team KPI key (supabase/RUN-THIS-team-kpi.sql).
+      dropped.add('team_kpi.view')
+      upd = await client().from('workers').update({ ...rest, permissions: normalizePermissions(rest.permissions.filter((p) => !dropped.has(p))) }).eq('id', id).select().single()
+      if (!upd.error) return fail(TEAM_KPI_PERMISSIONS_MIGRATION_MESSAGE)
+    }
+    if (upd.error && (isMissingColumn(upd.error, 'workdays') || isMissingColumn(upd.error, 'weekly_capacity_hours'))) {
+      // Database without the Team KPI migration: save everything else, drop
+      // only the schedule columns, and tell the admin which file to run.
+      const { workdays: _wd, weekly_capacity_hours: _wc, ...withoutSchedule } = rest
+      upd = await client().from('workers').update(withoutSchedule).eq('id', id).select().single()
+      if (!upd.error) return fail(TEAM_KPI_MIGRATION_MESSAGE)
     }
     if (upd.error && isMissingColumn(upd.error, 'permissions') && rest.permissions) {
       // Database without supabase/worker-permissions.sql: save everything else
@@ -2878,24 +2970,15 @@ export const supabaseBackend: DataBackend = {
   async listTasks() {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    // `user_id` is the workspace owner — constant across rows, never read.
-    const build = (columns: string) => {
-      let q = client().from('tasks').select(columns)
-      if (!canDo(me.data!, 'tasks.view_all') && me.data!.workerId) q = q.eq('worker_id', me.data!.workerId)
-      return q.order('position', { ascending: true }).order('created_at', { ascending: false })
-    }
-    let columns = 'id, worker_id, client_id, title, description, status, priority, due_date, position, created_by_role, completed_at, archived_at, created_at, updated_at'
-    let res = await build(columns)
-    if (res.error && isMissingColumn(res.error as { code?: string; message?: string }, 'archived_at')) {
-      columns = columns.replace('archived_at, ', '')
-      res = await build(columns)
-    }
-    if (res.error && isMissingColumn(res.error as { code?: string; message?: string }, 'client_id')) {
-      // Database without supabase/clients.sql: the board still loads, unlabelled.
-      res = await build(columns.replace('client_id, ', ''))
-    }
+    // `select('*')` so a column added by a later migration is picked up
+    // without a redeploy — and a column NOT yet added simply doesn't arrive,
+    // which hydrateTask() fills with its neutral default (unlike naming a
+    // missing column, which makes PostgREST error the whole query).
+    let q = client().from('tasks').select('*')
+    if (!canDo(me.data!, 'tasks.view_all') && me.data!.workerId) q = q.eq('worker_id', me.data!.workerId)
+    const res = await q.order('position', { ascending: true }).order('created_at', { ascending: false })
     if (res.error) return fail(res.error.message)
-    return ok(((res.data as unknown as Task[]) ?? []).map((t) => ({ ...t, client_id: t.client_id ?? null, archived_at: t.archived_at ?? null })))
+    return ok(((res.data as unknown as Task[]) ?? []).map((t) => hydrateTask({ ...t, client_id: t.client_id ?? null, archived_at: t.archived_at ?? null })))
   },
 
   async createTask(input: CreateTaskInput) {
@@ -2903,6 +2986,8 @@ export const supabaseBackend: DataBackend = {
     if (me.error) return fail(me.error)
     const title = input.title.trim()
     if (!title) return fail('Give the task a title.')
+    // Every NEW work task needs a due date (§4).
+    if (!input.due_date) return fail('Every new task needs a due date.')
     // Without tasks.manage_all a worker can only create tasks for themselves
     // (RLS enforces it too). A task manager who doesn't pass a worker_id is
     // treated as creating a task for themselves — same end result as a
@@ -2914,6 +2999,8 @@ export const supabaseBackend: DataBackend = {
       : me.data!.workerId
     if (!workerId) return fail('Choose who the task is for.')
     const status: TaskStatus = input.status ?? 'todo'
+    const now = new Date().toISOString()
+    const actor = await actorLabelFor(me.data!)
     const sb = client()
     // Top of the column: the new card takes position 0 and everyone already
     // there moves down a slot (best-effort re-index once the row is in).
@@ -2933,14 +3020,21 @@ export const supabaseBackend: DataBackend = {
         status,
         priority: input.priority ?? 'medium',
         due_date: input.due_date || null,
+        ...initialStageFields(status, now, actor),
+        estimated_hours: normalizeEstimatedHours(input.estimated_hours),
         position: 0,
         created_by_role: me.data!.role,
-        completed_at: status === 'completed' ? new Date().toISOString() : null,
+        completed_at: status === 'completed' ? now : null,
         archived_at: null,
       })
       .select()
       .single() as PromiseLike<{ data: Task | null; error: { code?: string; message?: string } | null }>)
-    if (error) return fail(error.message ?? 'Could not add the task.')
+    if (error) {
+      if (isMissingColumn(error, 'estimated_hours') || isMissingColumn(error, 'stage_history') || isMissingColumn(error, 'original_due_date')) {
+        return fail(TEAM_KPI_MIGRATION_MESSAGE)
+      }
+      return fail(error.message ?? 'Could not add the task.')
+    }
     // Best-effort re-index so the column numbering stays gap-free with the
     // new card on top; a failure only affects ordering.
     await Promise.all(
@@ -2953,38 +3047,68 @@ export const supabaseBackend: DataBackend = {
         await pushNotification(recipient, { entry_id: null, type: 'note', message: `New task assigned: "${title}"` })
       }
     }
-    return ok(data as Task)
+    return ok(hydrateTask(data as Task))
   },
 
   async updateTask(id, patch) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
+    // QA/rework decisions belong to the Owner and the Project Manager (§10).
+    if (patchTouchesQa(patch) && !canDo(me.data!, 'team_kpi.view')) {
+      return fail('Only the Owner or Project Manager can score QA.')
+    }
     const sb = client()
     const { data: current, error: readErr } = await sb.from('tasks').select('*').eq('id', id).maybeSingle()
     if (readErr) return fail(readErr.message)
     if (!current) return fail('Task not found.')
-    const task = current as Task
+    const task = hydrateTask(current as Task)
+    const now = new Date().toISOString()
+    const actor = await actorLabelFor(me.data!)
 
     const update: Record<string, unknown> = {}
     if (patch.title !== undefined && patch.title.trim()) update.title = patch.title.trim()
     if (patch.description !== undefined) update.description = patch.description?.trim() || null
     if (patch.priority !== undefined) update.priority = patch.priority
-    if (patch.due_date !== undefined) update.due_date = patch.due_date || null
     if (patch.client_id !== undefined) update.client_id = patch.client_id || null
+    if (patch.estimated_hours !== undefined) update.estimated_hours = normalizeEstimatedHours(patch.estimated_hours)
+    if (patch.waiting_reason !== undefined) update.waiting_reason = normalizeWaitingReason(patch.waiting_reason)
+    // Due date: preserve the original deadline when one was already missed.
+    let dueChange: { due_date: string | null; original_due_date: string | null; changed: boolean; missedDeadline: boolean } | null = null
+    if (patch.due_date !== undefined) {
+      dueChange = applyDueDateChange(task, patch.due_date || null)
+      update.due_date = dueChange.due_date
+      update.original_due_date = dueChange.original_due_date
+    }
     // Only a task manager may hand a task to a different worker.
     if (patch.worker_id !== undefined && canDo(me.data!, 'tasks.manage_all')) update.worker_id = patch.worker_id
     if (patch.status !== undefined) {
-      update.status = patch.status
-      // Stamp the first time it reaches Completed; clear it when it moves back.
-      update.completed_at = patch.status === 'completed' ? (task.completed_at ?? new Date().toISOString()) : null
-      if (patch.status !== 'completed') {
-        update.archived_at = null
+      const nextStage = patch.status as TaskStatus
+      if (nextStage !== task.status) {
+        Object.assign(update, applyStageTransition(task, nextStage, now, actor))
+      } else {
+        update.status = nextStage
+        update.completed_at = nextStage === 'completed' ? (task.completed_at ?? now) : null
       }
+      if (nextStage !== 'completed') update.archived_at = null
+    }
+    // QA scoring stamps the reviewer + moment alongside the score (§10).
+    const qaTouched = patchTouchesQa(patch)
+    if (qaTouched) {
+      if (patch.qa_score !== undefined) {
+        const score = normalizeQaScore(patch.qa_score)
+        update.qa_score = score
+        update.qa_reviewed_at = score !== null ? (patch.qa_reviewed_at ?? now) : null
+        update.qa_reviewed_by = score !== null ? (patch.qa_reviewed_by ?? actor) : null
+      }
+      if (patch.rework_required !== undefined) update.rework_required = patch.rework_required
+      if (patch.rework_type !== undefined) update.rework_type = normalizeReworkType(patch.rework_type)
+      if (patch.rework_notes !== undefined) update.rework_notes = patch.rework_notes ?? null
     }
     if (patch.archived_at !== undefined) {
       const finalStatus = (update.status as TaskStatus | undefined) ?? task.status
       update.archived_at = finalStatus === 'completed' ? patch.archived_at : null
     }
+    update.updated_at = now
     const nextWorker = (update.worker_id as string | undefined) ?? task.worker_id
     const nextStatus = (update.status as TaskStatus | undefined) ?? task.status
     const isRestoring = Boolean(task.archived_at && update.archived_at === null)
@@ -3017,7 +3141,12 @@ export const supabaseBackend: DataBackend = {
       }
       return res
     })
-    if (error) return fail(error.message ?? 'Could not save the task.')
+    if (error) {
+      if (isMissingColumn(error, 'stage_history') || isMissingColumn(error, 'original_due_date') || isMissingColumn(error, 'qa_score')) {
+        return fail(TEAM_KPI_MIGRATION_MESSAGE)
+      }
+      return fail(error.message ?? 'Could not save the task.')
+    }
     // Best-effort re-index of the column the card just landed on top of; a
     // failure only affects ordering.
     if (shiftIds.length) {
@@ -3025,7 +3154,54 @@ export const supabaseBackend: DataBackend = {
         shiftIds.map((rowId, i) => sb.from('tasks').update({ position: i + 1 }).eq('id', rowId))
       )
     }
-    return ok(data as Task)
+    // Audit trail for KPI-sensitive changes (§15) — best-effort, never blocks.
+    if (dueChange?.changed) {
+      void appendKpiAudit({
+        entity_type: 'task',
+        entity_id: id,
+        worker_id: task.worker_id,
+        action: 'due_date_changed',
+        detail: dueChange.missedDeadline
+          ? `Due date on “${task.title}” pushed from ${task.due_date ?? 'none'} to ${dueChange.due_date ?? 'none'} after the deadline was missed — the original ${dueChange.original_due_date} is kept for on-time KPI.`
+          : `Due date on “${task.title}” changed from ${task.due_date ?? 'none (legacy)'} to ${dueChange.due_date ?? 'none'}.`,
+        actor,
+      })
+    }
+    if (nextStatus === 'completed' && task.status !== 'completed') {
+      void appendKpiAudit({
+        entity_type: 'task',
+        entity_id: id,
+        worker_id: task.worker_id,
+        action: 'completed',
+        detail: `“${task.title}” completed by ${actor}.`,
+        actor,
+      })
+    }
+    if (qaTouched && update.qa_score !== undefined && normalizeQaScore(update.qa_score) !== task.qa_score) {
+      void appendKpiAudit({
+        entity_type: 'task',
+        entity_id: id,
+        worker_id: task.worker_id,
+        action: 'qa_scored',
+        detail: `QA on “${task.title}” set to ${normalizeQaScore(update.qa_score) ?? '—'}/5.`,
+        actor,
+      })
+    }
+    if (qaTouched && (update.rework_required !== undefined || update.rework_type !== undefined)) {
+      const req = (update.rework_required as boolean | undefined) ?? task.rework_required
+      const type = (update.rework_type as string | null | undefined) ?? task.rework_type
+      if (req !== task.rework_required || type !== task.rework_type) {
+        void appendKpiAudit({
+          entity_type: 'task',
+          entity_id: id,
+          worker_id: task.worker_id,
+          action: 'rework_classified',
+          detail: `Rework on “${task.title}”: ${req ? `required (${type ?? 'unclassified'})` : 'not required'}.`,
+          actor,
+        })
+      }
+    }
+    return ok(hydrateTask(data as Task))
   },
 
   async moveTask(id, status, position) {
@@ -3035,7 +3211,10 @@ export const supabaseBackend: DataBackend = {
     const { data: current, error: readErr } = await sb.from('tasks').select('*').eq('id', id).maybeSingle()
     if (readErr) return fail(readErr.message)
     if (!current) return fail('Task not found.')
-    const task = current as Task
+    const task = hydrateTask(current as Task)
+    const target = normalizeTaskStage(status)
+    const now = new Date().toISOString()
+    const actor = await actorLabelFor(me.data!)
 
     // Re-number the destination column so the card lands exactly where it was
     // dropped and the rest keep their relative order.
@@ -3043,30 +3222,41 @@ export const supabaseBackend: DataBackend = {
       .from('tasks')
       .select('id, position')
       .eq('worker_id', task.worker_id)
-      .eq('status', status)
+      .eq('status', target)
       .order('position', { ascending: true })
     const others = ((columnRows as Array<{ id: string }> | null) ?? []).filter((r) => r.id !== id)
     const at = Math.max(0, Math.min(position, others.length))
     const ordered = [...others.slice(0, at).map((r) => r.id), id, ...others.slice(at).map((r) => r.id)]
 
+    // Stage hop stamps Waiting Since / Submitted for Review / Completed At
+    // and appends to stage_history (§3).
+    const stageFields = target === task.status
+      ? { status: target, completed_at: target === 'completed' ? (task.completed_at ?? now) : null }
+      : applyStageTransition(task, target, now, actor)
+
     const { data, error } = await sb
       .from('tasks')
       .update({
-        status,
+        ...stageFields,
         position: ordered.indexOf(id),
-        completed_at: status === 'completed' ? (task.completed_at ?? new Date().toISOString()) : null,
-        ...(status !== 'completed' ? { archived_at: null } : {}),
+        ...(target !== 'completed' ? { archived_at: null } : {}),
+        updated_at: now,
       })
       .eq('id', id)
       .select()
       .single()
-    if (error) return fail(error.message)
+    if (error) {
+      if (isMissingColumn(error, 'stage_history') || isMissingColumn(error, 'waiting_since')) {
+        return fail(TEAM_KPI_MIGRATION_MESSAGE)
+      }
+      return fail(error.message)
+    }
 
     // Best-effort re-index of the neighbours; a failure only affects ordering.
     await Promise.all(
       ordered.map((rowId, i) => (rowId === id ? null : sb.from('tasks').update({ position: i }).eq('id', rowId)))
     )
-    return ok(data as Task)
+    return ok(hydrateTask(data as Task))
   },
 
   async deleteTask(id) {
@@ -3075,6 +3265,147 @@ export const supabaseBackend: DataBackend = {
     const { error } = await client().from('tasks').delete().eq('id', id)
     if (error) return fail(error.message)
     return ok(null)
+  },
+
+  // ---- Team KPI: monthly goals, bonus decisions, audit trail ---------------
+  // Tables come from supabase/RUN-THIS-team-kpi.sql; a database without them
+  // reads as empty (so the dashboard shows "—" instead of erroring toasts)
+  // and writes explain exactly which file to run.
+
+  async listMonthlyGoals() {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (!canDo(me.data!, 'team_kpi.view')) return ok([] as MonthlyGoal[])
+    const res = await client().from('monthly_goals').select('*').order('month', { ascending: false })
+    if (res.error) {
+      if (isMissingTable(res.error, 'monthly_goals')) return ok([] as MonthlyGoal[])
+      return fail(res.error.message)
+    }
+    return ok(((res.data as unknown as MonthlyGoal[]) ?? []).map((g) => ({
+      ...g,
+      target: g.target ?? null,
+      on_time_target: g.on_time_target ?? null,
+      qa_target: g.qa_target ?? null,
+      note: g.note ?? null,
+    })))
+  },
+
+  async saveMonthlyGoal(input: CreateMonthlyGoalInput) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (!canDo(me.data!, 'team_kpi.view')) return fail('Only the Owner or Project Manager can set monthly targets.')
+    if (!input.worker_id || !input.month) return fail('A worker and a month are required.')
+    const now = new Date().toISOString()
+    const payload = {
+      worker_id: input.worker_id,
+      month: input.month,
+      target: input.target ?? null,
+      on_time_target: input.on_time_target ?? null,
+      qa_target: input.qa_target ?? null,
+      note: input.note?.trim() || null,
+      updated_at: now,
+    }
+    const { data: existing, error: readErr } = await client()
+      .from('monthly_goals')
+      .select('id')
+      .eq('worker_id', input.worker_id)
+      .eq('month', input.month)
+      .maybeSingle()
+    if (readErr && isMissingTable(readErr, 'monthly_goals')) return fail(TEAM_KPI_MIGRATION_MESSAGE)
+    if (readErr) return fail(readErr.message)
+    const res = existing
+      ? await client().from('monthly_goals').update(payload).eq('id', (existing as { id: string }).id).select().single()
+      : await client().from('monthly_goals').insert(payload).select().single()
+    if (res.error && isMissingTable(res.error, 'monthly_goals')) return fail(TEAM_KPI_MIGRATION_MESSAGE)
+    if (res.error) return fail(res.error.message)
+    const goal = res.data as MonthlyGoal
+    void appendKpiAudit({
+      entity_type: 'goal',
+      entity_id: goal.id,
+      worker_id: goal.worker_id,
+      action: 'goal_saved',
+      detail: `Monthly targets for ${goal.month} updated (target ${goal.target ?? '—'}).`,
+      actor: await actorLabelFor(me.data!),
+    })
+    return ok(goal)
+  },
+
+  async listBonusDecisions() {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (!canDo(me.data!, 'team_kpi.view')) return ok([] as BonusDecision[])
+    const res = await client().from('bonus_decisions').select('*').order('month', { ascending: false })
+    if (res.error) {
+      if (isMissingTable(res.error, 'bonus_decisions')) return ok([] as BonusDecision[])
+      return fail(res.error.message)
+    }
+    return ok(((res.data as unknown as BonusDecision[]) ?? []).map((b) => ({
+      ...b,
+      eligible: b.eligible === 'yes' || b.eligible === 'no' ? b.eligible : 'pending',
+      approved_amount: b.approved_amount ?? null,
+      approved_by: b.approved_by ?? null,
+      note: b.note ?? null,
+    })))
+  },
+
+  async saveBonusDecision(input: SaveBonusDecisionInput) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    // Bonus decisions are Owner-only — a Project Manager may read, never edit.
+    if (me.data!.role !== 'admin') return fail('Only the Owner can change bonus decisions.')
+    if (!input.worker_id || !input.month) return fail('A worker and a month are required.')
+    const now = new Date().toISOString()
+    const eligible = input.eligible === 'yes' || input.eligible === 'no' || input.eligible === 'pending'
+      ? input.eligible
+      : 'pending'
+    const payload = {
+      worker_id: input.worker_id,
+      month: input.month,
+      eligible,
+      approved_amount: input.approved_amount != null && Number.isFinite(Number(input.approved_amount))
+        ? Math.max(0, Number(input.approved_amount))
+        : null,
+      approved_by: await actorLabelFor(me.data!),
+      note: input.note?.trim() || null,
+      updated_at: now,
+    }
+    const { data: existing, error: readErr } = await client()
+      .from('bonus_decisions')
+      .select('id')
+      .eq('worker_id', input.worker_id)
+      .eq('month', input.month)
+      .maybeSingle()
+    if (readErr && isMissingTable(readErr, 'bonus_decisions')) return fail(TEAM_KPI_MIGRATION_MESSAGE)
+    if (readErr) return fail(readErr.message)
+    const res = existing
+      ? await client().from('bonus_decisions').update(payload).eq('id', (existing as { id: string }).id).select().single()
+      : await client().from('bonus_decisions').insert(payload).select().single()
+    if (res.error && isMissingTable(res.error, 'bonus_decisions')) return fail(TEAM_KPI_MIGRATION_MESSAGE)
+    if (res.error) return fail(res.error.message)
+    const row = res.data as BonusDecision
+    void appendKpiAudit({
+      entity_type: 'bonus',
+      entity_id: row.id,
+      worker_id: row.worker_id,
+      action: 'bonus_decided',
+      detail: `Bonus for ${row.month}: ${row.eligible}${row.approved_amount != null ? ` (approved ${row.approved_amount})` : ''}.`,
+      actor: payload.approved_by,
+    })
+    return ok(row)
+  },
+
+  async listKpiAudit(limit = 200) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    if (!canDo(me.data!, 'team_kpi.view')) return ok([] as KpiAuditEvent[])
+    const res = await client().from('kpi_audit_events').select('*')
+      .order('created_at', { ascending: false })
+      .limit(Math.max(1, limit))
+    if (res.error) {
+      if (isMissingTable(res.error, 'kpi_audit_events')) return ok([] as KpiAuditEvent[])
+      return fail(res.error.message)
+    }
+    return ok((res.data as unknown as KpiAuditEvent[]) ?? [])
   },
 
   async resetAll() {

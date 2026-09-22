@@ -18,6 +18,7 @@ const ReportsPage = lazy(() => import('@/pages/ReportsPage').then((m) => ({ defa
 const SettingsPage = lazy(() => import('@/pages/SettingsPage').then((m) => ({ default: m.SettingsPage })))
 const TasksPage = lazy(() => import('@/pages/TasksPage').then((m) => ({ default: m.TasksPage })))
 const ClientPriorityBoardPage = lazy(() => import('@/pages/ClientPriorityBoardPage').then((m) => ({ default: m.ClientPriorityBoardPage })))
+const TeamKpiPage = lazy(() => import('@/pages/TeamKpiPage').then((m) => ({ default: m.TeamKpiPage })))
 const MeetingsPage = lazy(() => import('@/pages/MeetingsPage').then((m) => ({ default: m.MeetingsPage })))
 const NotepadPage = lazy(() => import('@/pages/NotepadPage').then((m) => ({ default: m.NotepadPage })))
 const ClientInvoicingPage = lazy(() => import('@/pages/ClientInvoicingPage').then((m) => ({ default: m.ClientInvoicingPage })))
@@ -63,6 +64,9 @@ export function App() {
           <Route path="/entries" element={<EntriesPage />} />
           {/* Kanban board — workers see their own tasks, the admin sees all. */}
           <Route path="/tasks" element={<TasksPage />} />
+          {/* Team KPI dashboard — Owner always; Project Managers granted
+              `team_kpi.view`. Workers never reach it (no route at all). */}
+          {can('team_kpi.view') && <Route path="/team-kpi" element={<TeamKpiPage />} />}
           {/* The client priority board — admin-only until the admin grants
               `priority_board.view` to a worker, exactly like the screens above. */}
           {can('priority_board.view') && <Route path="/priority-board" element={<ClientPriorityBoardPage />} />}

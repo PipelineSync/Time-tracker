@@ -35,6 +35,9 @@ import type {
   CreateTicketInput,
   UpdateTicketInput,
   BillingCycle,
+  MonthlyGoal,
+  BonusDecision,
+  KpiAuditEvent,
 } from './types'
 import {
   CLIENT_PRIORITY_LANES,
@@ -49,12 +52,25 @@ import {
   ALL_ENTRIES_VIEW_PERMISSIONS,
   normalizePermissions,
   isValidClientColor,
-  TASK_STATUSES,
+  normalizeTaskStage,
+  normalizeWeeklyCapacity,
+  normalizeWorkdays,
   UNASSIGNED_CLIENT_NAME,
 } from './types'
-import type { DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, CreateFinanceItemInput, CreateMeetingInput, CreateNoteInput, CreateInvoiceInput } from './backend'
+import type { DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, CreateFinanceItemInput, CreateMeetingInput, CreateNoteInput, CreateInvoiceInput, CreateMonthlyGoalInput, SaveBonusDecisionInput } from './backend'
 import { ACCOUNT_DEACTIVATED_MESSAGE } from './backend'
 import { buildDemoSeed } from './demoSeed'
+import {
+  applyDueDateChange,
+  applyStageTransition,
+  initialStageFields,
+  normalizeEstimatedHours,
+  normalizeQaScore,
+  normalizeReworkType,
+  normalizeWaitingReason,
+  patchTouchesQa,
+  stageActorName,
+} from './taskWorkflow'
 import {
   IT_SUPPORT_PERMISSION,
   MAX_TICKET_ATTACHMENTS,
@@ -112,6 +128,12 @@ interface UserData {
   invoices: Invoice[]
   /** Finance ledger: subscriptions, payroll runs and bills (see the Finance page). */
   financeItems: FinanceItem[]
+  /** Monthly KPI goals per employee (Team KPI dashboard). */
+  monthlyGoals: MonthlyGoal[]
+  /** Manual bonus decisions per employee per month (Owner-only edits). */
+  bonusDecisions: BonusDecision[]
+  /** Append-only QA / due-date / bonus audit trail for the KPI history. */
+  kpiAudit: KpiAuditEvent[]
 }
 
 const USERS_KEY = 'wt_users'
@@ -142,7 +164,7 @@ function writeUsers(users: StoredUser[]) {
 }
 
 function emptyData(): UserData {
-  return { workers: [], entries: [], activeTimers: [], settings: null, comments: [], notifications: [], payments: [], tasks: [], clients: [], clientPriorities: [], meetings: [], notes: [], invoices: [], financeItems: [], tickets: [], ticketReplies: [] }
+  return { workers: [], entries: [], activeTimers: [], settings: null, comments: [], notifications: [], payments: [], tasks: [], clients: [], clientPriorities: [], meetings: [], notes: [], invoices: [], financeItems: [], tickets: [], ticketReplies: [], monthlyGoals: [], bonusDecisions: [], kpiAudit: [] }
 }
 
 /** The method the admin paid a settlement with, or null when unknown/invalid. */
@@ -179,14 +201,19 @@ function normalizeWorker(w: Worker): Worker {
     ...w,
     payment_methods,
     permissions: normalizePermissions(w.permissions),
+    // Rows saved before the schedule columns existed load with the defaults
+    // (Mon–Fri, 40h) so workload math never sees an empty schedule.
+    workdays: normalizeWorkdays(w.workdays),
+    weekly_capacity_hours: normalizeWeeklyCapacity(w.weekly_capacity_hours),
     // A QR image only makes sense while the worker accepts QR payments.
     qr_code_url: payment_methods.includes('qr') ? (w.qr_code_url ?? null) : null,
   }
 }
 
-/** Valid board column, defaulting anything unknown/legacy to To Do. */
+/** Valid board column, defaulting anything unknown/legacy to To Do.
+ *  (`approval` reads as `for_review` — see normalizeTaskStage.) */
 function normalizeTaskStatus(status: unknown): TaskStatus {
-  return TASK_STATUSES.includes(status as TaskStatus) ? (status as TaskStatus) : 'todo'
+  return normalizeTaskStage(status)
 }
 
 function normalizeTaskPriority(priority: unknown): TaskPriority {
@@ -203,6 +230,23 @@ function normalizeTask(t: Task): Task {
     description: t.description ?? null,
     client_id: t.client_id ?? null,
     due_date: t.due_date ?? null,
+    // KPI-era fields: rows written before they existed simply load as nulls
+    // (legacy due dates keep their "Legacy / No Due Date" handling).
+    original_due_date: t.original_due_date ?? null,
+    estimated_hours: normalizeEstimatedHours(t.estimated_hours),
+    assigned_at: t.assigned_at ?? t.created_at ?? null,
+    started_at: t.started_at ?? null,
+    waiting_since: t.waiting_since ?? (status === 'waiting' ? (t.updated_at ?? null) : null),
+    waiting_reason: t.waiting_reason ?? null,
+    submitted_for_review_at: t.submitted_for_review_at ?? (status === 'for_review' ? (t.updated_at ?? null) : null),
+    rework_started_at: t.rework_started_at ?? null,
+    qa_score: normalizeQaScore(t.qa_score),
+    qa_reviewed_at: t.qa_reviewed_at ?? null,
+    qa_reviewed_by: t.qa_reviewed_by ?? null,
+    rework_required: typeof t.rework_required === 'boolean' ? t.rework_required : null,
+    rework_type: normalizeReworkType(t.rework_type),
+    rework_notes: t.rework_notes ?? null,
+    stage_history: Array.isArray(t.stage_history) ? t.stage_history.filter((e) => e && e.to) : [],
     position: Number.isFinite(t.position) ? t.position : 0,
     created_by_role: t.created_by_role === 'admin' ? 'admin' : 'worker',
     completed_at: status === 'completed' ? (t.completed_at ?? t.updated_at ?? null) : null,
@@ -520,6 +564,25 @@ function resolveClientId(d: UserData, clientId: string | null | undefined): stri
 }
 
 /**
+ * Append one KPI audit row (QA scores, rework classification, due-date
+ * changes, bonus decisions — §15). The list is append-only and newest-first
+ * reads simply reverse it; capped so a busy workspace can't grow it forever.
+ */
+function pushKpiAudit(
+  d: UserData,
+  event: Omit<KpiAuditEvent, 'id' | 'created_at'>,
+): KpiAuditEvent {
+  const row: KpiAuditEvent = { id: uid(), created_at: new Date().toISOString(), ...event }
+  d.kpiAudit = [row, ...(d.kpiAudit ?? [])].slice(0, 2000)
+  return row
+}
+
+/** Who is acting — the Owner, or the signed-in worker's name. */
+function actorLabel(c: { user: AuthUser; data: UserData }): string {
+  return stageActorName(c.user.role, c.data.workers.find((w) => w.id === c.user.workerId), c.user.email)
+}
+
+/**
  * One-time migration for workspaces that predate clients: everything without a
  * client is attached to a single "Unassigned" client so no task or entry is
  * left dangling (the admin can rename it, re-tag the work, or retire it).
@@ -572,6 +635,10 @@ function readData(userId: string): UserData {
   d.notes = (d.notes || []).map(normalizeNote)
   // Workspaces saved before the invoicing section simply load an empty board.
   d.invoices = (d.invoices || []).map(normalizeInvoice)
+  // Workspaces saved before Team KPI simply load empty KPI collections.
+  d.monthlyGoals = (d.monthlyGoals || []).filter((g) => g && g.worker_id && g.month)
+  d.bonusDecisions = (d.bonusDecisions || []).filter((b) => b && b.worker_id && b.month)
+  d.kpiAudit = d.kpiAudit || []
   // Workspaces saved before IT Support simply load an empty ticket queue.
   d.tickets = (d.tickets || []).map(normalizeTicket)
   d.ticketReplies = (d.ticketReplies || []).map(normalizeTicketReply)
@@ -862,6 +929,10 @@ function maybeAutoSeed(data: UserData) {
       client_id: t.client_id ? clientMap.get(t.client_id) ?? null : null,
       id: uid(),
     }))
+    // Team KPI seed: monthly targets + bonus rows remap onto the new worker ids.
+    data.monthlyGoals = (seed.monthlyGoals ?? []).map((g) => ({ ...g, worker_id: idMap.get(g.worker_id) || g.worker_id, id: uid() }))
+    data.bonusDecisions = (seed.bonusDecisions ?? []).map((b) => ({ ...b, worker_id: idMap.get(b.worker_id) || b.worker_id, id: uid() }))
+    data.kpiAudit = []
     data.financeItems = seed.financeItems.map((f) => ({
       ...f,
       worker_id: f.worker_id ? idMap.get(f.worker_id) ?? null : null,
@@ -1044,6 +1115,8 @@ export const localBackend: DataBackend = {
       payment_methods: [],
       qr_code_url: null,
       permissions: normalizePermissions(input.permissions),
+      workdays: normalizeWorkdays(input.workdays),
+      weekly_capacity_hours: normalizeWeeklyCapacity(input.weekly_capacity_hours),
       created_at: now,
       updated_at: now,
     }
@@ -1074,8 +1147,12 @@ export const localBackend: DataBackend = {
     if (!can(c, 'workers.manage')) return denied('edit workers')
     const idx = c.data.workers.findIndex((w) => w.id === id)
     if (idx === -1) return { data: null, error: 'Worker not found.' }
-    c.data.workers[idx] = { ...c.data.workers[idx], ...patch, updated_at: new Date().toISOString() }
-    if (patch.permissions) c.data.workers[idx].permissions = normalizePermissions(patch.permissions)
+    const merged: Worker = { ...c.data.workers[idx], ...patch, updated_at: new Date().toISOString() }
+    if (patch.permissions) merged.permissions = normalizePermissions(patch.permissions)
+    // Schedule fields always come back usable — the form may send junk.
+    if (patch.workdays !== undefined) merged.workdays = normalizeWorkdays(patch.workdays)
+    if (patch.weekly_capacity_hours !== undefined) merged.weekly_capacity_hours = normalizeWeeklyCapacity(patch.weekly_capacity_hours)
+    c.data.workers[idx] = merged
     // If admin set a new password, update the linked account.
     const newPassword = (patch as { newPassword?: string }).newPassword
     if (newPassword) {
@@ -2268,6 +2345,9 @@ export const localBackend: DataBackend = {
     if (!c) return { data: null, error: 'Not signed in.' }
     const title = input.title.trim()
     if (!title) return { data: null, error: 'Give the task a title.' }
+    // Every NEW work task needs a due date (§4). Legacy rows predating the
+    // rule are read-only on this rule — they simply never go through here.
+    if (!input.due_date) return { data: null, error: 'Every new task needs a due date.' }
     // Workers can only ever create tasks for themselves.
     // Only a task manager may put a card on someone else's board. A manager
     // who doesn't pass a worker_id is treated as creating a task for
@@ -2280,6 +2360,7 @@ export const localBackend: DataBackend = {
     if (!c.data.workers.some((w) => w.id === workerId)) return { data: null, error: 'Worker not found.' }
     const status = normalizeTaskStatus(input.status)
     const now = new Date().toISOString()
+    const actor = stageActorName(c.user.role, c.data.workers.find((w) => w.id === c.user.workerId), c.user.email)
     const task: Task = {
       id: uid(),
       worker_id: workerId,
@@ -2289,6 +2370,9 @@ export const localBackend: DataBackend = {
       status,
       priority: normalizeTaskPriority(input.priority),
       due_date: input.due_date || null,
+      // Stage timestamps + history for the brand-new card (§3).
+      ...initialStageFields(status, now, actor),
+      estimated_hours: normalizeEstimatedHours(input.estimated_hours),
       // New tasks land at the very top of their column.
       position: 0,
       created_by_role: c.user.role,
@@ -2321,27 +2405,88 @@ export const localBackend: DataBackend = {
     if (!can(c, 'tasks.manage_all') && current.worker_id !== c.user.workerId) {
       return { data: null, error: 'You can only change your own tasks.' }
     }
+    // QA/rework decisions belong to the Owner and the Project Manager (§10).
+    if (patchTouchesQa(patch) && !can(c, 'team_kpi.view')) {
+      return { data: null, error: 'Only the Owner or Project Manager can score QA.' }
+    }
     // Only a task manager may hand a task to a different worker.
     const workerId = can(c, 'tasks.manage_all') && patch.worker_id ? patch.worker_id : current.worker_id
-    const status = patch.status ? normalizeTaskStatus(patch.status) : current.status
     const now = new Date().toISOString()
+    const actor = stageActorName(c.user.role, c.data.workers.find((w) => w.id === c.user.workerId), c.user.email)
+
+    // Due date: preserve the original deadline when one was already missed.
+    const due =
+      patch.due_date !== undefined
+        ? applyDueDateChange(current, patch.due_date || null)
+        : { due_date: current.due_date, original_due_date: current.original_due_date, changed: false, missedDeadline: false }
+
+    const status = patch.status ? normalizeTaskStatus(patch.status) : normalizeTaskStatus(current.status)
+    const stageFields =
+      patch.status && status !== normalizeTaskStatus(current.status)
+        ? applyStageTransition(current, status, now, actor)
+        : { status, completed_at: status === 'completed' ? (current.completed_at ?? now) : null, stage_history: current.stage_history ?? [] }
+
+    const qaTouched = patchTouchesQa(patch)
     const next: Task = normalizeTask({
       ...current,
       ...patch,
       worker_id: workerId,
       client_id: patch.client_id !== undefined ? resolveClientId(c.data, patch.client_id) : current.client_id,
-      status,
       title: patch.title !== undefined ? String(patch.title).trim() || current.title : current.title,
-      // Stamp the first time it reaches Completed; clear it when it moves back.
-      completed_at: status === 'completed' ? (current.completed_at ?? now) : null,
+      due_date: due.due_date,
+      original_due_date: due.original_due_date,
+      estimated_hours: patch.estimated_hours !== undefined ? normalizeEstimatedHours(patch.estimated_hours) : current.estimated_hours,
+      waiting_reason: patch.waiting_reason !== undefined ? normalizeWaitingReason(patch.waiting_reason) : current.waiting_reason,
+      qa_score: patch.qa_score !== undefined ? normalizeQaScore(patch.qa_score) : current.qa_score,
+      rework_type: patch.rework_type !== undefined ? normalizeReworkType(patch.rework_type) : current.rework_type,
+      // Stage machinery wins over any stray patch fields for timestamps.
+      ...stageFields,
+      completed_at: stageFields.completed_at ?? null,
+      qa_reviewed_at: qaTouched && patch.qa_score !== undefined && patch.qa_score !== null
+        ? (patch.qa_reviewed_at ?? now)
+        : patch.qa_reviewed_at !== undefined ? (patch.qa_reviewed_at ?? null) : current.qa_reviewed_at ?? null,
+      qa_reviewed_by: qaTouched && patch.qa_score !== undefined
+        ? (patch.qa_reviewed_by ?? actor)
+        : patch.qa_reviewed_by !== undefined ? (patch.qa_reviewed_by ?? null) : current.qa_reviewed_by ?? null,
       archived_at: status === 'completed' ? (patch.archived_at !== undefined ? patch.archived_at : (current.archived_at ?? null)) : null,
       id: current.id,
       created_at: current.created_at,
       updated_at: now,
     })
     c.data.tasks[idx] = next
+
+    // ---- audit trail (KPI history must be traceable, §15) ----
+    const audit = (action: string, detail: string) =>
+      pushKpiAudit(c.data, {
+        entity_type: 'task',
+        entity_id: current.id,
+        worker_id: current.worker_id,
+        action,
+        detail,
+        actor,
+      })
+    if (due.changed && due.missedDeadline) {
+      audit('due_date_changed', `Due date on “${current.title}” pushed from ${current.due_date ?? 'none'} to ${due.due_date ?? 'none'} after the deadline was missed — the original ${due.original_due_date} is kept for on-time KPI.`)
+    } else if (due.changed) {
+      audit('due_date_changed', `Due date on “${current.title}” changed from ${current.due_date ?? 'none (legacy)'} to ${due.due_date ?? 'none'}.`)
+    }
+    if (status === 'completed' && normalizeTaskStatus(current.status) !== 'completed') {
+      audit('completed', `“${current.title}” completed by ${actor}.`)
+    }
+    if (qaTouched) {
+      const scored = patch.qa_score !== undefined ? normalizeQaScore(patch.qa_score) : current.qa_score
+      if (scored !== current.qa_score) {
+        audit('qa_scored', `QA on “${current.title}” set to ${scored ?? '—'}/5.`)
+      }
+      const reworkType = patch.rework_type !== undefined ? normalizeReworkType(patch.rework_type) : current.rework_type
+      const reworkReq = patch.rework_required !== undefined ? patch.rework_required : current.rework_required
+      if (reworkType !== current.rework_type || reworkReq !== current.rework_required) {
+        audit('rework_classified', `Rework on “${current.title}”: ${reworkReq ? `required (${reworkType ?? 'unclassified'})` : 'not required'}.`)
+      }
+    }
+
     // Moving column (or worker), or restoring from archive, puts it at the top of the column.
-    if (status !== current.status || workerId !== current.worker_id || (current.archived_at && !next.archived_at)) {
+    if (status !== normalizeTaskStatus(current.status) || workerId !== current.worker_id || (current.archived_at && !next.archived_at)) {
       reindexTaskColumn(c.data.tasks, workerId, status, id, 0)
     }
     save(c.data)
@@ -2358,8 +2503,10 @@ export const localBackend: DataBackend = {
     }
     const target = normalizeTaskStatus(status)
     const now = new Date().toISOString()
-    task.status = target
-    task.completed_at = target === 'completed' ? (task.completed_at ?? now) : null
+    const actor = stageActorName(c.user.role, c.data.workers.find((w) => w.id === c.user.workerId), c.user.email)
+    // Stage hop: stamps Waiting Since / Submitted for Review / Completed At
+    // and appends to the stage history (§3).
+    Object.assign(task, applyStageTransition(task, target, now, actor))
     if (target !== 'completed') {
       task.archived_at = null
     }
@@ -2380,6 +2527,115 @@ export const localBackend: DataBackend = {
     c.data.tasks = c.data.tasks.filter((t) => t.id !== id)
     save(c.data)
     return { data: null, error: null }
+  },
+
+  // ---- Team KPI: monthly goals, bonus decisions, audit trail ---------------
+
+  async listMonthlyGoals() {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    // Management data: the Owner and anyone the Owner granted Team KPI.
+    if (!can(c, 'team_kpi.view')) return { data: [], error: null }
+    return { data: [...(c.data.monthlyGoals ?? [])].sort((a, b) => b.month.localeCompare(a.month)), error: null }
+  },
+
+  async saveMonthlyGoal(input: CreateMonthlyGoalInput) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (!can(c, 'team_kpi.view')) return { data: null, error: 'Only the Owner or Project Manager can set monthly targets.' }
+    if (!input.worker_id || !input.month) return { data: null, error: 'A worker and a month are required.' }
+    if (!c.data.workers.some((w) => w.id === input.worker_id)) return { data: null, error: 'Worker not found.' }
+    const now = new Date().toISOString()
+    const clean = (n: unknown): number | null => {
+      const v = Number(n)
+      return Number.isFinite(v) && v >= 0 ? v : null
+    }
+    const existing = (c.data.monthlyGoals ?? []).find((g) => g.worker_id === input.worker_id && g.month === input.month)
+    const next: MonthlyGoal = {
+      id: existing?.id ?? uid(),
+      worker_id: input.worker_id,
+      month: input.month,
+      target: input.target !== undefined ? clean(input.target) : (existing?.target ?? null),
+      on_time_target: input.on_time_target !== undefined ? clean(input.on_time_target) : (existing?.on_time_target ?? null),
+      qa_target: input.qa_target !== undefined ? clean(input.qa_target) : (existing?.qa_target ?? null),
+      note: input.note !== undefined ? (input.note?.trim() || null) : (existing?.note ?? null),
+      created_at: existing?.created_at ?? now,
+      updated_at: now,
+    }
+    if (existing) {
+      c.data.monthlyGoals = (c.data.monthlyGoals ?? []).map((g) => (g.id === existing.id ? next : g))
+    } else {
+      c.data.monthlyGoals = [next, ...(c.data.monthlyGoals ?? [])]
+    }
+    pushKpiAudit(c.data, {
+      entity_type: 'goal',
+      entity_id: next.id,
+      worker_id: next.worker_id,
+      action: 'goal_saved',
+      detail: `Monthly targets for ${next.month} updated (target ${next.target ?? '—'}, on-time ${next.on_time_target ?? '90'}%).`,
+      actor: actorLabel(c),
+    })
+    save(c.data)
+    return { data: next, error: null }
+  },
+
+  async listBonusDecisions() {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (!can(c, 'team_kpi.view')) return { data: [], error: null }
+    return { data: [...(c.data.bonusDecisions ?? [])].sort((a, b) => b.month.localeCompare(a.month)), error: null }
+  },
+
+  async saveBonusDecision(input: SaveBonusDecisionInput) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    // Bonus decisions are Owner-only — a Project Manager may read, never edit.
+    if (c.user.role !== 'admin') return { data: null, error: 'Only the Owner can change bonus decisions.' }
+    if (!input.worker_id || !input.month) return { data: null, error: 'A worker and a month are required.' }
+    const now = new Date().toISOString()
+    const existing = (c.data.bonusDecisions ?? []).find((b) => b.worker_id === input.worker_id && b.month === input.month)
+    const eligible = input.eligible === 'yes' || input.eligible === 'no' || input.eligible === 'pending'
+      ? input.eligible
+      : (existing?.eligible ?? 'pending')
+    const next: BonusDecision = {
+      id: existing?.id ?? uid(),
+      worker_id: input.worker_id,
+      month: input.month,
+      eligible,
+      approved_amount:
+        input.approved_amount !== undefined
+          ? input.approved_amount !== null && Number.isFinite(Number(input.approved_amount))
+            ? Math.max(0, Number(input.approved_amount))
+            : null
+          : (existing?.approved_amount ?? null),
+      approved_by: input.eligible !== undefined ? actorLabel(c) : (existing?.approved_by ?? null),
+      note: input.note !== undefined ? (input.note?.trim() || null) : (existing?.note ?? null),
+      created_at: existing?.created_at ?? now,
+      updated_at: now,
+    }
+    if (eligible !== 'yes') next.approved_amount = eligible === 'pending' ? next.approved_amount : null
+    if (existing) {
+      c.data.bonusDecisions = (c.data.bonusDecisions ?? []).map((b) => (b.id === existing.id ? next : b))
+    } else {
+      c.data.bonusDecisions = [next, ...(c.data.bonusDecisions ?? [])]
+    }
+    pushKpiAudit(c.data, {
+      entity_type: 'bonus',
+      entity_id: next.id,
+      worker_id: next.worker_id,
+      action: 'bonus_decided',
+      detail: `Bonus for ${next.month}: ${next.eligible}${next.approved_amount != null ? ` (approved ${next.approved_amount})` : ''}.`,
+      actor: actorLabel(c),
+    })
+    save(c.data)
+    return { data: next, error: null }
+  },
+
+  async listKpiAudit(limit = 200) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    if (!can(c, 'team_kpi.view')) return { data: [], error: null }
+    return { data: (c.data.kpiAudit ?? []).slice(0, Math.max(1, limit)), error: null }
   },
 
   async resetAll() {
@@ -2594,7 +2850,12 @@ export const localBackend: DataBackend = {
       comments: [],
       notifications: [],
       payments: [],
-      tasks: [],
+      tasks: seed.tasks.map((t) => ({
+        ...t,
+        worker_id: idMap.get(t.worker_id) || t.worker_id,
+        client_id: t.client_id ? seedClientMap.get(t.client_id) ?? null : null,
+        id: uid(),
+      })),
       clients: seedClients,
       clientPriorities: (seed.clientPriorities ?? []).map((p) => ({
         ...p,
@@ -2613,6 +2874,9 @@ export const localBackend: DataBackend = {
         worker_id: f.worker_id ? idMap.get(f.worker_id) ?? null : null,
         id: uid(),
       })),
+      monthlyGoals: (seed.monthlyGoals ?? []).map((g) => ({ ...g, worker_id: idMap.get(g.worker_id) || g.worker_id, id: uid() })),
+      bonusDecisions: (seed.bonusDecisions ?? []).map((b) => ({ ...b, worker_id: idMap.get(b.worker_id) || b.worker_id, id: uid() })),
+      kpiAudit: [],
       // Sample data deliberately ships no tickets: a fresh desk is the honest
       // starting state, and the first ticket anyone submits is what proves the
       // whole path (submit → notify the grant holder) end to end.

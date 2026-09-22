@@ -36,10 +36,13 @@ import type {
   TicketAssignee,
   CreateTicketInput,
   UpdateTicketInput,
+  MonthlyGoal,
+  BonusDecision,
+  KpiAuditEvent,
 } from './types'
 import { PERMISSIONS, normalizePermissions, canViewAllEntries } from './types'
 import { IT_SUPPORT_PERMISSION, isItSupport as isItSupportGrant } from './tickets'
-import type { DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, BackendResult, CreateFinanceItemInput, CreateMeetingInput, CreateNoteInput, CreateInvoiceInput } from './backend'
+import type { DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, BackendResult, CreateFinanceItemInput, CreateMeetingInput, CreateNoteInput, CreateInvoiceInput, CreateMonthlyGoalInput, SaveBonusDecisionInput } from './backend'
 import { localBackend } from './localDb'
 import { supabaseBackend, isSupabaseConfigured, ACCOUNT_DEACTIVATED_MESSAGE } from './supabaseDb'
 import { toast } from 'sonner'
@@ -168,6 +171,15 @@ interface StoreValue {
    */
   tickets: Ticket[]
   /**
+   * Monthly KPI targets per worker (management input). Empty for anyone
+   * without `team_kpi.view` — the Team KPI page shows defaults instead.
+   */
+  monthlyGoals: MonthlyGoal[]
+  /** Manual bonus decisions (Owner-only to edit). Empty without `team_kpi.view`. */
+  bonusDecisions: BonusDecision[]
+  /** KPI audit trail — QA scores, rework, due changes, bonus approvals. */
+  kpiAudit: KpiAuditEvent[]
+  /**
    * Does the signed-in account run IT Support? **Worker-only, and the only
    * gate the IT Support screens may use**: the admin deliberately does not hold
    * this capability, so `can('it_support.manage')` is false for the admin too.
@@ -289,6 +301,14 @@ interface StoreValue {
   /** Remove an invoice from the board. invoices.view. */
   deleteInvoice: (id: string) => Promise<boolean>
 
+  // ---- Team KPI (Owner + team_kpi.view) ----
+  /** Re-read goals, bonus decisions and the audit trail (after a save or a QA pass). */
+  refreshKpi: () => Promise<void>
+  /** Save a worker's monthly targets (on-time/QA/goal). team_kpi.view. */
+  saveMonthlyGoal: (input: CreateMonthlyGoalInput) => Promise<MonthlyGoal | null>
+  /** Set a bonus decision — Owner only; never computed from the KPI score. */
+  saveBonusDecision: (input: SaveBonusDecisionInput) => Promise<BonusDecision | null>
+
   createTask: (input: CreateTaskInput) => Promise<Task | null>
   updateTask: (id: string, patch: Partial<Omit<Task, 'id' | 'created_at' | 'updated_at'>>) => Promise<Task | null>
   /** Drag & drop: drop a task into `status` at index `position`. */
@@ -347,6 +367,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [invoices, setInvoices] = useState<Invoice[]>([])
   const [financeItems, setFinanceItems] = useState<FinanceItem[]>([])
   const [tickets, setTickets] = useState<Ticket[]>([])
+  const [monthlyGoals, setMonthlyGoals] = useState<MonthlyGoal[]>([])
+  const [bonusDecisions, setBonusDecisions] = useState<BonusDecision[]>([])
+  const [kpiAudit, setKpiAudit] = useState<KpiAuditEvent[]>([])
   const [dataLoading, setDataLoading] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
   const dataVersion = useRef(0)
@@ -517,7 +540,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       // Captured BEFORE the query: rows updated after this instant are picked
       // up by the next delta; duplicates are harmless (merged by id).
       const syncTime = new Date().toISOString()
-      const [w, e, s, at, n, p, u, t, cl, cp, mt, nt, inv, fi, tk] = await Promise.all([
+      const [w, e, s, at, n, p, u, t, cl, cp, mt, nt, inv, fi, tk, mg, bd, ka] = await Promise.all([
         light ? skipped<Worker[]>() : backend.listWorkers(),
         useDelta
           ? backend.listEntries({ since, limit: ENTRY_DELTA_LIMIT })
@@ -557,6 +580,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         // Tickets ride with the same group: the queue only changes when someone
         // submits or replies, and IT Support sees a fresh one within the tick.
         light ? skipped<Ticket[]>() : backend.listTickets(),
+        // Team KPI inputs + audit: tiny lists, same heavy-list grouping.
+        // An ungranted worker gets [] from the backend, not an error.
+        light ? skipped<MonthlyGoal[]>() : backend.listMonthlyGoals(),
+        light ? skipped<BonusDecision[]>() : backend.listBonusDecisions(),
+        light ? skipped<KpiAuditEvent[]>() : backend.listKpiAudit(),
       ])
       if (token !== dataVersion.current) return
       if (w.data) setWorkers(withAvatars(w.data, avatarsRef.current))
@@ -611,6 +639,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (inv.data) setInvoices(inv.data)
       if (fi.data) setFinanceItems(fi.data)
       if (tk.data) setTickets(tk.data)
+      if (mg.data) setMonthlyGoals(mg.data)
+      if (bd.data) setBonusDecisions(bd.data)
+      if (ka.data) setKpiAudit(ka.data)
     } finally {
       refreshInFlight.current = false
       if (token === dataVersion.current) setDataLoading(false)
@@ -1424,6 +1455,40 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (res.data) setTasks(res.data)
   }, [backend])
 
+  // ---- Team KPI ------------------------------------------------------------
+  const refreshKpi = useCallback(async () => {
+    const [g, b, a] = await Promise.all([
+      backend.listMonthlyGoals(),
+      backend.listBonusDecisions(),
+      backend.listKpiAudit(),
+    ])
+    if (g.data) setMonthlyGoals(g.data)
+    if (b.data) setBonusDecisions(b.data)
+    if (a.data) setKpiAudit(a.data)
+  }, [backend])
+
+  const saveMonthlyGoal = useCallback(async (input: CreateMonthlyGoalInput) => {
+    const res = await backend.saveMonthlyGoal(input)
+    if (res.error || !res.data) {
+      toast.error(res.error || 'Could not save the monthly targets.')
+      return null
+    }
+    await refreshKpi()
+    toast.success('Monthly targets saved.')
+    return res.data
+  }, [backend, refreshKpi])
+
+  const saveBonusDecision = useCallback(async (input: SaveBonusDecisionInput) => {
+    const res = await backend.saveBonusDecision(input)
+    if (res.error || !res.data) {
+      toast.error(res.error || 'Could not save the bonus decision.')
+      return null
+    }
+    await refreshKpi()
+    toast.success('Bonus decision saved.')
+    return res.data
+  }, [backend, refreshKpi])
+
   const createTask = useCallback(async (input: CreateTaskInput) => {
     const res = await backend.createTask(input)
     if (res.error || !res.data) {
@@ -1436,10 +1501,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const client = clients.find((c) => c.id === task.client_id)?.name || 'No client'
     const actor = isAdmin ? 'Admin' : (myWorker?.name || user?.email || 'A worker')
     notifySlack('task_created', { task_id: task.id, demoText: `🆕 ${actor} created “${task.title}” · Assigned to ${assignee} · ${client} · ${task.priority} priority · Due ${task.due_date || 'none'}.` })
-    // Approval-stage automation: a task created straight onto the Approval
-    // column flags it for the admin to review (task channel post still fires too).
-    if (task.status === 'approval') {
-      notifySlack('task_approval_created', { task_id: task.id, demoText: `🆕 ${actor} created “${task.title}” in Approval · Assigned to ${assignee} · ${client} · ${task.priority} priority · Due ${task.due_date || 'none'} — ready for your review.` })
+    // For-Review automation: a task created straight onto the For Review
+    // column flags it for the Owner/PM to run QA (task channel post still fires too).
+    if (task.status === 'for_review') {
+      notifySlack('task_approval_created', { task_id: task.id, demoText: `🆕 ${actor} created “${task.title}” in For Review · Assigned to ${assignee} · ${client} · ${task.priority} priority · Due ${task.due_date || 'none'} — ready for QA.` })
     }
     return task
   }, [backend, refreshTasks, workers, clients, isAdmin, myWorker, user])
@@ -1458,13 +1523,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const client = clients.find((c) => c.id === task.client_id)?.name || 'No client'
       const actor = isAdmin ? 'Admin' : (myWorker?.name || user?.email || 'A worker')
       notifySlack('task_moved', { task_id: task.id, previous_status: previous.status, demoText: `🔄 ${actor} moved “${task.title}” from ${previous.status} to ${task.status} · Assigned to ${assignee} · ${client} · ${task.priority} priority · Due ${task.due_date || 'none'}.` })
-      // Approval-stage automation: only when the task lands on Approval.
-      if (task.status === 'approval') {
-        notifySlack('task_approval_moved', { task_id: task.id, previous_status: previous.status, demoText: `🔄 ${actor} moved “${task.title}” to Approval · Assigned to ${assignee} · ${client} · ${task.priority} priority · Due ${task.due_date || 'none'} — ready for your review.` })
+      // For-Review automation: only when the task lands on For Review.
+      if (task.status === 'for_review') {
+        notifySlack('task_approval_moved', { task_id: task.id, previous_status: previous.status, demoText: `🔄 ${actor} moved “${task.title}” to For Review · Assigned to ${assignee} · ${client} · ${task.priority} priority · Due ${task.due_date || 'none'} — ready for QA.` })
       }
+      // Stage hops can append KPI audit rows (due change, QA, completion) —
+      // refresh the trail so the Team KPI page shows them immediately.
+      void refreshKpi()
+    } else if (patch.qa_score != null || patch.rework_type != null || patch.original_due_date !== undefined) {
+      void refreshKpi()
     }
     return res.data
-  }, [backend, refreshTasks, tasks, workers, clients, isAdmin, myWorker, user])
+  }, [backend, refreshTasks, tasks, workers, clients, isAdmin, myWorker, user, refreshKpi])
 
   const moveTask = useCallback(async (id: string, status: TaskStatus, position: number) => {
     const previous = tasks.find((t) => t.id === id)
@@ -1497,9 +1567,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const client = clients.find((c) => c.id === task.client_id)?.name || 'No client'
       const actor = isAdmin ? 'Admin' : (myWorker?.name || user?.email || 'A worker')
       notifySlack('task_moved', { task_id: task.id, previous_status: previous.status, demoText: `🔄 ${actor} moved “${task.title}” from ${previous.status} to ${status} · Assigned to ${assignee} · ${client} · ${task.priority} priority · Due ${task.due_date || 'none'}.` })
-      // Approval-stage automation: only when the task lands on Approval.
-      if (status === 'approval') {
-        notifySlack('task_approval_moved', { task_id: task.id, previous_status: previous.status, demoText: `🔄 ${actor} moved “${task.title}” to Approval · Assigned to ${assignee} · ${client} · ${task.priority} priority · Due ${task.due_date || 'none'} — ready for your review.` })
+      // For-Review automation: only when the task lands on For Review.
+      if (status === 'for_review') {
+        notifySlack('task_approval_moved', { task_id: task.id, previous_status: previous.status, demoText: `🔄 ${actor} moved “${task.title}” to For Review · Assigned to ${assignee} · ${client} · ${task.priority} priority · Due ${task.due_date || 'none'} — ready for QA.` })
       }
     }
     return res.data
@@ -1640,6 +1710,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     invoices,
     financeItems,
     tickets,
+    monthlyGoals,
+    bonusDecisions,
+    kpiAudit,
     isItSupport,
     unreadCount,
     dataLoading,
@@ -1697,6 +1770,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     createInvoice,
     updateInvoice,
     deleteInvoice,
+    refreshKpi,
+    saveMonthlyGoal,
+    saveBonusDecision,
     createTask,
     updateTask,
     moveTask,

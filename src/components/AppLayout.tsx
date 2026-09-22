@@ -8,6 +8,7 @@ import {
   ListOrdered,
   CalendarDays,
   ReceiptText,
+  Target,
   StickyNote,
   Users,
   BarChart3,
@@ -61,6 +62,8 @@ const NAV: Record<NavKey, NavItem> = {
   entriesMine: { to: '/entries', label: 'My Time', shortLabel: 'Time', icon: ListChecks },
   tasksAll: { to: '/tasks', label: 'Tasks', shortLabel: 'Tasks', icon: KanbanSquare },
   tasksMine: { to: '/tasks', label: 'My Tasks', shortLabel: 'Tasks', icon: KanbanSquare },
+  // KPI dashboard: between Tasks and Invoicing, gated on `team_kpi.view`.
+  teamKpi: { to: '/team-kpi', label: 'Team KPI', shortLabel: 'KPI', icon: Target },
   priorityBoard: { to: '/priority-board', label: 'Priority Board', shortLabel: 'Priority', icon: ListOrdered },
   meetings: { to: '/meetings', label: 'Meetings', shortLabel: 'Meet', icon: CalendarDays },
   invoicing: { to: '/invoices', label: 'Invoicing', shortLabel: 'Invoice', icon: ReceiptText },

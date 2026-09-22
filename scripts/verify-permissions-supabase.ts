@@ -178,7 +178,7 @@ async function scenario5_createTask_without_worker_id() {
   // The form sends no worker_id (mirrors the buggy `worker_id: canAssign ? form.workerId : undefined`).
   const clients = (await supabaseBackend.listClients()).data || []
   const client = clients[0]
-  const res = await supabaseBackend.createTask({ client_id: client.id, title: 'My own task' })
+  const res = await supabaseBackend.createTask({ due_date: '2099-12-31', client_id: client.id, title: 'My own task' })
   assert(!res.error, `createTask without worker_id still succeeds (got: ${res.error})`)
   assert(
     res.data?.worker_id === 'worker-1',

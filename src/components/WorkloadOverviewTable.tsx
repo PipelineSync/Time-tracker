@@ -1,11 +1,11 @@
 import { Users } from 'lucide-react'
-import type { Worker } from '@/lib/types'
+import type { TaskStatus, Worker } from '@/lib/types'
 import { TaskStatusNames } from '@/lib/types'
 import { AvatarBubble } from '@/components/AvatarBubble'
 import { cn, formatDateTime } from '@/lib/utils'
 
-/** The four open (not-yet-completed) stages that make up a member's load. */
-const LOAD_STATUSES = ['todo', 'in_progress', 'waiting', 'approval'] as const
+/** The open (not-yet-completed) stages that make up a member's load. */
+const LOAD_STATUSES = ['todo', 'in_progress', 'waiting', 'for_review', 'rework'] as const
 type LoadStatus = (typeof LOAD_STATUSES)[number]
 
 export interface WorkloadOverviewRow {
@@ -21,11 +21,13 @@ export interface WorkloadOverviewRow {
 }
 
 /** Cell text colours — the numbers echo the board's column colours. */
-const CELL_COLORS: Record<LoadStatus, string> = {
+const CELL_COLORS: Record<TaskStatus, string> = {
   todo: 'text-foreground',
   in_progress: 'text-sky-600 dark:text-sky-400',
   waiting: 'text-amber-600 dark:text-amber-500',
-  approval: 'text-violet-600 dark:text-violet-400',
+  for_review: 'text-violet-600 dark:text-violet-400',
+  rework: 'text-rose-600 dark:text-rose-400',
+  completed: 'text-emerald-600 dark:text-emerald-400',
 }
 
 function workloadLevel(total: number): { label: string; className: string } {
@@ -60,7 +62,7 @@ export function WorkloadOverviewTable({
           </span>
           <div>
             <h2 className="text-base font-semibold leading-tight">Team Workload Overview</h2>
-            <p className="text-xs text-muted-foreground">Task count and workload based on active tasks</p>
+            <p className="text-xs text-muted-foreground">Stage counts and overdue slice from active tasks</p>
           </div>
         </div>
 
@@ -74,7 +76,8 @@ export function WorkloadOverviewTable({
                   s === 'todo' && 'bg-slate-400',
                   s === 'in_progress' && 'bg-sky-500',
                   s === 'waiting' && 'bg-amber-500',
-                  s === 'approval' && 'bg-violet-500'
+                  s === 'for_review' && 'bg-violet-500',
+                  s === 'rework' && 'bg-rose-500'
                 )}
                 aria-hidden
               />
@@ -98,7 +101,7 @@ export function WorkloadOverviewTable({
       </div>
 
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[760px] text-sm">
+        <table className="w-full min-w-[900px] text-sm">
           <thead>
             <tr className="text-left text-xs text-muted-foreground">
               <th className="px-4 py-2.5 font-medium sm:px-5">Team Member</th>
