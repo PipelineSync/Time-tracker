@@ -19,6 +19,8 @@ create table if not exists public.workers (
   -- 0=Sun … 6=Sat, and the weekly hour capacity (default Mon–Fri / 40h).
   workdays    smallint[] not null default '{1,2,3,4,5}',
   weekly_capacity_hours numeric not null default 40,
+  -- Optional colour tag (8 built-in tags or #hex) mirroring clients.color
+  color       text,
   created_at  timestamptz not null default now(),
   updated_at  timestamptz not null default now(),
   constraint workers_schedule_valid check (
@@ -42,6 +44,16 @@ alter table public.workers add constraint workers_schedule_valid check (
   and workdays <@ array[0,1,2,3,4,5,6]::smallint[]
   and weekly_capacity_hours > 0
   and weekly_capacity_hours <= 168
+);
+
+-- Databases created before the worker colour column existed (safe re-run).
+alter table public.workers add column if not exists color text;
+alter table public.workers drop constraint if exists workers_color_check;
+alter table public.workers add constraint workers_color_check check (
+  color is null
+  or color in ('blue','aqua','violet','emerald','amber','orange','rose','slate')
+  or color ~* '^#[0-9a-fA-F]{6}$'
+  or color ~* '^#[0-9a-fA-F]{3}$'
 );
 
 -- ---------- time_entries ----------
@@ -268,8 +280,8 @@ alter table public.tasks add column if not exists rework_required boolean;
 alter table public.tasks add column if not exists rework_type text;
 alter table public.tasks add column if not exists rework_notes text;
 alter table public.tasks add column if not exists stage_history jsonb not null default '[]'::jsonb;
-update public.tasks set status = 'for_review' where status = 'approval';
 alter table public.tasks drop constraint if exists tasks_status_check;
+update public.tasks set status = 'for_review' where status = 'approval';
 alter table public.tasks add constraint tasks_status_check
   check (status in ('todo','in_progress','waiting','for_review','rework','completed'));
 

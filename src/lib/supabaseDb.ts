@@ -42,6 +42,7 @@ import {
   TEAM_VIEW_PERMISSIONS,
   ALL_ENTRIES_VIEW_PERMISSIONS,
   normalizePermissions,
+  normalizeWorkerColor,
   isValidClientColor,
   normalizeTaskStage,
   normalizeWorkdays,
@@ -87,6 +88,9 @@ const TEAM_KPI_PERMISSIONS_MIGRATION_MESSAGE =
 
 const TEAM_KPI_MIGRATION_MESSAGE =
   'Team KPI data is unavailable: run supabase/RUN-THIS-team-kpi.sql in the Supabase SQL editor first.'
+
+const WORKER_COLOR_MIGRATION_MESSAGE =
+  'Worker colour tag was not saved: run supabase/RUN-THIS-worker-color.sql in the Supabase SQL editor to add the color column. Everything else was saved.'
 
 const PERMISSIONS_MIGRATION_MESSAGE =
   'Worker access levels need the database migration supabase/worker-permissions.sql to be applied. Everything else was saved.'
@@ -223,6 +227,7 @@ function normalizeWorker(w: Worker): Worker {
     // (Mon–Fri, 40h) so workload math never sees an empty schedule.
     workdays: normalizeWorkdays(w.workdays),
     weekly_capacity_hours: normalizeWeeklyCapacity(w.weekly_capacity_hours),
+    color: normalizeWorkerColor(w.color),
   }
 }
 const normalizeWorkers = (rows: Worker[] | null): Worker[] => (rows ?? []).map(normalizeWorker)
@@ -1095,7 +1100,7 @@ export const supabaseBackend: DataBackend = {
     // behaviour) made a freshly saved tick box look like it had snapped
     // back to off — the database was correct, the round-trip was just
     // dropping the column.
-    const columns = 'id, name, email, hourly_rate, status, position, payment_methods, qr_code_url, permissions, workdays, weekly_capacity_hours, created_at, updated_at'
+    const columns = 'id, name, email, hourly_rate, status, position, payment_methods, qr_code_url, permissions, workdays, weekly_capacity_hours, color, created_at, updated_at'
     // QR codes are not profile avatars: admins need the worker's QR image in
     // the Mark paid dialog so they can scan it. Keep it in the worker list;
     // avatar images are still loaded separately to avoid making this query
@@ -1109,14 +1114,22 @@ export const supabaseBackend: DataBackend = {
       }
       return client().from('workers').select(cols).order('name')
     }
-    let { data, error } = (await fetchRows(columns)) as { data: Worker[] | null; error: { code?: string; message?: string } | null }
+    let cols = columns
+    let { data, error } = (await fetchRows(cols)) as { data: Worker[] | null; error: { code?: string; message?: string } | null }
+    if (error && isMissingColumn(error as { code?: string; message?: string }, 'color')) {
+      console.warn('[workers] the workers.color column is missing — run supabase/RUN-THIS-worker-color.sql to enable worker colour tags.')
+      cols = cols.replace('color, ', '')
+      const retry = (await fetchRows(cols)) as { data: Worker[] | null; error: { code?: string; message?: string } | null }
+      data = retry.data
+      error = retry.error
+    }
     if (error && (isMissingColumn(error as { code?: string; message?: string }, 'workdays') ||
         isMissingColumn(error as { code?: string; message?: string }, 'weekly_capacity_hours'))) {
       // Database without supabase/RUN-THIS-team-kpi.sql: read the rest and
       // let normalizeWorker() fill the default Mon–Fri / 40h schedule.
       console.warn('[workers] schedule columns are missing — run supabase/RUN-THIS-team-kpi.sql to set per-worker workweeks.')
-      const noSchedule = columns.replace('workdays, ', '').replace('weekly_capacity_hours, ', '')
-      const retry = (await fetchRows(noSchedule)) as { data: Worker[] | null; error: { code?: string; message?: string } | null }
+      cols = cols.replace('workdays, ', '').replace('weekly_capacity_hours, ', '')
+      const retry = (await fetchRows(cols)) as { data: Worker[] | null; error: { code?: string; message?: string } | null }
       data = retry.data
       error = retry.error
     }
@@ -1125,8 +1138,8 @@ export const supabaseBackend: DataBackend = {
       // warn in the console. The store still loads (with permissions: []),
       // and the access tick boxes explain what to run.
       console.warn('[workers] the workers.permissions column is missing — run supabase/worker-permissions.sql to enable per-worker access.')
-      const noPermColumns = columns.replace('permissions, ', '').replace('workdays, ', '').replace('weekly_capacity_hours, ', '')
-      const retry = (await fetchRows(noPermColumns)) as { data: Worker[] | null; error: { code?: string; message?: string } | null }
+      cols = cols.replace('permissions, ', '')
+      const retry = (await fetchRows(cols)) as { data: Worker[] | null; error: { code?: string; message?: string } | null }
       data = retry.data
       error = retry.error
     }
@@ -1186,6 +1199,7 @@ export const supabaseBackend: DataBackend = {
           permissions: normalizePermissions(input.permissions),
           workdays: normalizeWorkdays(input.workdays),
           weekly_capacity_hours: normalizeWeeklyCapacity(input.weekly_capacity_hours),
+          color: normalizeWorkerColor(input.color),
           accountEmail,
           accountPassword: input.accountPassword,
         }),
@@ -1207,6 +1221,7 @@ export const supabaseBackend: DataBackend = {
     if (!canDo(me.data!, 'workers.manage')) return denied('edit workers')
     const { newPassword, ...rest } = patch as { newPassword?: string } & Partial<Worker>
     if (rest.permissions) rest.permissions = normalizePermissions(rest.permissions)
+    if (rest.color !== undefined) rest.color = normalizeWorkerColor(rest.color)
     // Old databases reject unknown permission keys one migration at a time.
     // Each step below saves everything the database accepts so far, drops the
     // keys it cannot accept yet (accumulating in `dropped` so several stale
@@ -1243,6 +1258,13 @@ export const supabaseBackend: DataBackend = {
       dropped.add('team_kpi.view')
       upd = await client().from('workers').update({ ...rest, permissions: normalizePermissions(rest.permissions.filter((p) => !dropped.has(p))) }).eq('id', id).select().single()
       if (!upd.error) return fail(TEAM_KPI_PERMISSIONS_MIGRATION_MESSAGE)
+    }
+    if (upd.error && isMissingColumn(upd.error, 'color')) {
+      // Database without supabase/RUN-THIS-worker-color.sql: save everything else,
+      // drop only the color column, and tell the admin which file to run.
+      const { color: _c, ...withoutColor } = rest
+      upd = await client().from('workers').update(withoutColor).eq('id', id).select().single()
+      if (!upd.error) return fail(WORKER_COLOR_MIGRATION_MESSAGE)
     }
     if (upd.error && (isMissingColumn(upd.error, 'workdays') || isMissingColumn(upd.error, 'weekly_capacity_hours'))) {
       // Database without the Team KPI migration: save everything else, drop

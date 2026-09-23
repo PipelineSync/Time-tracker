@@ -6,8 +6,10 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Coffee, Radio, UserRound, Volume2, VolumeX } from 'lucide-react'
-import { cn, formatDateTime, formatMsShort, initials, timerBreakMs, timerElapsedMs, timerSessionStart } from '@/lib/utils'
+import { cn, formatDateTime, formatMsShort, timerBreakMs, timerElapsedMs, timerSessionStart } from '@/lib/utils'
 import { playCue } from '@/lib/sounds'
+import { AvatarBubble } from '@/components/AvatarBubble'
+import { WorkerDot } from '@/components/WorkerBadge'
 import type { ActiveTimer, Worker } from '@/lib/types'
 
 interface Row {
@@ -125,16 +127,16 @@ export function ActiveWorkersPanel() {
                     />
                     <span className={cn('relative inline-flex h-3 w-3 rounded-full', r.onBreak ? 'bg-[#36B7C9]' : 'bg-[#F77A0A]')} />
                   </span>
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary/10 text-xs font-semibold text-primary">
-                    {r.worker?.avatar_url ? (
-                      <img src={r.worker.avatar_url} alt="" className="h-full w-full object-cover" />
-                    ) : (
-                      initials(r.worker?.name)
-                    )}
-                  </div>
+                  <AvatarBubble
+                    name={r.worker?.name || r.name}
+                    avatarUrl={r.worker?.avatar_url}
+                    color={r.worker?.color}
+                    size="md"
+                  />
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="truncate font-semibold">{r.name}</p>
+                      {r.worker?.color && <WorkerDot color={r.worker.color} />}
                       {r.onBreak ? (
                         <Badge className="gap-1 border-transparent bg-[#36B7C9]/15 text-[#0d7c8c] dark:text-[#7fdbe8]">
                           <Coffee className="h-3 w-3" /> On break

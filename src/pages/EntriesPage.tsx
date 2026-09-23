@@ -14,6 +14,7 @@ import { EntryChatDialog } from '@/components/EntryChatDialog'
 import { EmptyState } from '@/components/EmptyState'
 import { ClientBadge } from '@/components/ClientBadge'
 import { ClientSelect } from '@/components/ClientSelect'
+import { AvatarBubble } from '@/components/AvatarBubble'
 import { toast } from 'sonner'
 import { Plus, ListChecks, Pencil, Trash2, Copy, Search, X, MessageSquare } from 'lucide-react'
 import type { TimeEntry } from '@/lib/types'
@@ -90,6 +91,7 @@ export function EntriesPage() {
   }, [params, setParams, entries])
 
   const workerName = (id: string) => workers.find((w) => w.id === id)?.name || 'Unknown'
+  const workerOf = (id: string) => workers.find((w) => w.id === id)
   const clientOf = (id: string | null) => (id ? clients.find((c) => c.id === id) ?? null : null)
   /** What an entry is booked to: its client, or its legacy free-text scope. */
   const scopeLabel = (e: TimeEntry) => clientOf(e.client_id)?.name || e.project || ''
@@ -202,7 +204,14 @@ export function EntriesPage() {
       {seesAllEntries && (
         <td className="px-4 py-3 align-middle font-medium">
           <span className="flex flex-wrap items-center gap-1.5">
-            {workerName(e.worker_id)}
+            <AvatarBubble
+              name={workerOf(e.worker_id)?.name || workerName(e.worker_id)}
+              avatarUrl={workerOf(e.worker_id)?.avatar_url}
+              color={workerOf(e.worker_id)?.color}
+              size="sm"
+              className="h-6 w-6 text-[9px]"
+            />
+            <span>{workerName(e.worker_id)}</span>
             {e.settled_at && (
               <Badge variant="muted" className="px-1.5 py-0 text-[10px]" title={`Settled ${formatDate(e.settled_at)}`}>
                 Settled
@@ -393,7 +402,16 @@ export function EntriesPage() {
                       <p className="flex flex-wrap items-center gap-1.5 font-semibold">
                         {/* Own time: the date is the headline — every card is
                             the signed-in worker's own. */}
-                        {seesAllEntries ? workerName(e.worker_id) : formatDate(e.start_time)}
+                        {seesAllEntries && (
+                          <AvatarBubble
+                            name={workerOf(e.worker_id)?.name || workerName(e.worker_id)}
+                            avatarUrl={workerOf(e.worker_id)?.avatar_url}
+                            color={workerOf(e.worker_id)?.color}
+                            size="sm"
+                            className="h-5 w-5 text-[8px]"
+                          />
+                        )}
+                        <span>{seesAllEntries ? workerName(e.worker_id) : formatDate(e.start_time)}</span>
                         {e.settled_at && (
                           <Badge variant="muted" className="px-1.5 py-0 text-[10px]" title={`Settled ${formatDate(e.settled_at)}`}>
                             Settled

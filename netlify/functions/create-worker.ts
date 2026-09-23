@@ -44,6 +44,16 @@ function cleanPermissions(value: unknown): string[] {
   return PERMISSIONS.filter((p) => value.includes(p))
 }
 
+const VALID_BUILTIN_COLORS = ['blue', 'aqua', 'violet', 'emerald', 'amber', 'orange', 'rose', 'slate']
+
+function cleanColor(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (VALID_BUILTIN_COLORS.includes(trimmed)) return trimmed
+  if (/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(trimmed)) return trimmed
+  return null
+}
+
 export default async function handler(request: Request) {
   if (request.method !== 'POST') return json(405, { error: 'Method not allowed.' })
   // The admin, or a worker they granted "Add, edit and remove workers".
@@ -54,7 +64,7 @@ export default async function handler(request: Request) {
   try {
     const body = await request.json() as {
       name?: string; email?: string; hourly_rate?: number; status?: 'active' | 'inactive';
-      position?: string | null;
+      position?: string | null; color?: unknown;
       workdays?: unknown; weekly_capacity_hours?: unknown;
       permissions?: unknown; accountEmail?: string; accountPassword?: string
     }
@@ -65,6 +75,7 @@ export default async function handler(request: Request) {
     const password = body.accountPassword || ''
     const permissions = cleanPermissions(body.permissions)
     const position = (body.position || '').trim() || null
+    const color = cleanColor(body.color)
     // Schedule (Team KPI workload): day indexes 0–6 (Sun–Sat) and a positive
     // weekly capacity, defaulting to the standard Mon–Fri / 40h week.
     const days = Array.isArray(body.workdays)
@@ -91,13 +102,26 @@ export default async function handler(request: Request) {
     if (authError || !authData.user) return json(400, { error: authError?.message || 'Could not create worker login.' })
 
     const authUserId = authData.user.id
-    const row = { user_id: userId, name, email, hourly_rate: hourlyRate, status, position }
+    const row: Record<string, any> = { user_id: userId, name, email, hourly_rate: hourlyRate, status, position, color }
     let { data: worker, error: workerError } = await sb
       .from('workers')
       .insert({ ...row, permissions, ...schedule })
       .select()
       .single()
     let warning: string | undefined
+    if (workerError && /color/i.test(workerError.message || '')) {
+      // Database without supabase/RUN-THIS-worker-color.sql: create worker without color
+      delete row.color
+      ;({ data: worker, error: workerError } = await sb
+        .from('workers')
+        .insert({ ...row, permissions, ...schedule })
+        .select()
+        .single())
+      if (!workerError) {
+        warning =
+          'Worker colour was not saved: run supabase/RUN-THIS-worker-color.sql in the Supabase SQL editor to add the color column.'
+      }
+    }
     if (workerError && /workdays|weekly_capacity_hours/i.test(workerError.message || '')) {
       // Database without supabase/RUN-THIS-team-kpi.sql: create the worker
       // anyway — normalizeWorker() will fill the default Mon–Fri / 40h week.

@@ -100,7 +100,7 @@ export function EmployeePerformanceTable({
                 <tr key={emp.worker.id} className="border-b last:border-0 hover:bg-muted/40">
                   <td className="px-4 py-2">
                     <div className="flex items-center gap-2">
-                      <AvatarBubble name={emp.worker.name} avatarUrl={emp.worker.avatar_url} className="h-7 w-7 text-[10px]" />
+                      <AvatarBubble name={emp.worker.name} avatarUrl={emp.worker.avatar_url} color={emp.worker.color} className="h-7 w-7 text-[10px]" />
                       <div className="min-w-0">
                         <p className="truncate text-sm font-medium">{emp.worker.name}</p>
                         <p className="truncate text-[11px] text-muted-foreground">{emp.worker.position || 'Team member'}</p>

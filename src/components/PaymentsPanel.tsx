@@ -377,7 +377,7 @@ export function PaymentsPanel() {
           {paying && (
             <div className="space-y-3">
               <div className="flex items-center gap-3 rounded-lg border bg-muted/30 p-3">
-                <AvatarBubble name={payingWorker?.name || 'Worker'} avatarUrl={payingWorker?.avatar_url ?? null} size="lg" />
+                <AvatarBubble name={payingWorker?.name || 'Worker'} avatarUrl={payingWorker?.avatar_url ?? null} color={payingWorker?.color} size="lg" />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium">{payingWorker?.name || workerName(paying.worker_id)}</p>
                   <p className="text-xs text-muted-foreground">

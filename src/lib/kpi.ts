@@ -711,11 +711,22 @@ export function applyKpiFilters(tasks: Task[], f: KpiFilters): Task[] {
   return rows
 }
 
-/** Which employees appear under the current employee filter (active only by default). */
+/**
+ * A worker is a KPI subject when they do NOT hold `team_kpi.view`.
+ * Reviewers/viewers holding the grant are excluded from KPI numbers (§Requirement 1).
+ */
+export function isKpiSubject(worker: Worker): boolean {
+  return !(worker.permissions && worker.permissions.includes('team_kpi.view'))
+}
+
+/** Which employees appear under the current employee filter (active KPI subjects only; reviewers excluded). */
 export function scopeEmployees(workers: Worker[], f: KpiFilters): Worker[] {
-  const active = workers.filter((w) => w.status === 'active')
-  const base = active.length > 0 ? active : workers
-  return f.employee === 'all' ? base : base.filter((w) => w.id === f.employee)
+  const subjects = workers.filter(isKpiSubject)
+  const active = subjects.filter((w) => w.status === 'active')
+  const base = active.length > 0 ? active : subjects
+  if (f.employee === 'all') return base
+  const matched = base.filter((w) => w.id === f.employee)
+  return matched.length > 0 ? matched : base
 }
 
 /** Convenience: every open status (for "Active" style counts). */

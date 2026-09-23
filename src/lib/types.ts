@@ -11,6 +11,13 @@ export type Role = 'admin' | 'worker'
  */
 export type PaymentMethod = 'cash' | 'qr'
 
+/** Keep payment methods usable: 'cash' and/or 'qr', default ['cash']. */
+export function normalizePaymentMethods(methods: unknown): PaymentMethod[] {
+  if (!Array.isArray(methods)) return ['cash']
+  const valid = methods.filter((m): m is PaymentMethod => m === 'cash' || m === 'qr')
+  return valid.length > 0 ? valid : ['cash']
+}
+
 export interface Worker {
   id: string
   name: string
@@ -46,6 +53,11 @@ export interface Worker {
    * percentage). Defaults to `DEFAULT_WEEKLY_CAPACITY_HOURS`.
    */
   weekly_capacity_hours: number
+  /**
+   * Optional colour tag (one of the 8 built-in tags or custom #hex), same
+   * vocabulary as client colour tags. Default null.
+   */
+  color: string | null
   created_at: string
   updated_at: string
 }
@@ -709,6 +721,71 @@ export function clientColorStyles(color: ClientColor): ClientColorStyle {
     badgeStyle: { backgroundColor: `${hex}1a`, borderColor: `${hex}4d`, color: hex },
     dotStyle: { backgroundColor: hex },
     chart: hex,
+  }
+}
+
+/**
+ * Worker colour tags (§Requirement 2): same vocabulary and styling as client
+ * colour tags (8 built-in tags + custom #hex).
+ */
+export type WorkerColorPreset = ClientColorPreset
+export const WORKER_COLORS: WorkerColorPreset[] = [...CLIENT_COLORS]
+export type WorkerColor = ClientColor
+export const WORKER_COLOR_NAMES: Record<WorkerColorPreset, string> = {
+  blue: 'Blue',
+  aqua: 'Aqua',
+  violet: 'Violet',
+  emerald: 'Emerald',
+  amber: 'Amber',
+  orange: 'Orange',
+  rose: 'Rose',
+  slate: 'Slate',
+}
+
+export function isWorkerColorPreset(color: string): color is WorkerColorPreset {
+  return isClientColorPreset(color as ClientColor)
+}
+
+/** True when a value is a valid worker colour tag: 8 presets or #RGB / #RRGGBB hex. */
+export function isValidWorkerColor(value: unknown): value is string {
+  return isValidClientColor(value)
+}
+
+/** Normalizes a worker colour value, falling back to null on empty/invalid input. */
+export function normalizeWorkerColor(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  return isValidWorkerColor(trimmed) ? trimmed : null
+}
+
+/** Styles for rendering a worker's colour ring, dot or badge. Returns null when unset. */
+export function workerColorStyles(color: string | null | undefined): ClientColorStyle | null {
+  if (!color) return null
+  const norm = normalizeWorkerColor(color)
+  if (!norm) return null
+  return clientColorStyles(norm)
+}
+
+/** Normalize a worker row to the current schema shape, filling defaults for missing fields. */
+export function normalizeWorker(w: Partial<Worker> & Record<string, any>): Worker {
+  const payment_methods = normalizePaymentMethods(w.payment_methods)
+  return {
+    id: String(w.id ?? ''),
+    name: String(w.name ?? ''),
+    email: w.email ? String(w.email) : null,
+    hourly_rate: Number.isFinite(Number(w.hourly_rate)) ? Number(w.hourly_rate) : 0,
+    status: w.status === 'inactive' ? 'inactive' : 'active',
+    position: w.position ? String(w.position) : null,
+    avatar_url: w.avatar_url ? String(w.avatar_url) : null,
+    payment_methods,
+    qr_code_url: payment_methods.includes('qr') ? (w.qr_code_url ?? null) : null,
+    permissions: normalizePermissions(w.permissions),
+    workdays: normalizeWorkdays(w.workdays),
+    weekly_capacity_hours: normalizeWeeklyCapacity(w.weekly_capacity_hours),
+    color: normalizeWorkerColor(w.color),
+    created_at: w.created_at ? String(w.created_at) : new Date().toISOString(),
+    updated_at: w.updated_at ? String(w.updated_at) : new Date().toISOString(),
   }
 }
 

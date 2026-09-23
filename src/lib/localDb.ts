@@ -51,6 +51,7 @@ import {
   TEAM_VIEW_PERMISSIONS,
   ALL_ENTRIES_VIEW_PERMISSIONS,
   normalizePermissions,
+  normalizeWorkerColor,
   isValidClientColor,
   normalizeTaskStage,
   normalizeWeeklyCapacity,
@@ -195,7 +196,7 @@ function normalizePaymentMethods(methods: unknown): PaymentMethod[] {
 }
 
 /** Normalize a worker row loaded from storage (or the demo seed) to the current shape. */
-function normalizeWorker(w: Worker): Worker {
+export function normalizeWorker(w: Worker): Worker {
   const payment_methods = normalizePaymentMethods(w.payment_methods)
   return {
     ...w,
@@ -205,6 +206,7 @@ function normalizeWorker(w: Worker): Worker {
     // (Mon–Fri, 40h) so workload math never sees an empty schedule.
     workdays: normalizeWorkdays(w.workdays),
     weekly_capacity_hours: normalizeWeeklyCapacity(w.weekly_capacity_hours),
+    color: normalizeWorkerColor(w.color),
     // A QR image only makes sense while the worker accepts QR payments.
     qr_code_url: payment_methods.includes('qr') ? (w.qr_code_url ?? null) : null,
   }
@@ -1117,6 +1119,7 @@ export const localBackend: DataBackend = {
       permissions: normalizePermissions(input.permissions),
       workdays: normalizeWorkdays(input.workdays),
       weekly_capacity_hours: normalizeWeeklyCapacity(input.weekly_capacity_hours),
+      color: normalizeWorkerColor(input.color),
       created_at: now,
       updated_at: now,
     }
@@ -1152,6 +1155,7 @@ export const localBackend: DataBackend = {
     // Schedule fields always come back usable — the form may send junk.
     if (patch.workdays !== undefined) merged.workdays = normalizeWorkdays(patch.workdays)
     if (patch.weekly_capacity_hours !== undefined) merged.weekly_capacity_hours = normalizeWeeklyCapacity(patch.weekly_capacity_hours)
+    if (patch.color !== undefined) merged.color = normalizeWorkerColor(patch.color)
     c.data.workers[idx] = merged
     // If admin set a new password, update the linked account.
     const newPassword = (patch as { newPassword?: string }).newPassword
