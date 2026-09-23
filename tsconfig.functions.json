@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowSyntheticDefaultImports": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "noEmit": true,
+    "types": ["node"],
+    "noUnusedLocals": false,
+    "noUnusedParameters": false
+  },
+  // The Netlify Functions. Kept separate from tsconfig.json because these are
+  // Node programs, not browser code: they get Node globals and no DOM, which
+  // is what catches a stray `window` or a browser-only API leaking into a
+  // server bundle.
+  //
+  // scripts/ is deliberately NOT included: those are standalone tsx harnesses
+  // that each declare the same top-level `assert`/`mem` helpers, so putting
+  // them in one TypeScript program produces hundreds of "cannot redeclare"
+  // errors that have nothing to do with the code under test.
+  "include": ["netlify/**/*.ts"]
+}

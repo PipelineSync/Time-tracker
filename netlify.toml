@@ -5,6 +5,46 @@
 [build.environment]
   NODE_VERSION = "22"
 
+# ============================================================================
+# Connector routes — MUST stay above the SPA catch-all.
+#
+# Netlify applies the first matching redirect rule, so these specific rewrites
+# have to come before `/* → /index.html` or the app shell would swallow them.
+# Status 200 is a rewrite (not a 3xx), so the method and body survive — which
+# matters because /mcp and /oauth/token are POST-only.
+# ============================================================================
+[[redirects]]
+  from = "/.well-known/oauth-protected-resource"
+  to = "/.netlify/functions/oauth-discovery"
+  status = 200
+
+[[redirects]]
+  from = "/.well-known/oauth-authorization-server"
+  to = "/.netlify/functions/oauth-discovery"
+  status = 200
+
+[[redirects]]
+  from = "/oauth/register"
+  to = "/.netlify/functions/oauth-register"
+  status = 200
+
+[[redirects]]
+  from = "/oauth/authorize"
+  to = "/.netlify/functions/oauth-authorize"
+  status = 200
+
+[[redirects]]
+  from = "/oauth/token"
+  to = "/.netlify/functions/oauth-token"
+  status = 200
+
+# The connector itself: this is the URL pasted into Claude.
+[[redirects]]
+  from = "/mcp"
+  to = "/.netlify/functions/mcp"
+  status = 200
+
+# --- Single-page app fallback (kept last) ------------------------------------
 [[redirects]]
   from = "/*"
   to = "/index.html"

@@ -6,6 +6,8 @@ Built with **React + TypeScript + Tailwind CSS + shadcn/ui components + Supabase
 
 **One codebase, every device.** The same bundle is also an **installable PWA** (iPhone home screen, Android, desktop Chrome/Edge — offline-capable), **native iOS & Android apps** (Capacitor, in `ios/` + `android/`) and **native Windows / macOS / Linux desktop apps** (Tauri, in `src-tauri/`), with GitHub Actions workflows that build and sign all of them. See **[docs/APPS.md](docs/APPS.md)**.
 
+**Ask Claude about your team.** The app also ships a **Claude Connector** — a remote MCP server at `/mcp` that lets Claude look up who is on the clock, summarise hours, create tasks and settle payments, running as the account that signed in so its permissions are enforced by the database. See **[docs/MCP_CONNECTOR.md](docs/MCP_CONNECTOR.md)**.
+
 ---
 
 ## Features
@@ -280,6 +282,8 @@ This creates the `workers`, `time_entries`, `active_timers`, `settings`, `paymen
 > For **reference numbers on paid settlements**, run **`supabase/payment-reference-number.sql`** once on an **existing** database. It adds `payments.reference_number`, which stores the GCash / Maya / bank reference (or receipt number) the admin types when marking a payment paid, and shows it under **Paid via**. Fresh installs get it from `schema.sql`. Safe to re-run. Until it is applied the app still works — the payment is marked paid, only the reference is dropped (and the app warns when that happens).
 >
 > For the **Personal Tracker** (account menu → "Switch to Personal Tracker"), run **`supabase/personal-finance.sql`** once. It creates the `personal_finance_data` table — one strictly private row per account (RLS: owner only). Fresh installs get it from `schema.sql`. Until it is applied the tracker still works from browser storage, but saving reports that the table is missing.
+
+> For the **Claude Connector** (letting Claude read and write your workspace through a remote MCP server), run **`supabase/mcp-oauth.sql`** once. It creates the three OAuth tables the connector needs (`mcp_oauth_clients`, `mcp_oauth_codes`, `mcp_oauth_tokens`), each with **Row Level Security enabled and no policies** — so no browser-side client can read them, even signed in as the admin. Only the Netlify Functions can. Until it is applied the connector cannot authenticate at all. See **[docs/MCP_CONNECTOR.md](docs/MCP_CONNECTOR.md)**.
 >
 
 ---
@@ -458,10 +462,19 @@ time-tracker/
 ├─ src-tauri/                   # Tauri desktop shell — Windows / macOS / Linux installers
 ├─ assets/                      # icon + splash sources every platform is generated from
 ├─ public/pwa/                  # PWA manifest icons (192/512/maskable/apple-touch)
+├─ netlify/functions/
+│  ├─ mcp.ts                    # Claude Connector: Streamable HTTP MCP endpoint (POST /mcp)
+│  ├─ oauth-register.ts         # OAuth Dynamic Client Registration (Claude registers itself)
+│  ├─ oauth-authorize.ts        # OAuth sign-in + consent page
+│  ├─ oauth-token.ts            # OAuth authorization-code + refresh grants (PKCE, rotation)
+│  ├─ oauth-discovery.ts        # /.well-known OAuth metadata Claude reads first
+│  └─ lib/mcp/                  # protocol, session, OAuth store, tool implementations
+├─ supabase/mcp-oauth.sql       # One-time migration: the connector's OAuth tables (RLS, no policies)
 ├─ scripts/apps/                # generate-native-assets.sh (re-renders iOS/Android icons & splashes)
 ├─ capacitor.config.ts          # appId, splash/status-bar theming, WebView scheme
 ├─ .github/workflows/           # web.yml, mobile.yml, desktop.yml release pipelines
 ├─ docs/APPS.md                 # web/PWA/iOS/Android/desktop build + signing guide
+├─ docs/MCP_CONNECTOR.md        # Claude Connector setup, security model and troubleshooting
 ├─ .env.example
 └─ README.md
 ```
@@ -472,6 +485,7 @@ time-tracker/
 
 - Supabase **publishable/anon key only** in the frontend; Secret/service_role is never exposed.
 - **Row Level Security** enforces per-user data isolation.
+- The **Claude Connector** runs every tool call as the account that signed in, so RLS — not application code — decides what Claude can read. Its own OAuth tables are RLS-enabled with no policies. Authorization codes and tokens are stored hashed. See [docs/MCP_CONNECTOR.md](docs/MCP_CONNECTOR.md).
 - `user_id` is set server-side via triggers, never trusted from the client.
 - **Calculated values** (`total_minutes`, `earnings`) are recomputed in the backend/local layer where possible, and stored on the entry so history is stable.
 - Input is trimmed and validated before writing.
