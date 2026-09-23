@@ -64,8 +64,11 @@ import {
   applyStageTransition,
   hydrateTask,
   initialStageFields,
+  nextRecurringDueDate,
   normalizeEstimatedHours,
+  normalizeOccurrence,
   normalizeQaScore,
+  normalizeRepeats,
   normalizeReworkType,
   normalizeWaitingReason,
   patchTouchesQa,
@@ -88,6 +91,12 @@ const TEAM_KPI_PERMISSIONS_MIGRATION_MESSAGE =
 
 const TEAM_KPI_MIGRATION_MESSAGE =
   'Team KPI data is unavailable: run supabase/RUN-THIS-team-kpi.sql in the Supabase SQL editor first.'
+
+const RECURRING_TASKS_MIGRATION_MESSAGE =
+  'Recurring tasks need their database columns: run supabase/recurring-tasks.sql in the Supabase SQL editor.'
+
+/** The tasks-table columns added by supabase/recurring-tasks.sql. */
+const RECURRING_TASK_COLUMNS = ['repeats', 'repeat_until', 'series_id', 'occurrence'] as const
 
 const WORKER_COLOR_MIGRATION_MESSAGE =
   'Worker colour tag was not saved: run supabase/RUN-THIS-worker-color.sql in the Supabase SQL editor to add the color column. Everything else was saved.'
@@ -3032,6 +3041,15 @@ export const supabaseBackend: DataBackend = {
       .eq('worker_id', workerId)
       .eq('status', status)
     const columnIds = ((columnRows as Array<{ id: string }> | null) ?? []).map((r) => r.id)
+    // Recurrence: send the new columns only when there is something to save,
+    // so plain one-off tasks keep working on a database that has not run
+    // supabase/recurring-tasks.sql yet.
+    const recurring = {
+      ...(input.repeats && input.repeats !== 'none' ? { repeats: normalizeRepeats(input.repeats) } : {}),
+      ...(typeof input.repeat_until === 'string' && input.repeat_until ? { repeat_until: input.repeat_until.slice(0, 10) } : {}),
+      ...(input.series_id ? { series_id: input.series_id } : {}),
+      ...(input.occurrence ? { occurrence: normalizeOccurrence(input.occurrence) } : {}),
+    }
     const { data, error } = await withClientColumn<Task>((withClient) => sb
       .from('tasks')
       .insert({
@@ -3044,6 +3062,7 @@ export const supabaseBackend: DataBackend = {
         due_date: input.due_date || null,
         ...initialStageFields(status, now, actor),
         estimated_hours: normalizeEstimatedHours(input.estimated_hours),
+        ...recurring,
         position: 0,
         created_by_role: me.data!.role,
         completed_at: status === 'completed' ? now : null,
@@ -3054,6 +3073,9 @@ export const supabaseBackend: DataBackend = {
     if (error) {
       if (isMissingColumn(error, 'estimated_hours') || isMissingColumn(error, 'stage_history') || isMissingColumn(error, 'original_due_date')) {
         return fail(TEAM_KPI_MIGRATION_MESSAGE)
+      }
+      if (RECURRING_TASK_COLUMNS.some((col) => isMissingColumn(error, col))) {
+        return fail(RECURRING_TASKS_MIGRATION_MESSAGE)
       }
       return fail(error.message ?? 'Could not add the task.')
     }
@@ -3093,6 +3115,10 @@ export const supabaseBackend: DataBackend = {
     if (patch.priority !== undefined) update.priority = patch.priority
     if (patch.client_id !== undefined) update.client_id = patch.client_id || null
     if (patch.estimated_hours !== undefined) update.estimated_hours = normalizeEstimatedHours(patch.estimated_hours)
+    if (patch.repeats !== undefined) update.repeats = normalizeRepeats(patch.repeats)
+    if (patch.repeat_until !== undefined) update.repeat_until = typeof patch.repeat_until === 'string' && patch.repeat_until ? patch.repeat_until.slice(0, 10) : null
+    if (patch.series_id !== undefined) update.series_id = patch.series_id ?? null
+    if (patch.occurrence !== undefined) update.occurrence = normalizeOccurrence(patch.occurrence)
     if (patch.waiting_reason !== undefined) update.waiting_reason = normalizeWaitingReason(patch.waiting_reason)
     // Due date: preserve the original deadline when one was already missed.
     let dueChange: { due_date: string | null; original_due_date: string | null; changed: boolean; missedDeadline: boolean } | null = null
@@ -3149,17 +3175,26 @@ export const supabaseBackend: DataBackend = {
         .filter((rowId) => rowId !== id)
     }
 
-    const runUpdate = async (withArchived: boolean, withClient: boolean) => {
+    const runUpdate = async (withArchived: boolean, withClient: boolean, withRecurring: boolean) => {
       const payload = { ...update }
       if (!withArchived) delete payload.archived_at
       if (!withClient) delete payload.client_id
+      if (!withRecurring) for (const col of RECURRING_TASK_COLUMNS) delete payload[col]
       return sb.from('tasks').update(payload).eq('id', id).select().single() as PromiseLike<{ data: Task | null; error: { code?: string; message?: string } | null }>
     }
 
     const { data, error } = await withClientColumn<Task>(async (withClient) => {
-      let res = await runUpdate(true, withClient)
+      let withArchived = true
+      let res = await runUpdate(withArchived, withClient, true)
       if (res.error && isMissingColumn(res.error, 'archived_at')) {
-        res = await runUpdate(false, withClient)
+        withArchived = false
+        res = await runUpdate(withArchived, withClient, true)
+      }
+      // Database without recurring-tasks.sql: save everything else, drop the
+      // repeat settings — the task itself must never be blocked by it.
+      if (res.error && RECURRING_TASK_COLUMNS.some((col) => isMissingColumn(res.error, col))) {
+        console.warn('[work-tracker] recurring-task columns are missing on this database — run supabase/recurring-tasks.sql to enable recurring tasks.')
+        res = await runUpdate(withArchived, withClient, false)
       }
       return res
     })
@@ -3279,6 +3314,107 @@ export const supabaseBackend: DataBackend = {
       ordered.map((rowId, i) => (rowId === id ? null : sb.from('tasks').update({ position: i }).eq('id', rowId)))
     )
     return ok(hydrateTask(data as Task))
+  },
+
+  async startRecurringOccurrence(id) {
+    const me = await requireUser()
+    if (me.error) return fail(me.error)
+    const sb = client()
+    const { data: current, error: readErr } = await sb.from('tasks').select('*').eq('id', id).maybeSingle()
+    if (readErr) return fail(readErr.message)
+    if (!current) return fail('Task not found.')
+    const task = hydrateTask(current as Task)
+    if (me.data!.role !== 'admin' && task.worker_id !== me.data!.workerId) {
+      return fail('You can only start your own recurring tasks.')
+    }
+    if (normalizeTaskStage(task.status) !== 'recurring') {
+      return fail('Only tasks on the Recurring shelf can start an occurrence.')
+    }
+    const now = new Date().toISOString()
+    const actor = await actorLabelFor(me.data!)
+    const repeats = normalizeRepeats(task.repeats)
+    // A non-repeating card parked on the shelf: a plain move into To Do.
+    if (repeats === 'none') {
+      const { data: columnRows } = await sb
+        .from('tasks')
+        .select('id')
+        .eq('worker_id', task.worker_id)
+        .eq('status', 'todo')
+      const shiftIds = ((columnRows as Array<{ id: string }> | null) ?? [])
+        .map((r) => r.id)
+        .filter((rowId) => rowId !== id)
+      const stageFields = applyStageTransition(task, 'todo', now, actor)
+      const { data, error } = await sb
+        .from('tasks')
+        .update({ ...stageFields, position: 0, archived_at: null, updated_at: now })
+        .eq('id', id)
+        .select()
+        .single()
+      if (error) return fail(error.message)
+      await Promise.all(
+        shiftIds.map((rowId, i) => sb.from('tasks').update({ position: i + 1 }).eq('id', rowId))
+      )
+      return ok(hydrateTask(data as Task))
+    }
+    if (!task.due_date) {
+      return fail('Give this recurring task a due date before starting an occurrence.')
+    }
+    // The occurrence's due date: the shelf's anchor advanced one interval
+    // (weekend-rolled to the assignee's own workweek).
+    let workdays: number[] = [1, 2, 3, 4, 5]
+    const { data: workerRow } = await sb.from('workers').select('workdays').eq('id', task.worker_id).maybeSingle()
+    const wd = (workerRow as { workdays?: unknown } | null)?.workdays
+    if (Array.isArray(wd)) workdays = wd.filter((d): d is number => typeof d === 'number')
+    const nextDue = nextRecurringDueDate(task.due_date, repeats, workdays)
+    const nextOccurrence = (normalizeOccurrence(task.occurrence) ?? 0) + 1
+
+    // The occurrence: a brand-new To Do card at the TOP of the column —
+    // the template row is not moved.
+    const { data: columnRows } = await sb
+      .from('tasks')
+      .select('id')
+      .eq('worker_id', task.worker_id)
+      .eq('status', 'todo')
+    const shiftIds = ((columnRows as Array<{ id: string }> | null) ?? []).map((r) => r.id)
+    const { data: occurrence, error } = await withClientColumn<Task>((withClient) => sb
+      .from('tasks')
+      .insert({
+        worker_id: task.worker_id,
+        ...(withClient ? { client_id: task.client_id ?? null } : {}),
+        title: task.title,
+        description: task.description,
+        status: 'todo',
+        priority: task.priority,
+        due_date: nextDue,
+        ...initialStageFields('todo', now, actor),
+        estimated_hours: task.estimated_hours,
+        ...(task.repeats !== 'none' ? { repeats: task.repeats } : {}),
+        ...(task.repeat_until ? { repeat_until: task.repeat_until.slice(0, 10) } : {}),
+        series_id: task.series_id ?? task.id,
+        occurrence: nextOccurrence,
+        position: 0,
+        created_by_role: me.data!.role,
+        completed_at: null,
+        archived_at: null,
+      })
+      .select()
+      .single() as PromiseLike<{ data: Task | null; error: { code?: string; message?: string } | null }>)
+    if (error) {
+      if (RECURRING_TASK_COLUMNS.some((col) => isMissingColumn(error, col))) {
+        return fail(RECURRING_TASKS_MIGRATION_MESSAGE)
+      }
+      return fail(error.message ?? 'Could not start the occurrence.')
+    }
+    // Best-effort: re-index To Do and advance the template's anchor so the
+    // next start schedules the following cycle.
+    await Promise.all(
+      shiftIds.map((rowId, i) => sb.from('tasks').update({ position: i + 1 }).eq('id', rowId))
+    )
+    await sb
+      .from('tasks')
+      .update({ due_date: nextDue, occurrence: nextOccurrence, updated_at: now })
+      .eq('id', id)
+    return ok(hydrateTask(occurrence as Task))
   },
 
   async deleteTask(id) {

@@ -1079,11 +1079,30 @@ export interface UpdateTicketInput {
  * back to the employee after QA — the linear order here is the board's column
  * order, not a strict state machine (drag & drop stays free).
  */
-export type TaskStatus = 'todo' | 'in_progress' | 'waiting' | 'for_review' | 'rework' | 'completed'
+export type TaskStatus = 'recurring' | 'todo' | 'in_progress' | 'waiting' | 'for_review' | 'rework' | 'completed'
 
-export const TASK_STATUSES: TaskStatus[] = ['todo', 'in_progress', 'waiting', 'for_review', 'rework', 'completed']
+/** How often a task repeats — drives the "Recreate next" action. */
+export type TaskRepeats = 'none' | 'daily' | 'weekly' | 'biweekly' | 'monthly'
+
+export const TASK_REPEATS: TaskRepeats[] = ['daily', 'weekly', 'biweekly', 'monthly']
+
+export const TaskRepeatNames: Record<TaskRepeats, string> = {
+  none: 'Does not repeat',
+  daily: 'Daily',
+  weekly: 'Weekly',
+  biweekly: 'Every 2 weeks',
+  monthly: 'Monthly',
+}
+
+/**
+ * Board stages in display order. `recurring` is the LEFTMOST shelf: a
+ * repeating task lives there as its template, and "starting an occurrence"
+ * flips it into To Do with the due date advanced one interval.
+ */
+export const TASK_STATUSES: TaskStatus[] = ['recurring', 'todo', 'in_progress', 'waiting', 'for_review', 'rework', 'completed']
 
 export const TaskStatusNames: Record<TaskStatus, string> = {
+  recurring: 'Recurring',
   todo: 'To Do',
   in_progress: 'In Progress',
   waiting: 'Waiting',
@@ -1244,6 +1263,25 @@ export interface Task {
   original_due_date: string | null
   /** Estimated hours — the primary workload input (see Team KPI). */
   estimated_hours: number | null
+  /**
+   * Recurrence: how often this task repeats. 'none' = one-off. A repeating
+   * COMPLETED card gets a "Recreate next" action that clones it into a new
+   * Todo card with the due date advanced by one interval — nothing happens
+   * on its own, the series only continues when someone recreates it.
+   */
+  repeats: TaskRepeats
+  /**
+   * Optional end date ('YYYY-MM-DD') for the series: once the computed next
+   * due date passes it, "Recreate next" is no longer offered. null = no end.
+   */
+  repeat_until: string | null
+  /**
+   * The id the series started from. The original task's series_id is its own
+   * id; every "Recreate next" clone inherits it, so a chain is traceable.
+   */
+  series_id: string | null
+  /** 1 = the original, 2+ = created by "Recreate next". null = not in a series. */
+  occurrence: number | null
   /** Stage timestamps, stamped automatically on the transitions below. */
   assigned_at: string | null
   started_at: string | null

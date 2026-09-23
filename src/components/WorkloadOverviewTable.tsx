@@ -22,6 +22,9 @@ export interface WorkloadOverviewRow {
 
 /** Cell text colours — the numbers echo the board's column colours. */
 const CELL_COLORS: Record<TaskStatus, string> = {
+  // The Recurring shelf is not load (it never appears as a column here), but
+  // the map is exhaustive over the stage vocabulary.
+  recurring: 'text-cyan-600 dark:text-cyan-400',
   todo: 'text-foreground',
   in_progress: 'text-sky-600 dark:text-sky-400',
   waiting: 'text-amber-600 dark:text-amber-500',

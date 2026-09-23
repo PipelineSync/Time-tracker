@@ -313,6 +313,8 @@ interface StoreValue {
   updateTask: (id: string, patch: Partial<Omit<Task, 'id' | 'created_at' | 'updated_at'>>) => Promise<Task | null>
   /** Drag & drop: drop a task into `status` at index `position`. */
   moveTask: (id: string, status: TaskStatus, position: number) => Promise<Task | null>
+  /** "Start an occurrence": flips a Recurring-shelf card into To Do. */
+  startRecurringOccurrence: (id: string) => Promise<Task | null>
   deleteTask: (id: string) => Promise<boolean>
   /** Archive a completed task. */
   archiveTask: (id: string) => Promise<Task | null>
@@ -1575,6 +1577,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return res.data
   }, [backend, refreshTasks, tasks, workers, clients, isAdmin, myWorker, user])
 
+  /** "Start an occurrence" on the Recurring shelf (see DataBackend). */
+  const startRecurringOccurrence = useCallback(async (id: string) => {
+    const res = await backend.startRecurringOccurrence(id)
+    if (res.error || !res.data) {
+      toast.error(res.error || 'Could not start the occurrence.')
+      await refreshTasks()
+      return null
+    }
+    await refreshTasks()
+    return res.data
+  }, [backend, refreshTasks])
+
   const deleteTask = useCallback(async (id: string) => {
     const res = await backend.deleteTask(id)
     if (res.error) {
@@ -1776,6 +1790,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     createTask,
     updateTask,
     moveTask,
+    startRecurringOccurrence,
     deleteTask,
     archiveTask,
     restoreTask,

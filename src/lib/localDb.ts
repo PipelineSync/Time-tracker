@@ -65,8 +65,11 @@ import {
   applyDueDateChange,
   applyStageTransition,
   initialStageFields,
+  nextRecurringDueDate,
   normalizeEstimatedHours,
+  normalizeOccurrence,
   normalizeQaScore,
+  normalizeRepeats,
   normalizeReworkType,
   normalizeWaitingReason,
   patchTouchesQa,
@@ -253,6 +256,11 @@ function normalizeTask(t: Task): Task {
     created_by_role: t.created_by_role === 'admin' ? 'admin' : 'worker',
     completed_at: status === 'completed' ? (t.completed_at ?? t.updated_at ?? null) : null,
     archived_at: status === 'completed' ? (t.archived_at ?? null) : null,
+    // Recurrence: rows written before the feature exist load as one-off tasks.
+    repeats: normalizeRepeats(t.repeats),
+    repeat_until: typeof t.repeat_until === 'string' && t.repeat_until ? t.repeat_until.slice(0, 10) : null,
+    series_id: typeof t.series_id === 'string' && t.series_id ? t.series_id : null,
+    occurrence: normalizeOccurrence(t.occurrence),
   }
 }
 
@@ -925,11 +933,16 @@ function maybeAutoSeed(data: UserData) {
       client_id: e.client_id ? clientMap.get(e.client_id) ?? null : null,
       id: uid(),
     }))
-    data.tasks = seed.tasks.map((t) => ({
+    // Tasks: remap worker/client AND series_id (a recurring seed row may
+    // point its series at its own seed id, which is about to change).
+    const taskUid = seed.tasks.map(() => uid())
+    const taskMap = new Map(seed.tasks.map((t, i) => [t.id, taskUid[i]]))
+    data.tasks = seed.tasks.map((t, i) => ({
       ...t,
       worker_id: idMap.get(t.worker_id) || t.worker_id,
       client_id: t.client_id ? clientMap.get(t.client_id) ?? null : null,
-      id: uid(),
+      series_id: t.series_id ? taskMap.get(t.series_id) ?? t.series_id : null,
+      id: taskUid[i],
     }))
     // Team KPI seed: monthly targets + bonus rows remap onto the new worker ids.
     data.monthlyGoals = (seed.monthlyGoals ?? []).map((g) => ({ ...g, worker_id: idMap.get(g.worker_id) || g.worker_id, id: uid() }))
@@ -2377,6 +2390,11 @@ export const localBackend: DataBackend = {
       // Stage timestamps + history for the brand-new card (§3).
       ...initialStageFields(status, now, actor),
       estimated_hours: normalizeEstimatedHours(input.estimated_hours),
+      // Recurrence (a "Recreate next" clone carries the series forward).
+      repeats: normalizeRepeats(input.repeats),
+      repeat_until: typeof input.repeat_until === 'string' && input.repeat_until ? input.repeat_until.slice(0, 10) : null,
+      series_id: typeof input.series_id === 'string' && input.series_id ? input.series_id : null,
+      occurrence: normalizeOccurrence(input.occurrence),
       // New tasks land at the very top of their column.
       position: 0,
       created_by_role: c.user.role,
@@ -2518,6 +2536,72 @@ export const localBackend: DataBackend = {
     reindexTaskColumn(c.data.tasks, task.worker_id, target, id, position)
     save(c.data)
     return { data: task, error: null }
+  },
+
+  async startRecurringOccurrence(id) {
+    const c = ctx()
+    if (!c) return { data: null, error: 'Not signed in.' }
+    const task = c.data.tasks.find((t) => t.id === id)
+    if (!task) return { data: null, error: 'Task not found.' }
+    if (!can(c, 'tasks.manage_all') && task.worker_id !== c.user.workerId) {
+      return { data: null, error: 'You can only start your own recurring tasks.' }
+    }
+    if (normalizeTaskStatus(task.status) !== 'recurring') {
+      return { data: null, error: 'Only tasks on the Recurring shelf can start an occurrence.' }
+    }
+    const now = new Date().toISOString()
+    const repeats = normalizeRepeats(task.repeats)
+    // A non-repeating card parked on the shelf: a plain move into To Do.
+    if (repeats === 'none') {
+      const actor = stageActorName(c.user.role, c.data.workers.find((w) => w.id === c.user.workerId), c.user.email)
+      Object.assign(task, applyStageTransition(task, 'todo', now, actor))
+      task.archived_at = null
+      task.updated_at = now
+      reindexTaskColumn(c.data.tasks, task.worker_id, 'todo', id, 0)
+      save(c.data)
+      return { data: task, error: null }
+    }
+    if (!task.due_date) {
+      return { data: null, error: 'Give this recurring task a due date before starting an occurrence.' }
+    }
+    // The occurrence's due date: the shelf's anchor advanced one interval
+    // (weekend-rolled to the assignee's workweek). The anchor is not a real
+    // deadline, so this deliberately bypasses updateTask's
+    // missed-deadline preservation.
+    const workdays = c.data.workers.find((w) => w.id === task.worker_id)?.workdays ?? [1, 2, 3, 4, 5]
+    const nextDue = nextRecurringDueDate(task.due_date, repeats, workdays)
+    const nextOccurrence = (normalizeOccurrence(task.occurrence) ?? 0) + 1
+    // The occurrence is a brand-new To Do card through the normal create
+    // path — top of the column, validation and the worker notification all
+    // apply. The template itself is NOT moved.
+    const created = await localBackend.createTask({
+      worker_id: task.worker_id,
+      client_id: task.client_id,
+      title: task.title,
+      description: task.description,
+      status: 'todo',
+      priority: task.priority,
+      due_date: nextDue,
+      estimated_hours: task.estimated_hours,
+      repeats,
+      repeat_until: task.repeat_until,
+      series_id: task.series_id ?? task.id,
+      occurrence: nextOccurrence,
+    })
+    if (created.error || !created.data) return created
+    // The template STAYS on the shelf; its anchor advances so the next start
+    // schedules the following cycle. Re-read: createTask saved a newer
+    // snapshot, and writing back the stale `c.data` would clobber the
+    // occurrence it just created.
+    const fresh = ctx()
+    const template = fresh?.data.tasks.find((t) => t.id === id)
+    if (template) {
+      template.due_date = nextDue
+      template.occurrence = nextOccurrence
+      template.updated_at = now
+      save(fresh.data)
+    }
+    return { data: created.data, error: null }
   },
 
   async deleteTask(id) {
@@ -2841,6 +2925,10 @@ export const localBackend: DataBackend = {
       }
     }
     writeUsers(users)
+    // Tasks: remap worker/client AND series_id (a recurring seed row may
+    // point its series at its own seed id, which is about to change).
+    const seedTaskUid = seed.tasks.map(() => uid())
+    const seedTaskMap = new Map(seed.tasks.map((t, i) => [t.id, seedTaskUid[i]]))
     const next: UserData = {
       workers: seededWorkers,
       entries: seed.entries.map((e) => ({
@@ -2854,11 +2942,12 @@ export const localBackend: DataBackend = {
       comments: [],
       notifications: [],
       payments: [],
-      tasks: seed.tasks.map((t) => ({
+      tasks: seed.tasks.map((t, i) => ({
         ...t,
         worker_id: idMap.get(t.worker_id) || t.worker_id,
         client_id: t.client_id ? seedClientMap.get(t.client_id) ?? null : null,
-        id: uid(),
+        series_id: t.series_id ? seedTaskMap.get(t.series_id) ?? t.series_id : null,
+        id: seedTaskUid[i],
       })),
       clients: seedClients,
       clientPriorities: (seed.clientPriorities ?? []).map((p) => ({

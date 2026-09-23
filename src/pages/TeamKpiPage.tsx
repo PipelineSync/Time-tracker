@@ -9,13 +9,15 @@ import {
   computeEmployeeKpi,
   computeTeamKpi,
   currentMonthKey,
+  fmtHours,
+  hoursByClient,
   isKpiSubject,
   lastNMonths,
   monthLabel,
   scopeEmployees,
   KPI_TARGETS,
 } from '@/lib/kpi'
-import { TASK_STATUSES, TaskStatusNames } from '@/lib/types'
+import { TASK_STATUSES, TaskStatusNames, UNASSIGNED_CLIENT_NAME } from '@/lib/types'
 import { PageHeader } from '@/components/PageHeader'
 import { FaqButton } from '@/components/FaqButton'
 import { Card, CardContent } from '@/components/ui/card'
@@ -30,6 +32,7 @@ import { EmployeePerformanceTable } from '@/components/EmployeePerformanceTable'
 import {
   KpiScoreByEmployeeChart,
   WorkloadByEmployeeChart,
+  HoursByClientChart,
   MonthlyKpiTrendChart,
 } from '@/components/TeamKpiCharts'
 import {
@@ -93,6 +96,7 @@ export function TeamKpiPage() {
     workers,
     tasks,
     clients,
+    entries,
     monthlyGoals,
     bonusDecisions,
     kpiAudit,
@@ -144,6 +148,28 @@ export function TeamKpiPage() {
     [employeeRows, scopedTasks, filters.month],
   )
   const backlog = useMemo(() => buildReviewBacklog(scopedTasks), [scopedTasks])
+
+  // Hours by client — ALL hours in scope (open + completed tasks, logged time
+  // of the scoped employees); the month filter deliberately does not apply.
+  const employeeIds = useMemo(() => employees.map((w) => w.id), [employees])
+  const clientRows = useMemo(
+    () =>
+      hoursByClient({
+        tasks: scopedTasks,
+        entries,
+        clients,
+        employeeIds,
+        clientFilter: filters.client,
+      }),
+    [scopedTasks, entries, clients, employeeIds, filters.client],
+  )
+  const clientHoursTotal = useMemo(
+    () => ({
+      estimated: clientRows.reduce((s, r) => s + r.estimated, 0),
+      actual: clientRows.reduce((s, r) => s + r.actual, 0),
+    }),
+    [clientRows],
+  )
 
   // Monthly trend: last 6 months with the same header scope.
   const trendMonths = useMemo(() => lastNMonths(filters.month, 6), [filters.month])
@@ -241,14 +267,14 @@ export function TeamKpiPage() {
       </PageHeader>
 
       {dataLoading && employeeRows.length === 0 ? (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-          {[...Array(5)].map((_, i) => (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+          {[...Array(6)].map((_, i) => (
             <Skeleton key={i} className="h-28 rounded-xl" />
           ))}
         </div>
       ) : (
         /* ---- Top cards (§6) ---- */
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
           <TopCard
             label="Team KPI Score"
             value={team.score === null ? '—' : String(team.score)}
@@ -281,6 +307,24 @@ export function TeamKpiPage() {
             sub="Open est. hours ÷ available"
             onClick={() => setDrill({ kind: 'workload', workerId: null })}
           />
+          <TopCard
+            label="Hours by Client"
+            value={
+              clientHoursTotal.actual > 0
+                ? fmtHours(clientHoursTotal.actual)
+                : clientHoursTotal.estimated > 0
+                  ? fmtHours(clientHoursTotal.estimated)
+                  : '—'
+            }
+            sub={
+              clientRows.length === 0
+                ? 'No hours in scope yet'
+                : clientHoursTotal.actual > 0
+                  ? `Est. ${fmtHours(clientHoursTotal.estimated)} · ${clientRows.length} client${clientRows.length === 1 ? '' : 's'}`
+                  : `Est. ${fmtHours(clientHoursTotal.estimated)} · no logged time yet`
+            }
+            onClick={() => setDrill({ kind: 'clientHours', workerId: null })}
+          />
         </div>
       )}
 
@@ -288,6 +332,11 @@ export function TeamKpiPage() {
       <div className="grid gap-6 lg:grid-cols-2">
         <KpiScoreByEmployeeChart employees={employeeRows} />
         <WorkloadByEmployeeChart employees={employeeRows} />
+        <HoursByClientChart
+          className="lg:col-span-2"
+          rows={clientRows}
+          onDrill={(clientId) => setDrill({ kind: 'clientHours', workerId: null, clientId })}
+        />
       </div>
 
       {/* ---- Full-width performance table ---- */}
@@ -339,6 +388,7 @@ export function TeamKpiPage() {
         tasks={scopedTasks}
         month={filters.month}
         workerName={workerName}
+        clientName={(id) => (id ? clients.find((c) => c.id === id)?.name ?? 'Unknown' : UNASSIGNED_CLIENT_NAME)}
       />
     </div>
   )

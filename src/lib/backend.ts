@@ -20,6 +20,7 @@ import type {
   WorkerAvatar,
   Task,
   TaskStatus,
+  TaskRepeats,
   Client,
   ClientPriority,
   ClientPriorityLane,
@@ -88,6 +89,13 @@ export interface CreateTaskInput {
   due_date?: string | null
   /** Estimated hours — the primary workload input. */
   estimated_hours?: number | null
+  /** Recurrence — 'none' by default. See Task.repeats. */
+  repeats?: TaskRepeats
+  /** Optional series end date; 'Recreate next' stops offering past it. */
+  repeat_until?: string | null
+  /** Chain a "Recreate next" clone onto the source task's series. */
+  series_id?: string | null
+  occurrence?: number | null
 }
 
 /** Management input: one employee's targets for one month (§9). */
@@ -359,6 +367,13 @@ export interface DataBackend {
    * stamps the stage timestamps and appends to stage_history (§3).
    */
   moveTask(id: string, status: TaskStatus, position: number): Promise<BackendResult<Task>>
+  /**
+   * "Start an occurrence" on the Recurring shelf: flips a shelf card into To
+   * Do with its due date advanced by one repeat interval (weekend-rolled) and
+   * the occurrence counter grown. The shelf's due date is an anchor, so the
+   * missed-deadline preservation of updateTask does NOT apply here.
+   */
+  startRecurringOccurrence(id: string): Promise<BackendResult<Task>>
   deleteTask(id: string): Promise<BackendResult<null>>
 
   // ---- Team KPI (Owner + Project Manager via `team_kpi.view`) ----

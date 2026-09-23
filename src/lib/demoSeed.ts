@@ -84,6 +84,10 @@ function seedTask(p: {
   rework_type?: ReworkType | null
   rework_notes?: string | null
   stage_history?: TaskStageEvent[]
+  repeats?: Task['repeats']
+  repeat_until?: string | null
+  series_id?: string | null
+  occurrence?: number | null
 }): Task {
   const status = p.status
   const history: TaskStageEvent[] = p.stage_history ?? [
@@ -118,6 +122,11 @@ function seedTask(p: {
     created_by_role: p.created_by_role ?? 'admin',
     completed_at: status === 'completed' ? (p.completed_at ?? p.updated_at) : null,
     archived_at: status === 'completed' ? (p.archived_at ?? null) : null,
+    // Recurrence: seeded rows are one-off tasks unless a sample says otherwise.
+    repeats: p.repeats ?? 'none',
+    repeat_until: p.repeat_until ?? null,
+    series_id: p.series_id ?? null,
+    occurrence: p.occurrence ?? null,
     created_at: p.created_at,
     updated_at: p.updated_at,
   }
@@ -283,6 +292,47 @@ export function buildDemoSeed() {
       rework_required: false,
       created_at: daysAgo(8).toISOString(),
       updated_at: daysAgo(2).toISOString(),
+    }),
+    // A completed RECURRING task — its card carries the “Recreate next”
+    // action, so the series flow (advance +7 days, occurrence #3) is visible
+    // straight away in demo mode.
+    seedTask({
+      id: 't-seed-5',
+      worker_id: 'w-seed-1',
+      client_id: 'c-seed-1',
+      title: 'Weekly status report — Acme Corp',
+      description: 'Hours, completed items and next week’s plan for the client call.',
+      status: 'completed',
+      priority: 'medium',
+      due_date: at(-1, 9).toISOString().slice(0, 10),
+      estimated_hours: 2,
+      completed_at: daysAgo(1).toISOString(),
+      qa_score: 4,
+      qa_reviewed_at: daysAgo(1).toISOString(),
+      qa_reviewed_by: 'Owner',
+      rework_required: false,
+      repeats: 'weekly',
+      occurrence: 2,
+      series_id: 't-seed-5',
+      created_at: daysAgo(8).toISOString(),
+      updated_at: daysAgo(1).toISOString(),
+    }),
+    // A template sitting on the RECURRING SHELF (leftmost column) — its
+    // always-visible “Start occurrence” button shows the everyday one-click
+    // dup flow straight away in demo mode.
+    seedTask({
+      id: 't-seed-6',
+      worker_id: 'w-seed-1',
+      client_id: 'c-seed-1',
+      title: 'Daily standup note — Acme Corp',
+      description: 'What was done, what is next, any blockers — posted before the 1 pm call.',
+      status: 'recurring',
+      priority: 'medium',
+      due_date: at(0, 9).toISOString().slice(0, 10),
+      estimated_hours: 0.5,
+      repeats: 'daily',
+      created_at: daysAgo(14).toISOString(),
+      updated_at: daysAgo(1).toISOString(),
     }),
   ]
 
