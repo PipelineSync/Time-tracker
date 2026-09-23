@@ -217,6 +217,78 @@ async function main() {
   assert(team.overdueCount >= 4, `Mary's overdue work shows in the team count (${team.overdueCount})`)
   assert(team.blockedCount >= 3, `blocked/waiting tasks aggregate (${team.blockedCount})`)
 
+  // ---- 15. Requirement 1: KPI reviewers are not KPI subjects ----
+  const baseWorkers = (await localBackend.listWorkers()).data!
+  const baseTeamMembers = baseWorkers.filter((w) =>
+    ['Jasper Maristela', 'Matthew Luzung', 'Jea Crizel Pineda', 'April Joy Manabat', 'Mary Gracelyn'].includes(w.name),
+  )
+  assert(
+    baseTeamMembers.length === 5 && baseTeamMembers.every((w) => kpi.isKpiSubject(w)),
+    'baseline all 5 team members are KPI subjects',
+  )
+  const defaultFilters: kpi.KpiFilters = { month, employee: 'all', client: 'all', status: 'all' }
+  const baseEmployees = kpi.scopeEmployees(baseWorkers, defaultFilters)
+  assert(baseEmployees.some((w) => w.name === jasper.name), 'Jasper is in baseline scopeEmployees')
+  const baseEmpRows = baseEmployees.map((w) =>
+    kpi.computeEmployeeKpi({
+      worker: w,
+      tasks: allTasks,
+      month,
+      goal: goals.find((g) => g.worker_id === w.id && g.month === month) ?? null,
+    }),
+  )
+  const baseTeamScore = kpi.computeTeamKpi(baseEmpRows).score
+
+  // Grant team_kpi.view to Jasper
+  const jasperCurrent = baseWorkers.find((w) => w.name === jasper.name)!
+  await localBackend.updateWorker(jasperCurrent.id, { permissions: ['team_kpi.view'] })
+  const workersAfterGrant = (await localBackend.listWorkers()).data!
+  const jasperGranted = workersAfterGrant.find((w) => w.id === jasperCurrent.id)!
+  assert(!kpi.isKpiSubject(jasperGranted), 'Jasper with team_kpi.view is not a KPI subject')
+
+  // scopeEmployees excludes him
+  const employeesAfterGrant = kpi.scopeEmployees(workersAfterGrant, defaultFilters)
+  assert(!employeesAfterGrant.some((w) => w.id === jasperCurrent.id), 'scopeEmployees excludes him')
+
+  // team score recomputes without him
+  const rowsAfterGrant = employeesAfterGrant.map((w) =>
+    kpi.computeEmployeeKpi({
+      worker: w,
+      tasks: allTasks,
+      month,
+      goal: goals.find((g) => g.worker_id === w.id && g.month === month) ?? null,
+    }),
+  )
+  const scoreAfterGrant = kpi.computeTeamKpi(rowsAfterGrant).score
+  assert(scoreAfterGrant !== null && scoreAfterGrant !== baseTeamScore, `team score recomputes without him (${scoreAfterGrant} vs ${baseTeamScore})`)
+
+  // employee filter omits him
+  const filterOptions = workersAfterGrant.filter((w) => w.status === 'active' && kpi.isKpiSubject(w))
+  assert(!filterOptions.some((w) => w.id === jasperCurrent.id), 'employee filter omits him')
+
+  // Stale filter ID pointing at Jasper falls back to 'all'
+  const staleScoped = kpi.scopeEmployees(workersAfterGrant, { ...defaultFilters, employee: jasperCurrent.id })
+  assert(!staleScoped.some((w) => w.id === jasperCurrent.id) && staleScoped.length === employeesAfterGrant.length, 'stale filter id pointing at excluded worker falls back to all')
+
+  // Excluded worker can still read goals and audit
+  const jasperLogin = await localBackend.signIn('jasper@example.com', 'worker123')
+  assert(!jasperLogin.error, 'excluded worker can sign in')
+  const jasperGoals = await localBackend.listMonthlyGoals()
+  assert(!jasperGoals.error && (jasperGoals.data ?? []).length > 0, 'excluded worker can still read goals')
+  const jasperAudit = await localBackend.listKpiAudit()
+  assert(!jasperAudit.error && (jasperAudit.data ?? []).length > 0, 'excluded worker can still read audit')
+
+  // Revoke team_kpi.view from Jasper
+  await localBackend.signIn('admin', 'admin.pipelinesync')
+  await localBackend.updateWorker(jasperCurrent.id, { permissions: [] })
+  const workersAfterRevoke = (await localBackend.listWorkers()).data!
+  const jasperRevoked = workersAfterRevoke.find((w) => w.id === jasperCurrent.id)!
+  assert(kpi.isKpiSubject(jasperRevoked), 'Jasper is a KPI subject again after revoke')
+  const employeesAfterRevoke = kpi.scopeEmployees(workersAfterRevoke, defaultFilters)
+  assert(employeesAfterRevoke.some((w) => w.id === jasperCurrent.id), 'Jasper reappears in scopeEmployees after revoke')
+  const filterOptionsAfterRevoke = workersAfterRevoke.filter((w) => w.status === 'active' && kpi.isKpiSubject(w))
+  assert(filterOptionsAfterRevoke.some((w) => w.id === jasperCurrent.id), 'employee filter includes him again')
+
   if (process.exitCode) {
     console.error('\nTeam KPI verification FAILED')
   } else {

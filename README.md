@@ -245,6 +245,8 @@ This creates the `workers`, `time_entries`, `active_timers`, `settings`, `paymen
 >
 > For **Team KPI**, run **`supabase/RUN-THIS-team-kpi.sql`** once on an **existing** database. It adds the `team_kpi.view` permission key (and teaches `has_team_view()` + the tasks read policy about it, so a Project Manager can aggregate the team), the per-worker **schedule** columns (`workdays`, `weekly_capacity_hours`) used by schedule-aware workload, standardises the task stages to the six-value vocabulary (**`approval` is renamed to `for_review`**, `rework` is new) with the KPI columns (stage timestamps, original due date, estimated hours, QA score, rework classification, stage history) plus back-fills, and creates `monthly_goals`, `bonus_decisions` (Owner-only writes) and `kpi_audit_events`. Fresh installs get all of it from `schema.sql`. Safe to re-run. Until it runs the app still runs: demo/local mode works fully, and on Supabase the Team KPI page reports the migration is needed when writing goals/bonuses (reads fall back to empty lists).
 >
+> For **worker colour tags**, run **`supabase/RUN-THIS-worker-color.sql`** once on an **existing** database. It adds the `color` column to `workers` (accepting the 8 built-in colour tags or a `#hex` code). Fresh installs get it from `schema.sql`. Safe to re-run. Until it is applied the app still runs — colour edits simply fall back to default/null on old databases, and listWorkers continues to work via strip-and-retry.
+>
 > **Shortcut:** if you have an existing database, **`supabase/RUN-THIS-clients-and-permissions.sql`** bundles the older Clients + per-worker-access migrations; run `supabase/ticket-support.sql` after it.
 >
 > For **Clients**, run **`supabase/clients.sql`** once. It creates the `clients` table (name, colour tag, active/inactive) with RLS policies that let the **admin manage the list** while **workers may only read it**, adds `client_id` to `tasks`, `time_entries` and `active_timers`, and **backfills** every existing task/entry to an **"Unassigned"** client so nothing is left untagged. Fresh installs get the table from `schema.sql`. Safe to re-run. Until it is applied the app still runs — it just reports an empty client list and leaves work untagged.
@@ -437,6 +439,7 @@ time-tracker/
 ├─ supabase/RUN-THIS-clients-and-permissions.sql   # Copy-paste bundle of the two migrations above
 ├─ supabase/RUN-THIS-reports-view-sees-all-entries.sql  # Copy-paste migration: Reports = the whole team's entries (+ backfill)
 ├─ supabase/RUN-THIS-stale-timer-reclaim.sql  # One-time migration: re-adopt timers stranded on a stale worker row (+ repairs stuck rows)
+├─ supabase/RUN-THIS-worker-color.sql   # One-time migration: optional colour tag on workers (built-in tags or #hex)
 ├─ supabase/payment-reference-number.sql  # One-time migration: reference number on paid settlements
 ├─ src/
 │  ├─ lib/                      # types, utils, stats, backend (local + supabase), store, theme

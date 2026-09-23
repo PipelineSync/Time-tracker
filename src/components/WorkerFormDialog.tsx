@@ -15,6 +15,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { WorkerPermissionsField } from '@/components/WorkerPermissionsField'
+import { WorkerColorPicker } from '@/components/WorkerBadge'
 import { IT_SUPPORT_PERMISSION } from '@/lib/tickets'
 import { Headset } from 'lucide-react'
 import { toast } from 'sonner'
@@ -41,6 +42,7 @@ export function WorkerFormDialog({
   // Workweek used by schedule-aware workload (Team KPI): Mon–Fri / 40h default.
   const [workdays, setWorkdays] = useState<number[]>([1, 2, 3, 4, 5])
   const [capacity, setCapacity] = useState('40')
+  const [color, setColor] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const seededKeyRef = useRef<string | null>(null)
 
@@ -69,6 +71,7 @@ export function WorkerFormDialog({
     setPermissions(normalizePermissions(worker?.permissions))
     setWorkdays(normalizeWorkdays(worker?.workdays))
     setCapacity(String(normalizeWeeklyCapacity(worker?.weekly_capacity_hours)))
+    setColor(worker?.color ?? null)
   }, [open, worker, settings])
 
   async function handleSubmit(e: React.FormEvent) {
@@ -101,6 +104,7 @@ export function WorkerFormDialog({
         permissions,
         workdays: normalizeWorkdays(workdays),
         weekly_capacity_hours: normalizeWeeklyCapacity(capacity),
+        color,
         newPassword: newPassword || undefined,
       })
       setSaving(false)
@@ -121,6 +125,7 @@ export function WorkerFormDialog({
       permissions,
       workdays: normalizeWorkdays(workdays),
       weekly_capacity_hours: normalizeWeeklyCapacity(capacity),
+      color,
       accountEmail: accountEmail.trim(),
       accountPassword: password,
     })
@@ -253,6 +258,29 @@ export function WorkerFormDialog({
                 <Button type="button" variant={status === 'active' ? 'default' : 'outline'} className="flex-1" onClick={() => setStatus('active')}>Active</Button>
                 <Button type="button" variant={status === 'inactive' ? 'secondary' : 'outline'} className="flex-1" onClick={() => setStatus('inactive')}>Inactive</Button>
               </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label>Colour tag</Label>
+                {color && (
+                  <button
+                    type="button"
+                    onClick={() => setColor(null)}
+                    className="text-xs text-muted-foreground hover:text-foreground"
+                  >
+                    Clear colour
+                  </button>
+                )}
+              </div>
+              <WorkerColorPicker
+                value={color}
+                onChange={setColor}
+                idPrefix={worker ? `w-edit-${worker.id}` : 'w-new'}
+              />
+              <p className="text-xs text-muted-foreground">
+                Optional tag shown on their avatar, worker card and reports.
+              </p>
             </div>
 
             {/* The IT Support grant, given its own switch: it is the one

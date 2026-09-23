@@ -34,6 +34,7 @@ export const state = {
   // can return a "column not found" error and the test can simulate that by
   // setting this to the error message to surface.
   workersPermissionsColumnMissing: false,
+  workersColorColumnMissing: false,
 }
 
 export function resetState() {
@@ -54,6 +55,7 @@ export function resetState() {
   state.lastWorkersSelectColumns = null
   state.lastWorkersUpdatePayload = null
   state.workersPermissionsColumnMissing = false
+  state.workersColorColumnMissing = false
 }
 
 function matches(row, filters) {
@@ -124,6 +126,18 @@ function from(table) {
       // Simulate the database rejecting a select that mentions a column the
       // DB does not have. The real supabase-js client does this automatically
       // when PostgREST says PGRST204 / 42703.
+      if (table === 'workers' && state.workersColorColumnMissing && typeof columns === 'string' && columns.includes('color')) {
+        const errApi = {
+          ...baseApi,
+          eq: () => errApi,
+          order: () => errApi,
+          limit: () => errApi,
+          maybeSingle: async () => ({ data: null, error: { code: 'PGRST204', message: "Could not find the 'color' column of 'workers' in the schema cache" } }),
+          single: async () => ({ data: null, error: { code: 'PGRST204', message: "Could not find the 'color' column of 'workers' in the schema cache" } }),
+          then: (resolve) => resolve({ data: null, error: { code: 'PGRST204', message: "Could not find the 'color' column of 'workers' in the schema cache" } }),
+        }
+        return errApi
+      }
       if (table === 'workers' && state.workersPermissionsColumnMissing && typeof columns === 'string' && columns.includes('permissions')) {
         const errApi = {
           ...baseApi,
@@ -233,6 +247,9 @@ function from(table) {
           return {
             select: () => ({
               single: async () => {
+                if (table === 'workers' && state.workersColorColumnMissing && payload && 'color' in payload) {
+                  return { data: null, error: { code: 'PGRST204', message: "Could not find the 'color' column of 'workers' in the schema cache" } }
+                }
                 const violation = table === 'clients' ? clientColorViolation(payload) : null
                 if (violation) return { data: null, error: violation }
                 const idx = state[table]?.findIndex?.((r) => matches(r, filters))

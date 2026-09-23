@@ -63,9 +63,9 @@ create index if not exists tasks_worker_status_position_idx
 -- Re-assert the allowed stages. This is what upgrades a database that ran an
 -- earlier 3-stage version of this file (To Do / In Progress / Completed) to
 -- also allow Waiting and Approval.
--- Rename legacy 'approval' rows first so the wider check can land.
-update public.tasks set status = 'for_review' where status = 'approval';
+-- Drop the old constraint first so renaming 'approval' -> 'for_review' does not violate it.
 alter table public.tasks drop constraint if exists tasks_status_check;
+update public.tasks set status = 'for_review' where status = 'approval';
 alter table public.tasks add constraint tasks_status_check
   check (status in ('todo','in_progress','waiting','for_review','rework','completed'));
 

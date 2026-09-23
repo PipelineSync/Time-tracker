@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useStore } from '@/lib/store'
 import type { KpiFilters } from '@/lib/kpi'
 import {
@@ -9,6 +9,7 @@ import {
   computeEmployeeKpi,
   computeTeamKpi,
   currentMonthKey,
+  isKpiSubject,
   lastNMonths,
   monthLabel,
   scopeEmployees,
@@ -109,6 +110,17 @@ export function TeamKpiPage() {
     [workers],
   )
 
+  const kpiSubjects = useMemo(
+    () => workers.filter((w) => w.status === 'active' && isKpiSubject(w)),
+    [workers],
+  )
+
+  useEffect(() => {
+    if (filters.employee !== 'all' && !kpiSubjects.some((w) => w.id === filters.employee)) {
+      setFilters((f) => ({ ...f, employee: 'all' }))
+    }
+  }, [filters.employee, kpiSubjects])
+
   // Header scope (employee/client/status) — the month is applied per-metric.
   const scopedTasks = useMemo(() => applyKpiFilters(tasks, filters), [tasks, filters])
   const employees = useMemo(() => scopeEmployees(workers, filters), [workers, filters])
@@ -191,11 +203,9 @@ export function TeamKpiPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All</SelectItem>
-                {workers
-                  .filter((w) => w.status === 'active')
-                  .map((w) => (
-                    <SelectItem key={w.id} value={w.id}>{w.name}</SelectItem>
-                  ))}
+                {kpiSubjects.map((w) => (
+                  <SelectItem key={w.id} value={w.id}>{w.name}</SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>

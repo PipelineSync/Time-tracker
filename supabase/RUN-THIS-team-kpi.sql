@@ -162,8 +162,9 @@ alter table public.tasks add constraint tasks_rework_type_valid
     'access_issue'
   ));
 
--- 3a. the six-stage vocabulary: rename 'approval' → 'for_review' FIRST (the
--- new CHECK below would otherwise reject the old rows).
+-- 3a. the six-stage vocabulary: drop the old stage CHECK first so renaming
+-- 'approval' → 'for_review' does not violate the existing constraint.
+alter table public.tasks drop constraint if exists tasks_status_check;
 update public.tasks
    set status = 'for_review'
  where status = 'approval';
@@ -192,7 +193,6 @@ update public.tasks
 
 -- 3c. the stage CHECK: all six values (the old five-value constraint used the
 -- same auto-name, so dropping it covers both tasks.sql layouts).
-alter table public.tasks drop constraint if exists tasks_status_check;
 alter table public.tasks add constraint tasks_status_check check (
   status in ('todo', 'in_progress', 'waiting', 'for_review', 'rework', 'completed')
 );

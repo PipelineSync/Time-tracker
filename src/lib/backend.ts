@@ -55,6 +55,7 @@ export interface CreateWorkerInput {
   hourly_rate: number
   status?: Worker['status']
   position?: string
+  color?: string | null
   /** Admin capabilities to grant this worker (default: none). */
   permissions?: Permission[]
   /** Workdays (0=Sun…6=Sat); defaults to Mon–Fri. */

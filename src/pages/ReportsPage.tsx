@@ -15,7 +15,7 @@ import { toast } from 'sonner'
 import { Download, BarChart3, Clock, DollarSign, Hash, Landmark, TrendingUp } from 'lucide-react'
 import { money, formatMinutes, formatDate } from '@/lib/utils'
 import { dateRangeFor, filterEntriesInRange, summarizeEntries, hoursByWorker, hoursByClient } from '@/lib/stats'
-import { clientColorStyles } from '@/lib/types'
+import { clientColorStyles, workerColorStyles } from '@/lib/types'
 import { ClientDot } from '@/components/ClientBadge'
 import { daysUntil, dueLabel, financeByMonth, financeChartMonths, monthKeysBetween, subscriptionsPerMonth } from '@/lib/finance'
 import { Badge } from '@/components/ui/badge'
@@ -156,7 +156,15 @@ export function ReportsPage() {
     () =>
       byWorker
         .filter((w) => w.hours > 0)
-        .map((w) => ({ name: w.worker.name.split(' ')[0], hours: Math.round(w.hours * 100) / 100, earnings: Math.round(w.earnings * 100) / 100 })),
+        .map((w, i) => {
+          const style = workerColorStyles(w.worker.color)
+          return {
+            name: w.worker.name.split(' ')[0],
+            hours: Math.round(w.hours * 100) / 100,
+            earnings: Math.round(w.earnings * 100) / 100,
+            fill: style ? style.chart : COLORS[i % COLORS.length],
+          }
+        }),
     [byWorker]
   )
 
@@ -376,7 +384,7 @@ export function ReportsPage() {
               <ResponsiveContainer width="100%" height={260}>
                 <PieChart>
                   <Pie data={workerChartData} dataKey="hours" nameKey="name" cx="50%" cy="50%" outerRadius={90} label>
-                    {workerChartData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                    {workerChartData.map((d, i) => <Cell key={i} fill={d.fill} />)}
                   </Pie>
                   <Legend />
                   <Tooltip formatter={(v: number) => [`${v}h`, 'Hours']} />

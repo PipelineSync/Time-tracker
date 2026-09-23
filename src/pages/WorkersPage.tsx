@@ -12,8 +12,10 @@ import { EmptyState } from '@/components/EmptyState'
 import { WorkerLoginDetails } from '@/components/WorkerLoginDetails'
 import { SettleWorkerDialog } from '@/components/SettleWorkerDialog'
 import { ResetWorkerPasswordDialog } from '@/components/ResetWorkerPasswordDialog'
+import { AvatarBubble } from '@/components/AvatarBubble'
+import { WorkerBadge } from '@/components/WorkerBadge'
 import { toast } from 'sonner'
-import { Users, Plus, UserRound, Pencil, Trash2, History, RotateCcw, KeyRound, Coffee } from 'lucide-react'
+import { Users, Plus, Pencil, Trash2, History, RotateCcw, KeyRound, Coffee } from 'lucide-react'
 import type { Worker } from '@/lib/types'
 import { cn, money, formatDate, formatMinutes, formatMsShort, timerBreakMs, timerElapsedMs } from '@/lib/utils'
 
@@ -114,11 +116,12 @@ export function WorkersPage() {
                 <CardContent className="p-5">
                   <div className="flex items-start justify-between">
                     <div className="flex items-center gap-3">
-                      <div className="flex h-11 w-11 items-center justify-center rounded-full bg-primary/10 text-primary">
-                        {w.avatar_url ? <img src={w.avatar_url} alt="" className="h-11 w-11 rounded-full object-cover" /> : <UserRound className="h-5 w-5" />}
-                      </div>
+                      <AvatarBubble name={w.name} avatarUrl={w.avatar_url} color={w.color} size="lg" />
                       <div>
-                        <p className="font-semibold">{w.name}</p>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="font-semibold">{w.name}</p>
+                          {w.color && <WorkerBadge worker={w} />}
+                        </div>
                         {w.position && <p className="text-xs font-medium text-primary">{w.position}</p>}
                         {w.email && <p className="text-xs text-muted-foreground">{w.email}</p>}
                       </div>

@@ -163,6 +163,7 @@ export function TaskBoard({
 
   const workerName = (id: string) => workers.find((w) => w.id === id)?.name || 'Worker'
   const workerAvatar = (id: string) => workers.find((w) => w.id === id)?.avatar_url ?? null
+  const workerColor = (id: string) => workers.find((w) => w.id === id)?.color ?? null
   const workerById = (id: string) => workers.find((w) => w.id === id)
   const clientOf = (id: string | null) => (id ? clients.find((c) => c.id === id) ?? null : null)
 
@@ -429,7 +430,7 @@ export function TaskBoard({
             {/* On a team-wide board every card names its owner. */}
             {canViewAll && (
               <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                <AvatarBubble name={workerName(task.worker_id)} avatarUrl={workerAvatar(task.worker_id)} size="sm" className="h-5 w-5 text-[9px]" />
+                <AvatarBubble name={workerName(task.worker_id)} avatarUrl={workerAvatar(task.worker_id)} color={workerColor(task.worker_id)} size="sm" className="h-5 w-5 text-[9px]" />
                 {workerName(task.worker_id)}
               </span>
             )}
@@ -685,7 +686,7 @@ export function TaskBoard({
                 )}
                 {canViewAll && (
                   <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                    <AvatarBubble name={workerName(task.worker_id)} avatarUrl={workerAvatar(task.worker_id)} size="sm" className="h-5 w-5 text-[9px]" />
+                    <AvatarBubble name={workerName(task.worker_id)} avatarUrl={workerAvatar(task.worker_id)} color={workerColor(task.worker_id)} size="sm" className="h-5 w-5 text-[9px]" />
                     {workerName(task.worker_id)}
                   </span>
                 )}

@@ -139,7 +139,7 @@ export function WorkloadOverviewTable({
                 >
                   <td className="px-4 py-2.5 sm:px-5">
                     <span className="flex items-center gap-2.5">
-                      <AvatarBubble name={worker.name} avatarUrl={worker.avatar_url} size="sm" className="h-7 w-7 text-[10px]" />
+                      <AvatarBubble name={worker.name} avatarUrl={worker.avatar_url} color={worker.color} size="sm" className="h-7 w-7 text-[10px]" />
                       <span className={cn('font-medium', active && 'text-primary')}>{worker.name}</span>
                     </span>
                   </td>

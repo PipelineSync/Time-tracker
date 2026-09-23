@@ -88,7 +88,7 @@ export function MonthlyTargetsCard({
           return (
             <div key={w.id} className="grid grid-cols-1 items-end gap-2 rounded-xl border p-3 sm:grid-cols-[1fr,110px,110px,110px,auto]">
               <div className="flex min-w-0 items-center gap-2">
-                <AvatarBubble name={w.name} avatarUrl={w.avatar_url} className="h-7 w-7 text-[10px]" />
+                <AvatarBubble name={w.name} avatarUrl={w.avatar_url} color={w.color} className="h-7 w-7 text-[10px]" />
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium">{w.name}</p>
                   <p className="truncate text-[11px] text-muted-foreground">{w.position || 'Team member'}</p>
@@ -217,17 +217,20 @@ export function BonusDecisionsCard({
           const decision = effectiveBonus(decisions, w.id, month)
           return (
             <div key={w.id} className="grid grid-cols-1 items-end gap-2 rounded-xl border p-3 sm:grid-cols-[1fr,130px,130px,auto]">
-              <div className="min-w-0">
-                <p className="truncate text-sm font-medium">{w.name}</p>
-                <p className="truncate text-[11px] text-muted-foreground">
-                  {decision
-                    ? decision.eligible === 'pending'
-                      ? 'Pending — not yet decided'
-                      : decision.eligible === 'yes'
-                        ? `Eligible${decision.approved_amount != null ? ` · approved ${decision.approved_amount}` : ''}`
-                        : 'Not eligible'
-                    : 'No decision yet — Pending'}
-                </p>
+              <div className="flex min-w-0 items-center gap-2">
+                <AvatarBubble name={w.name} avatarUrl={w.avatar_url} color={w.color} className="h-7 w-7 text-[10px]" />
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium">{w.name}</p>
+                  <p className="truncate text-[11px] text-muted-foreground">
+                    {decision
+                      ? decision.eligible === 'pending'
+                        ? 'Pending — not yet decided'
+                        : decision.eligible === 'yes'
+                          ? `Eligible${decision.approved_amount != null ? ` · approved ${decision.approved_amount}` : ''}`
+                          : 'Not eligible'
+                      : 'No decision yet — Pending'}
+                  </p>
+                </div>
               </div>
               <div className="grid gap-1">
                 <Label className="text-[10px] text-muted-foreground">Eligible</Label>
