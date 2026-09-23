@@ -2594,12 +2594,14 @@ export const localBackend: DataBackend = {
     // snapshot, and writing back the stale `c.data` would clobber the
     // occurrence it just created.
     const fresh = ctx()
-    const template = fresh?.data.tasks.find((t) => t.id === id)
-    if (template) {
-      template.due_date = nextDue
-      template.occurrence = nextOccurrence
-      template.updated_at = now
-      save(fresh.data)
+    if (fresh) {
+      const template = fresh.data.tasks.find((t) => t.id === id)
+      if (template) {
+        template.due_date = nextDue
+        template.occurrence = nextOccurrence
+        template.updated_at = now
+        save(fresh.data)
+      }
     }
     return { data: created.data, error: null }
   },
