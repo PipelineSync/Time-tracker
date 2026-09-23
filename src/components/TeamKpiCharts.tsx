@@ -10,8 +10,8 @@ import {
   LineChart,
   Line,
 } from 'recharts'
-import type { EmployeeKpi } from '@/lib/kpi'
-import { fmtPct, monthShortLabel, WORKLOAD_LABELS } from '@/lib/kpi'
+import type { ClientHoursRow, EmployeeKpi } from '@/lib/kpi'
+import { fmtHours, fmtPct, monthShortLabel, WORKLOAD_LABELS } from '@/lib/kpi'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 /** First name (or a sensible slice) so axis labels stay short. */
@@ -112,6 +112,74 @@ export function WorkloadByEmployeeChart({ employees }: { employees: EmployeeKpi[
         )}
         <p className="mt-1 text-center text-[11px] text-muted-foreground">
           Open estimated hours ÷ available hours on each person’s own workweek — &lt;60% available · 60–80 normal · 81–100 high · &gt;100 overloaded
+        </p>
+      </CardContent>
+    </Card>
+  )
+}
+
+/**
+ * Grouped bar chart: Estimated vs Logged hours per client over everything
+ * currently in scope (open + completed tasks, logged time of scoped
+ * employees). Clicking a bar drills into that client's source tasks.
+ */
+export function HoursByClientChart({
+  rows,
+  onDrill,
+  className,
+}: {
+  rows: ClientHoursRow[]
+  /** Pass a clientId (null = unassigned) for a per-client drill. */
+  onDrill?: (clientId: string | null) => void
+  className?: string
+}) {
+  const data = rows.map((r) => ({
+    clientId: r.clientId,
+    name: shortName(r.name),
+    estimated: r.estimated,
+    actual: r.actual,
+  }))
+  const empty = data.length === 0 || data.every((d) => d.estimated <= 0 && d.actual <= 0)
+  return (
+    <Card className={className}>
+      <CardHeader>
+        <CardTitle className="text-base">Hours by Client</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {empty ? (
+          <p className="py-10 text-center text-sm text-muted-foreground">No hours in scope yet.</p>
+        ) : (
+          <ResponsiveContainer width="100%" height={260}>
+            <BarChart data={data} margin={{ top: 8, right: 8, left: -8, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" className="stroke-border" vertical={false} />
+              <XAxis dataKey="name" fontSize={12} interval={0} />
+              <YAxis fontSize={12} />
+              <Tooltip formatter={(v: number, name: string) => [fmtHours(v), name === 'estimated' ? 'Estimated' : 'Logged']} />
+              <Bar dataKey="estimated" name="estimated" radius={[4, 4, 0, 0]} cursor={onDrill ? 'pointer' : undefined}>
+                {data.map((d, i) => (
+                  <Cell
+                    key={i}
+                    fill="#8b5cf6"
+                    onClick={onDrill ? () => onDrill(d.clientId) : undefined}
+                  />
+                ))}
+              </Bar>
+              <Bar dataKey="actual" name="actual" radius={[4, 4, 0, 0]} cursor={onDrill ? 'pointer' : undefined}>
+                {data.map((d, i) => (
+                  <Cell
+                    key={i}
+                    fill="#3b82f6"
+                    onClick={onDrill ? () => onDrill(d.clientId) : undefined}
+                  />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        )}
+        <p className="mt-1 text-center text-[11px] text-muted-foreground">
+          <span className="text-violet-500">■</span> Estimated = task-board estimates (open + completed in scope)
+          &nbsp; <span className="text-blue-500">■</span> Logged = time entries of the scoped team
+          {onDrill ? ' · click a bar for that client’s tasks' : ''}
         </p>
       </CardContent>
     </Card>

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useStore } from '@/lib/store'
-import type { Task, TaskPriority, TaskStatus, WaitingReason } from '@/lib/types'
-import { TASK_STATUSES, TaskPriorityNames, TaskStatusNames, WAITING_REASONS, WaitingReasonNames } from '@/lib/types'
+import type { Task, TaskPriority, TaskRepeats, TaskStatus, WaitingReason } from '@/lib/types'
+import { TASK_REPEATS, TASK_STATUSES, TaskPriorityNames, TaskRepeatNames, TaskStatusNames, WAITING_REASONS, WaitingReasonNames } from '@/lib/types'
 import {
   Dialog,
   DialogContent,
@@ -29,6 +29,10 @@ interface FormState {
   dueDate: string
   /** Estimated hours — drives schedule-aware workload on the Team KPI page. */
   estimatedHours: string
+  /** Recurrence interval — 'none' = one-off task. */
+  repeats: TaskRepeats
+  /** Optional end date for the series ('' = no end). */
+  repeatUntil: string
   /** Why the work is blocked (only meaningful on the Waiting column). */
   waitingReason: WaitingReason | ''
 }
@@ -42,6 +46,8 @@ const emptyForm = (status: TaskStatus): FormState => ({
   priority: 'medium',
   dueDate: '',
   estimatedHours: '',
+  repeats: 'none',
+  repeatUntil: '',
   waitingReason: '',
 })
 
@@ -93,6 +99,8 @@ export function TaskFormDialog({
         priority: task.priority,
         dueDate: task.due_date ? task.due_date.slice(0, 10) : '',
         estimatedHours: task.estimated_hours != null ? String(task.estimated_hours) : '',
+        repeats: task.repeats,
+        repeatUntil: task.repeat_until ?? '',
         waitingReason: task.waiting_reason ?? '',
       })
     } else {
@@ -161,6 +169,13 @@ export function TaskFormDialog({
       toast.error('Estimated hours must be a positive number.')
       return
     }
+    // A series with an end date but no due date has no anchor to advance
+    // from, so "Recreate next" could never compute the next date.
+    if (form.repeats !== 'none' && form.repeatUntil && !form.dueDate) {
+      toast.error('A repeating task with an end date also needs a due date.')
+      return
+    }
+    const repeatUntil = form.repeatUntil || null
     setSaving(true)
     try {
       if (task) {
@@ -172,6 +187,8 @@ export function TaskFormDialog({
           priority: form.priority,
           due_date: form.dueDate || null,
           estimated_hours: estimatedHours,
+          repeats: form.repeats,
+          repeat_until: repeatUntil,
           ...(form.status === 'waiting' && form.waitingReason
             ? { waiting_reason: form.waitingReason }
             : {}),
@@ -189,6 +206,8 @@ export function TaskFormDialog({
           priority: form.priority,
           due_date: form.dueDate,
           estimated_hours: estimatedHours,
+          repeats: form.repeats,
+          repeat_until: repeatUntil,
           ...(form.status === 'waiting' && form.waitingReason
             ? { waiting_reason: form.waitingReason }
             : {}),
@@ -340,6 +359,54 @@ export function TaskFormDialog({
                   Drives the schedule-aware workload view on Team KPI.
                 </p>
               </div>
+
+              <div className="grid gap-2">
+                <Label htmlFor="task-repeats">Repeats</Label>
+                <Select
+                  value={form.repeats}
+                  onValueChange={(v) => {
+                    const r = v as TaskRepeats
+                    // The shelf follows the repeat choice: picking an interval
+                    // parks a To-Do card on the Recurring shelf (its template);
+                    // un-picking it brings a shelved card back to To Do. Cards
+                    // already further along the board are left where they are.
+                    setForm((f) => ({
+                      ...f,
+                      repeats: r,
+                      status: r !== 'none'
+                        ? (f.status === 'todo' || f.status === 'recurring' ? 'recurring' : f.status)
+                        : (f.status === 'recurring' ? 'todo' : f.status),
+                    }))
+                  }}
+                >
+                  <SelectTrigger id="task-repeats"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">{TaskRepeatNames.none}</SelectItem>
+                    {TASK_REPEATS.map((r) => (
+                      <SelectItem key={r} value={r}>{TaskRepeatNames[r]}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-[11px] text-muted-foreground">
+                  Repeating tasks sit on the Recurring shelf — start each occurrence from there in one click.
+                </p>
+              </div>
+
+              {form.repeats !== 'none' && (
+                <div className="grid gap-2">
+                  <Label htmlFor="task-repeat-until">Repeats until (optional)</Label>
+                  <Input
+                    id="task-repeat-until"
+                    type="date"
+                    value={form.repeatUntil}
+                    onChange={(e) => set('repeatUntil', e.target.value)}
+                    placeholder="No end"
+                  />
+                  <p className="text-[11px] text-muted-foreground">
+                    Once the next due date passes this, “Recreate next” stops.
+                  </p>
+                </div>
+              )}
 
               {form.status === 'waiting' && (
                 <div className="grid gap-2">

@@ -21,13 +21,15 @@
  */
 import type {
   BonusDecision,
+  Client,
   MonthlyGoal,
   QaScore,
   Task,
   TaskStatus,
+  TimeEntry,
   Worker,
 } from './types'
-import { isEmployeeCausedRework, normalizeTaskStage, TASK_STATUSES } from './types'
+import { isEmployeeCausedRework, normalizeTaskStage, TASK_STATUSES, UNASSIGNED_CLIENT_NAME } from './types'
 import { isOverdueDate } from './utils'
 
 // ---- Month / date helpers ---------------------------------------------------
@@ -183,8 +185,15 @@ export function effectiveDueDate(task: Task): string | null {
 }
 
 /** Open = not completed (archive only hides completed work from the board). */
+/**
+ * Open work = not completed AND not sitting on the Recurring shelf. The shelf
+ * is a holding area for templates, not work in progress: its cards are
+ * excluded from active counts, workload and overdue math (its due date is an
+ * anchor for the next occurrence, not a deadline).
+ */
 export function isOpen(task: Task): boolean {
-  return normalizeTaskStage(task.status) !== 'completed'
+  const stage = normalizeTaskStage(task.status)
+  return stage !== 'completed' && stage !== 'recurring'
 }
 
 /** A non-completed task past its (current) due date. */
@@ -255,6 +264,9 @@ export function taskHealthBadges(task: Task, workdays: number[], now = new Date(
   const out: TaskHealthBadge[] = []
   const stage = normalizeTaskStage(task.status)
   if (stage === 'completed') return out
+  // Shelf cards: the due date is the next-occurrence anchor, not a deadline —
+  // no overdue / due-today / legacy chips on the Recurring column.
+  if (stage === 'recurring') return out
 
   if (!task.due_date) {
     out.push({ label: 'Legacy / No Due Date', tone: TONE.muted })
@@ -729,6 +741,79 @@ export function scopeEmployees(workers: Worker[], f: KpiFilters): Worker[] {
   return matched.length > 0 ? matched : base
 }
 
+// ---- Hours by client ---------------------------------------------------------
+
+export interface ClientHoursRow {
+  /** null = rows written before the client master list existed. */
+  clientId: string | null
+  name: string
+  /** Sum of task estimates (open + completed, archived excluded) in scope. */
+  estimated: number
+  /** Sum of logged time entries in scope, in hours. */
+  actual: number
+  taskCount: number
+  entryCount: number
+}
+
+/**
+ * Hours by client over the header-scoped data (§KPI "Hours by Client"):
+ *  - `estimated` comes from the task board — every non-archived task in scope
+ *    (open AND completed; the month filter never applies here),
+ *  - `actual` comes from logged time entries of the scoped employees.
+ * The client filter is applied to entries explicitly (tasks arrive already
+ * scoped). Nothing is month-restricted: this is "all hours in scope", the
+ * workload view of the dashboard.
+ */
+export function hoursByClient(opts: {
+  /** Already header-scoped (employee/client/status filters applied). */
+  tasks: Task[]
+  entries: TimeEntry[]
+  clients: Client[]
+  /** Worker ids in scope (see `scopeEmployees`) — entry rows are scoped to these. */
+  employeeIds: string[]
+  /** 'all' or a client id — narrows the entry rows (tasks are pre-scoped). */
+  clientFilter?: string
+}): ClientHoursRow[] {
+  const { tasks, entries, clients, employeeIds, clientFilter = 'all' } = opts
+  const nameFor = (id: string | null) =>
+    id ? clients.find((c) => c.id === id)?.name ?? 'Unknown' : UNASSIGNED_CLIENT_NAME
+
+  const byClient = new Map<string, ClientHoursRow>()
+  const rowFor = (id: string | null): ClientHoursRow => {
+    const key = id ?? ''
+    let row = byClient.get(key)
+    if (!row) {
+      row = { clientId: id, name: nameFor(id), estimated: 0, actual: 0, taskCount: 0, entryCount: 0 }
+      byClient.set(key, row)
+    }
+    return row
+  }
+
+  for (const t of tasks) {
+    if (t.archived_at) continue
+    const row = rowFor(t.client_id)
+    row.taskCount += 1
+    const h = Number(t.estimated_hours)
+    if (Number.isFinite(h) && h > 0) row.estimated += h
+  }
+
+  const empSet = new Set(employeeIds)
+  for (const e of entries) {
+    if (!empSet.has(e.worker_id)) continue
+    if (clientFilter !== 'all' && e.client_id !== clientFilter) continue
+    const minutes = Number(e.total_minutes)
+    if (!Number.isFinite(minutes) || minutes <= 0) continue
+    const row = rowFor(e.client_id)
+    row.actual += minutes / 60
+    row.entryCount += 1
+  }
+
+  // Biggest time-sinks first, name as the tiebreaker.
+  return [...byClient.values()].sort(
+    (a, b) => (b.actual + b.estimated) - (a.actual + a.estimated) || a.name.localeCompare(b.name),
+  )
+}
+
 /** Convenience: every open status (for "Active" style counts). */
 export const OPEN_STATUSES: TaskStatus[] = TASK_STATUSES.filter((s) => s !== 'completed')
 
@@ -736,6 +821,12 @@ export const OPEN_STATUSES: TaskStatus[] = TASK_STATUSES.filter((s) => s !== 'co
 export function fmtPct(n: number | null | undefined, digits = 0): string {
   if (n === null || n === undefined || Number.isNaN(n)) return '—'
   return `${n.toFixed(digits)}%`
+}
+
+/** Format hours for the UI ('12.5h', one decimal; '—' when there is no data). */
+export function fmtHours(n: number | null | undefined): string {
+  if (n == null || Number.isNaN(n)) return '—'
+  return `${Math.round(n * 10) / 10}h`
 }
 
 /** QA score → display percentage (5 = 100%). */

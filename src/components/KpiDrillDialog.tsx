@@ -35,6 +35,7 @@ export type KpiDrillKind =
   | 'score'
   | 'review'
   | 'goal'
+  | 'clientHours'
 
 export interface KpiDrillTarget {
   kind: KpiDrillKind
@@ -42,6 +43,8 @@ export interface KpiDrillTarget {
   workerId: string | null
   /** Extra narrowing for attention rows (high-only overdue, aged waits…). */
   flag?: boolean
+  /** 'clientHours' only: a specific client's tasks. UNSET = all clients in scope. */
+  clientId?: string | null
 }
 
 const TITLES: Record<KpiDrillKind, string> = {
@@ -56,9 +59,11 @@ const TITLES: Record<KpiDrillKind, string> = {
   score: 'What feeds the score',
   review: 'Awaiting review',
   goal: 'Toward the monthly goal',
+  clientHours: 'Hours by client',
 }
 
 const STATUS_TINTS: Record<string, string> = {
+  recurring: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300',
   todo: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300',
   in_progress: 'bg-sky-100 text-sky-700 dark:bg-sky-900/50 dark:text-sky-300',
   waiting: 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300',
@@ -95,6 +100,12 @@ export function drillTasks(tasks: Task[], target: KpiDrillTarget, month: string,
       return rows.filter(completedInMonth)
     case 'score':
       return rows.filter((t) => isOpen(t) || completedInMonth(t))
+    case 'clientHours':
+      // All hours in scope are open + completed (no month slice); an explicit
+      // clientId (possibly null = the unassigned bucket) narrows by client.
+      return target.clientId === undefined
+        ? rows
+        : rows.filter((t) => (t.client_id ?? null) === target.clientId)
   }
 }
 
@@ -110,6 +121,7 @@ export function KpiDrillDialog({
   tasks,
   month,
   workerName,
+  clientName,
 }: {
   open: boolean
   onOpenChange: (v: boolean) => void
@@ -118,6 +130,8 @@ export function KpiDrillDialog({
   tasks: Task[]
   month: string
   workerName: (id: string) => string
+  /** Used by the 'clientHours' drill to name the client in the subtitle. */
+  clientName?: (id: string | null) => string
 }) {
   const rows = useMemo(() => {
     if (!target) return []
@@ -133,6 +147,9 @@ export function KpiDrillDialog({
   const flagNote =
     target.kind === 'overdue' && target.flag ? ' — high priority only' :
     target.kind === 'onTime' ? ` — ${monthLabel(month)} completions` :
+    target.kind === 'clientHours' && target.clientId !== undefined ?
+      ` — ${clientName ? clientName(target.clientId) : 'selected client'}` :
+    target.kind === 'clientHours' ? ' — all clients in scope' :
     target.workerId ? ` — ${workerName(target.workerId)}` : ` — ${monthLabel(month)}`
 
   return (

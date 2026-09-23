@@ -19,11 +19,12 @@ import {
   Archive,
   ArchiveRestore,
   RotateCcw,
+  Repeat2,
   Timer,
 } from 'lucide-react'
 import { useStore } from '@/lib/store'
 import type { Task, TaskPriority, TaskStatus } from '@/lib/types'
-import { TASK_STATUSES, TaskPriorityNames, TaskStatusNames } from '@/lib/types'
+import { TASK_STATUSES, TaskPriorityNames, TaskRepeatNames, TaskStatusNames } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -32,7 +33,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { TaskFormDialog } from '@/components/TaskFormDialog'
 import { QaReviewDialog } from '@/components/QaReviewDialog'
-import { ClientBadge } from '@/components/ClientBadge'
+import { ClientDot } from '@/components/ClientBadge'
 import { ClientSelect } from '@/components/ClientSelect'
 import { AvatarBubble } from '@/components/AvatarBubble'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -40,10 +41,12 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { cn, formatDate, isOverdueDate } from '@/lib/utils'
 import { applyTaskFilters, isAnyBoardFilterActive, DEFAULT_BOARD_FILTERS, type BoardFilters } from '@/lib/taskFilters'
 import { taskHealthBadges } from '@/lib/kpi'
+import { planRecreate } from '@/lib/taskWorkflow'
 import { toast } from 'sonner'
 
 /** Column accents — the board reads at a glance without a legend. */
 const columnStyles: Record<TaskStatus, { icon: typeof Circle; dot: string; ring: string }> = {
+  recurring: { icon: Repeat2, dot: 'bg-cyan-500', ring: 'ring-cyan-500/40' },
   todo: { icon: Circle, dot: 'bg-slate-400', ring: 'ring-slate-400/40' },
   in_progress: { icon: Loader2, dot: 'bg-amber-500', ring: 'ring-amber-500/40' },
   waiting: { icon: PauseCircle, dot: 'bg-orange-500', ring: 'ring-orange-500/40' },
@@ -54,9 +57,10 @@ const columnStyles: Record<TaskStatus, { icon: typeof Circle; dot: string; ring:
 
 /**
  * Soft column tints — each stage sits in its own gently coloured lane, so the
- * six columns read as six piles at a glance.
+ * seven columns read as seven piles at a glance.
  */
 const columnTint: Record<TaskStatus, string> = {
+  recurring: 'bg-cyan-100/80 dark:bg-cyan-400/10',
   todo: 'bg-slate-100/80 dark:bg-slate-400/10',
   in_progress: 'bg-sky-100/80 dark:bg-sky-400/10',
   waiting: 'bg-amber-100/80 dark:bg-amber-400/10',
@@ -73,7 +77,8 @@ const priorityBadge: Record<TaskPriority, { variant: 'muted' | 'outline' | 'dest
 
 /** True when a not-yet-completed task's due date has passed. */
 function isOverdue(task: Task): boolean {
-  if (!task.due_date || task.status === 'completed') return false
+  // Shelf cards keep their anchor date (often in the past) — never overdue.
+  if (!task.due_date || task.status === 'completed' || task.status === 'recurring') return false
   return isOverdueDate(task.due_date)
 }
 
@@ -100,7 +105,9 @@ export function TaskBoard({
     user,
     can,
     dataLoading,
+    createTask,
     moveTask,
+    startRecurringOccurrence,
     deleteTask,
     archiveTask,
     restoreTask,
@@ -302,6 +309,53 @@ export function TaskBoard({
     if (res) toast.success(`Task "${task.title}" archived.`)
   }
 
+  /**
+   * "Recreate next" on a completed recurring card: clones the task into a
+   * fresh To Do card with the due date advanced by one interval (rolled to
+   * the assignee's workday). The card itself is left exactly as completed.
+   */
+  const [recreatingId, setRecreatingId] = useState<string | null>(null)
+  async function handleRecreate(task: Task) {
+    const plan = planRecreate(task, workerById(task.worker_id)?.workdays ?? [1, 2, 3, 4, 5])
+    if (!plan || plan.blockedByEnd) return
+    setRecreatingId(task.id)
+    try {
+      const created = await createTask(plan.input)
+      if (created) {
+        toast.success(
+          created.occurrence && created.occurrence > 1
+            ? `Occurrence #${created.occurrence} added to To Do — due ${formatDate(created.due_date ?? plan.nextDue)}.`
+            : `Next occurrence added to To Do — due ${formatDate(created.due_date ?? plan.nextDue)}.`,
+        )
+      }
+    } finally {
+      setRecreatingId(null)
+    }
+  }
+
+  /**
+   * "Start an occurrence" on a shelf card: the card itself flips into To Do
+   * with its due date advanced one interval — the everyday one-click dup.
+   */
+  const [startingId, setStartingId] = useState<string | null>(null)
+  async function handleStartOccurrence(task: Task) {
+    setStartingId(task.id)
+    try {
+      const started = await startRecurringOccurrence(task.id)
+      if (started) {
+        toast.success(`Occurrence started — due ${started.due_date ? formatDate(started.due_date) : 'no date'}.`)
+      }
+    } finally {
+      setStartingId(null)
+    }
+  }
+
+  /** "Return to Recurring": send the card back to the shelf (anchor unchanged). */
+  async function handleReturnToRecurring(task: Task) {
+    const res = await moveTask(task.id, 'recurring', 0)
+    if (res) toast.success(`"${task.title}" returned to the Recurring shelf.`)
+  }
+
   /** Restore an archived task back to the completed column */
   async function handleRestoreTask(task: Task) {
     const res = await restoreTask(task.id)
@@ -342,6 +396,7 @@ export function TaskBoard({
     const stageIndex = TASK_STATUSES.indexOf(task.status)
     const isExpanded = expandedIds.has(task.id)
     const isClipped = overflowIds.has(task.id)
+    const client = clientOf(task.client_id)
     return (
       <div
         draggable
@@ -374,13 +429,26 @@ export function TaskBoard({
         )}
       >
         <div className="min-w-0">
+          {/* The client names the card: client title on top, task below. */}
+          <div className="flex items-center gap-1.5">
+            <ClientDot client={client} className="h-2 w-2" />
+            <span
+              className="truncate text-xs font-semibold"
+              title={client ? client.name : 'No client'}
+            >
+              {client ? client.name : 'No client'}
+              {client?.status === 'inactive' && (
+                <span className="text-muted-foreground"> (inactive)</span>
+              )}
+            </span>
+          </div>
           <p
             ref={(el) => {
               if (el) clampRefs.current.set(`${task.id}|title`, el)
               else clampRefs.current.delete(`${task.id}|title`)
             }}
             className={cn(
-              'break-words text-sm font-medium',
+              'mt-0.5 break-words text-sm font-medium',
               !isExpanded && 'line-clamp-2',
               task.status === 'completed' && 'text-muted-foreground line-through'
             )}
@@ -411,8 +479,6 @@ export function TaskBoard({
           )}
 
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            {/* Every card names its client — the board is read across accounts. */}
-            <ClientBadge client={clientOf(task.client_id)} showInactive={false} />
             <Badge variant={priority.variant} className="text-[10px]">{priority.label}</Badge>
             {task.due_date && (
               <Badge variant={overdue ? 'destructive' : 'muted'} className="gap-1 text-[10px]">
@@ -425,6 +491,15 @@ export function TaskBoard({
               <Badge variant="muted" className="gap-1 text-[10px]">
                 <Timer className="h-3 w-3" />
                 {task.estimated_hours}h
+              </Badge>
+            )}
+            {/* Recurrence: the card is one occurrence of a series. */}
+            {task.repeats !== 'none' && (
+              <Badge variant="outline" className="gap-1 border-violet-400/50 text-violet-700 text-[10px] dark:text-violet-300">
+                <Repeat2 className="h-3 w-3" />
+                {TaskRepeatNames[task.repeats]}
+                {task.occurrence != null && task.occurrence > 1 ? ` · #${task.occurrence}` : ''}
+                {task.repeat_until ? ` · until ${formatDate(task.repeat_until)}` : ''}
               </Badge>
             )}
             {/* On a team-wide board every card names its owner. */}
@@ -454,11 +529,42 @@ export function TaskBoard({
           })()}
         </div>
 
+        {/* The shelf's whole point is the one-click dup — always visible,
+            not hidden behind a hover. */}
+        {task.status === 'recurring' && (
+          <Button
+            type="button"
+            size="sm"
+            className="mt-2 w-full gap-1 bg-cyan-600 text-xs font-semibold text-white hover:bg-cyan-700 dark:bg-cyan-600/80 dark:hover:bg-cyan-500/80"
+            disabled={startingId === task.id}
+            onClick={() => void handleStartOccurrence(task)}
+          >
+            {startingId === task.id
+              ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              : <ChevronRight className="h-3.5 w-3.5" />}
+            Start occurrence → To Do
+          </Button>
+        )}
+
         {/* Card actions stay out of sight until the card is hovered — the
             board reads clean at a glance. Touch pointers always see them. */}
         <div className="mt-2 flex items-center justify-between gap-1 border-t pt-2 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100">
           {/* Touch-friendly alternative to dragging. */}
           <div className="flex items-center gap-0.5">
+            {/* A recurring card off the shelf can go back — the anchor is
+                unchanged, so the next start re-uses the same schedule. */}
+            {task.repeats !== 'none' && task.status !== 'recurring' && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 text-cyan-600 hover:text-cyan-700 dark:text-cyan-400"
+                aria-label={`Return "${task.title}" to the Recurring shelf`}
+                title="Return to the Recurring shelf (reset the template)"
+                onClick={() => void handleReturnToRecurring(task)}
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+              </Button>
+            )}
             {task.status === 'for_review' && canReview && (
               <Button
                 variant="ghost"
@@ -492,6 +598,40 @@ export function TaskBoard({
             </Button>
           </div>
           <div className="flex items-center gap-0.5">
+            {/* A completed recurring card offers its next occurrence. */}
+            {task.status === 'completed' && task.repeats !== 'none' && (() => {
+              const plan = planRecreate(task, workerById(task.worker_id)?.workdays ?? [1, 2, 3, 4, 5])
+              if (!plan) return null
+              if (plan.blockedByEnd) {
+                return (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 text-muted-foreground"
+                    disabled
+                    aria-label={`"${task.title}" has reached its end date`}
+                    title={`Ends ${formatDate(task.repeat_until ?? plan.nextDue)} — the series is complete`}
+                  >
+                    <Repeat2 className="h-3.5 w-3.5" />
+                  </Button>
+                )
+              }
+              return (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 text-violet-600 hover:text-violet-700 dark:text-violet-400"
+                  aria-label={`Recreate "${task.title}" as the next occurrence`}
+                  title={`Next occurrence due ${formatDate(plan.nextDue)}`}
+                  disabled={recreatingId === task.id}
+                  onClick={() => void handleRecreate(task)}
+                >
+                  {recreatingId === task.id
+                    ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    : <Repeat2 className="h-3.5 w-3.5" />}
+                </Button>
+              )
+            })()}
             {task.status === 'completed' && (
               <Button
                 variant="ghost"
@@ -628,13 +768,26 @@ export function TaskBoard({
           <div className="flex items-start gap-2">
             <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" aria-hidden />
             <div className="min-w-0 flex-1">
+              {/* Same rule as the board: client title on top, task below. */}
+              <div className="flex items-center gap-1.5">
+                <ClientDot client={clientOf(task.client_id)} className="h-2 w-2" />
+                <span
+                  className="truncate text-xs font-semibold"
+                  title={clientOf(task.client_id) ? clientOf(task.client_id)!.name : 'No client'}
+                >
+                  {clientOf(task.client_id) ? clientOf(task.client_id)!.name : 'No client'}
+                  {clientOf(task.client_id)?.status === 'inactive' && (
+                    <span className="text-muted-foreground"> (inactive)</span>
+                  )}
+                </span>
+              </div>
               <p
                 ref={(el) => {
                   if (el) clampRefs.current.set(`${task.id}|title`, el)
                   else clampRefs.current.delete(`${task.id}|title`)
                 }}
                 className={cn(
-                  'break-words text-sm font-medium text-muted-foreground line-through',
+                  'mt-0.5 break-words text-sm font-medium text-muted-foreground line-through',
                   !isExpanded && 'line-clamp-2'
                 )}
               >
@@ -664,7 +817,6 @@ export function TaskBoard({
               )}
 
               <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-                <ClientBadge client={clientOf(task.client_id)} showInactive={false} />
                 <Badge variant={priority.variant} className="text-[10px]">{priority.label}</Badge>
                 {task.due_date && (
                   <Badge variant="muted" className="gap-1 text-[10px]">

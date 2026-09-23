@@ -289,6 +289,46 @@ async function main() {
   const filterOptionsAfterRevoke = workersAfterRevoke.filter((w) => w.status === 'active' && kpi.isKpiSubject(w))
   assert(filterOptionsAfterRevoke.some((w) => w.id === jasperCurrent.id), 'employee filter includes him again')
 
+  // ---- 16. hours by client: estimates + logged time group per client ----
+  const clients = (await localBackend.listClients()).data!
+  const allEntries = (await localBackend.listEntries({ limit: 10000 })).data ?? []
+  const hoursFilters: kpi.KpiFilters = { month, employee: 'all', client: 'all', status: 'all' }
+  const hoursEmpIds = kpi.scopeEmployees(workersAfterRevoke, hoursFilters).map((w) => w.id)
+  const clientRows = kpi.hoursByClient({
+    tasks: kpi.applyKpiFilters(allTasks, hoursFilters),
+    entries: allEntries,
+    clients,
+    employeeIds: hoursEmpIds,
+  })
+  const manualEst = allTasks
+    .filter((t) => !t.archived_at)
+    .reduce((s, t) => {
+      const h = Number(t.estimated_hours)
+      return s + (Number.isFinite(h) && h > 0 ? h : 0)
+    }, 0)
+  const gotEst = clientRows.reduce((s, r) => s + r.estimated, 0)
+  assert(Math.abs(gotEst - manualEst) < 1e-6, `estimated hours by client match the manual task sum (${gotEst}h)`)
+  const manualLogged =
+    allEntries.filter((e) => hoursEmpIds.includes(e.worker_id)).reduce((s, e) => s + e.total_minutes, 0) / 60
+  const gotLogged = clientRows.reduce((s, r) => s + r.actual, 0)
+  assert(
+    Math.abs(gotLogged - manualLogged) < 1e-6,
+    `logged hours by client match the manual entry sum (${gotLogged.toFixed(1)}h)`,
+  )
+  const hourClient = clients.find((c) => c.status === 'active')!
+  const scopedRows = kpi.hoursByClient({
+    tasks: kpi.applyKpiFilters(allTasks, { month, employee: 'all', client: hourClient.id, status: 'all' }),
+    entries: allEntries,
+    clients,
+    employeeIds: hoursEmpIds,
+    clientFilter: hourClient.id,
+  })
+  assert(
+    scopedRows.length > 0 && scopedRows.every((r) => r.clientId === hourClient.id),
+    `the client filter restricts hours to ${hourClient.name}`,
+  )
+  assert(kpi.fmtHours(12.34) === '12.3h' && kpi.fmtHours(null) === '—', 'fmtHours formats for the UI')
+
   if (process.exitCode) {
     console.error('\nTeam KPI verification FAILED')
   } else {

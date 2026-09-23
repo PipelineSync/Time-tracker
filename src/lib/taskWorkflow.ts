@@ -10,7 +10,8 @@
  *
  * Pure functions: the backends apply the returned patch to their own rows.
  */
-import type { QaScore, ReworkType, Task, TaskStageEvent, TaskStatus, WaitingReason, Worker } from './types'
+import type { CreateTaskInput } from './backend'
+import type { QaScore, ReworkType, Task, TaskRepeats, TaskStageEvent, TaskStatus, WaitingReason, Worker } from './types'
 import { normalizeTaskStage } from './types'
 import { isOverdueDate } from './utils'
 
@@ -255,5 +256,118 @@ export function hydrateTask(t: Task): Task {
     created_by_role: t.created_by_role === 'admin' ? 'admin' : 'worker',
     completed_at: status === 'completed' ? (t.completed_at ?? t.updated_at ?? null) : null,
     archived_at: status === 'completed' ? (t.archived_at ?? null) : null,
+    // Recurrence: rows written before the feature exist load as one-off tasks.
+    repeats: normalizeRepeats(t.repeats),
+    repeat_until: typeof t.repeat_until === 'string' && t.repeat_until ? t.repeat_until.slice(0, 10) : null,
+    series_id: typeof t.series_id === 'string' && t.series_id ? t.series_id : null,
+    occurrence: normalizeOccurrence(t.occurrence),
+  }
+}
+
+// ---- Recurring tasks ("Recreate next") ---------------------------------------
+
+/** Normalize an incoming repeat interval (unknown values become 'none'). */
+export function normalizeRepeats(value: unknown): TaskRepeats {
+  return value === 'daily' || value === 'weekly' || value === 'biweekly' || value === 'monthly' ? value : 'none'
+}
+
+/** Normalize an occurrence counter (1+, or null when not in a series). */
+export function normalizeOccurrence(value: unknown): number | null {
+  const n = Number(value)
+  return Number.isInteger(n) && n >= 1 ? n : null
+}
+
+/** Parse a local 'YYYY-MM-DD' string into a local-midnight Date, or null. */
+function parseLocalDate(s: string): Date | null {
+  const m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(s)
+  if (!m) return null
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+}
+
+/** Local-midnight Date → 'YYYY-MM-DD'. */
+function formatLocalDate(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+/**
+ * Advance a due date by one repeat interval. If the result lands on a day the
+ * assignee does not work, roll forward to their next workday (an empty
+ * `workdays` list defaults to Mon–Fri, matching the workload math).
+ *
+ * The advance is computed from the PLANNED due date — never "today" — so a
+ * late completion cannot drift the series: a weekly task due Monday stays
+ * Monday-to-Monday regardless of when it was actually completed.
+ *
+ *  - daily → +1 day · weekly → +7 days · biweekly → +14 days
+ *  - monthly → same day of the next month, clamped (Jan 31 → Feb 28/29)
+ */
+export function nextRecurringDueDate(dueDate: string, repeats: TaskRepeats, workdays: number[]): string {
+  const base = parseLocalDate(dueDate)
+  if (!base) return dueDate
+  const d = new Date(base)
+  switch (repeats) {
+    case 'daily':
+      d.setDate(d.getDate() + 1)
+      break
+    case 'weekly':
+      d.setDate(d.getDate() + 7)
+      break
+    case 'biweekly':
+      d.setDate(d.getDate() + 14)
+      break
+    case 'monthly': {
+      const lastDay = new Date(base.getFullYear(), base.getMonth() + 2, 0).getDate()
+      d.setMonth(d.getMonth() + 1, Math.min(base.getDate(), lastDay))
+      break
+    }
+    default:
+      break
+  }
+  const days = workdays.length > 0 ? workdays : [1, 2, 3, 4, 5]
+  let guard = 0
+  while (!days.includes(d.getDay()) && guard < 8) {
+    d.setDate(d.getDate() + 1)
+    guard += 1
+  }
+  return formatLocalDate(d)
+}
+
+export interface RecreatePlan {
+  /** The next instance, ready for the existing createTask path. */
+  input: CreateTaskInput
+  /** The due date the new instance would get. */
+  nextDue: string
+  /** True when `nextDue` passes the series' end date — do not offer it. */
+  blockedByEnd: boolean
+}
+
+/**
+ * The "Recreate next" plan for a completed repeating task: everything is
+ * carried over (worker, client, title, description, priority, estimate,
+ * repeat settings), the due date advances by one interval, and the series
+ * counter grows. Returns null when there is nothing to recreate — a one-off
+ * task or a legacy row without a due date (no anchor to advance from).
+ */
+export function planRecreate(task: Task, workdays: number[]): RecreatePlan | null {
+  const repeats = normalizeRepeats(task.repeats)
+  if (repeats === 'none' || !task.due_date) return null
+  const nextDue = nextRecurringDueDate(task.due_date, repeats, workdays)
+  return {
+    input: {
+      worker_id: task.worker_id,
+      client_id: task.client_id,
+      title: task.title,
+      description: task.description,
+      status: 'todo',
+      priority: task.priority,
+      due_date: nextDue,
+      estimated_hours: task.estimated_hours,
+      repeats,
+      repeat_until: task.repeat_until,
+      series_id: task.series_id ?? task.id,
+      occurrence: (normalizeOccurrence(task.occurrence) ?? 1) + 1,
+    },
+    nextDue,
+    blockedByEnd: task.repeat_until != null && nextDue > task.repeat_until,
   }
 }
