@@ -44,6 +44,15 @@
   to = "/.netlify/functions/mcp"
   status = 200
 
+# One-request deployment health check: which env variables are set (presence
+# only, never values), whether the three mcp_oauth_* tables are reachable, and
+# the origin the discovery documents advertise. Diagnoses any future
+# "Claude will not connect" report without opening the Netlify dashboard.
+[[redirects]]
+  from = "/mcp-status"
+  to = "/.netlify/functions/mcp-status"
+  status = 200
+
 # --- Single-page app fallback (kept last) ------------------------------------
 [[redirects]]
   from = "/*"
