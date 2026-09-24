@@ -98,15 +98,15 @@ async function handleRequest(
   // Notifications: the client does not want a response body.
   if (method.startsWith('notifications/')) return null
 
-  // The lifecycle handshake happens before any token is required, because
-  // Claude needs the 401's resource metadata to know where to authenticate.
+  // Every method except notifications requires authentication.
+  // Claude probes `initialize` without credentials to detect whether OAuth is
+  // required (RFC 9728 §5.1): answering 401 here is what triggers the OAuth flow.
+  const caller = (await callerFactory()) as Caller
+
   if (method === 'initialize') return handleInitialize(request, requestedVersion)
   if (method === 'ping') return result(request.id ?? null, {})
 
   if (method === 'tools/list') {
-    // Touching the caller here is what enforces authentication on the listing:
-    // an unauthenticated tools/list would hand out the workspace schema for free.
-    await callerFactory()
     return result(request.id ?? null, { tools: TOOLS.map(toolPayload) })
   }
 
@@ -124,8 +124,6 @@ async function handleRequest(
     if (args !== null && (typeof args !== 'object' || Array.isArray(args))) {
       return error(request.id ?? null, INVALID_PARAMS, '"arguments" must be an object.')
     }
-
-    const caller = (await callerFactory()) as Caller
 
     const startedAt = Date.now()
     try {
