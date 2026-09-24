@@ -33,6 +33,10 @@ const token = (await import('../netlify/functions/oauth-token')).default
 const discovery = (await import('../netlify/functions/oauth-discovery')).default
 const mcpStatus = (await import('../netlify/functions/mcp-status')).default
 
+// The brand mark is a file on disk as well as a string in the HTML, so the
+// harness reads it to prove the two agree.
+const { readFileSync, existsSync } = await import('node:fs')
+
 let failures = 0
 let checks = 0
 function assert(condition: boolean, message: string) {
@@ -269,6 +273,30 @@ assert(loginHtml.includes('code_challenge'), 'the page carries the PKCE challeng
 assert(
   !loginHtml.includes('<script'),
   'the page ships no JavaScript (nothing to hijack on a credentials form)',
+)
+
+// The sign-in card is branded with the app's own icon. The asset is a plain
+// file served from public/, so pin both halves: the markup that references it
+// (and keeps the monogram as a script-free fallback) and the file itself, so
+// a rename or a broken regeneration cannot silently 404 the card.
+const iconPath = 'public/brand/pipelinesync-icon-128.png'
+assert(
+  loginHtml.includes('src="/brand/pipelinesync-icon-128.png"'),
+  'the sign-in card renders the app brand icon',
+)
+assert(
+  loginHtml.includes('>W</span>'),
+  'the monogram stays behind the icon as a CSS-only fallback (no onerror needed under the CSP)',
+)
+assert(existsSync(iconPath), `${iconPath} exists under public/ (served at /brand/…)`)
+const icon = existsSync(iconPath) ? readFileSync(iconPath) : Buffer.alloc(0)
+assert(
+  [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a].every((byte, i) => icon[i] === byte),
+  'the brand icon is a real PNG (magic number intact)',
+)
+assert(
+  icon.readUInt32BE(16) === 128 && icon.readUInt32BE(20) === 128,
+  'the brand icon is 128x128 (IHDR width and height)',
 )
 
 // ===========================================================================

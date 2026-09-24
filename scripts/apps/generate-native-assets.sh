@@ -7,6 +7,11 @@
 #   assets/icon-foreground.png 1024x1024 transparent mark (adaptive-icon layer)
 #   assets/splash.png          2732x2732 launch screen
 #
+# It also re-renders the web assets that derive from the same source, so the
+# whole brand stays one command:
+#
+#   public/brand/pipelinesync-icon-128.png  128x128 (connector sign-in card)
+#
 # The script reads each placeholder's dimensions from the native projects and
 # re-renders that exact size, so it stays correct after `npx cap add` or a
 # Capacitor upgrade. Requires ImageMagick (`convert`).
@@ -42,6 +47,13 @@ render() {
   esac
   echo "  $(printf '%-9s' "$dims") $target"
 }
+
+# Web asset from the same source: the brand mark on the Claude Connector's
+# sign-in card (netlify/functions/lib/mcp/authorize-page.ts). It is not a
+# native asset, so it is rendered here rather than counted below.
+mkdir -p public/brand
+convert "$ICON" -strip -resize 128x128 public/brand/pipelinesync-icon-128.png
+echo "  $(printf '%-9s' '128x128') public/brand/pipelinesync-icon-128.png (connector sign-in card)"
 
 count=0
 while IFS= read -r file; do
