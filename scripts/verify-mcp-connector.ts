@@ -175,15 +175,20 @@ assert(
 )
 assert(wwwAuthenticate.includes('error="missing"'), 'the 401 says the token is missing')
 
-const initNoAuth = await rpcJson({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { clientInfo: { name: 'claude', version: '1' } } })
-assert(initNoAuth.status === 200, 'initialize works without a token (needed for discovery)')
+const initNoToken = await rpc({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { clientInfo: { name: 'claude', version: '1' } } })
+assert(initNoToken.status === 401, 'initialize without a token is refused with 401')
+const initWwwAuthenticate = initNoToken.headers.get('www-authenticate') ?? ''
 assert(
-  (initNoAuth.body as { result: { serverInfo: { name: string } } }).result.serverInfo.name ===
-    'pipelinesync-work-tracker',
-  'initialize returns the server name',
+  initWwwAuthenticate.includes(`${ORIGIN}/.well-known/oauth-protected-resource`),
+  'the initialize 401 carries resource_metadata so Claude can discover the OAuth server',
 )
-const negotiated = (initNoAuth.body as { result: { protocolVersion: string } }).result.protocolVersion
-assert(negotiated === '2025-06-18', `negotiates protocol ${negotiated}`)
+assert(initWwwAuthenticate.includes('error="missing"'), 'the initialize 401 says the token is missing')
+
+const pingNoToken = await rpc({ jsonrpc: '2.0', id: 1, method: 'ping' })
+assert(pingNoToken.status === 401, 'ping without a token is refused with 401')
+
+const headNoToken = await mcp(new Request('https://tracker.example.com/mcp', { method: 'HEAD' }))
+assert(headNoToken.status === 401, 'HEAD without a token is refused with 401')
 
 const badToken = await rpc({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, { token: 'not-a-real-token' })
 assert(badToken.status === 401, 'an unknown token is refused with 401')
@@ -657,7 +662,25 @@ assert(
 const getRequest = await mcp(new Request('https://tracker.example.com/mcp', { method: 'GET' }))
 assert(getRequest.status === 405, 'GET /mcp is answered 405 (this server does not stream SSE)')
 
-const headRequest = await mcp(new Request('https://tracker.example.com/mcp', { method: 'HEAD' }))
+const initAuth = await rpcJson(
+  { jsonrpc: '2.0', id: 1, method: 'initialize', params: { clientInfo: { name: 'claude', version: '1' } } },
+  { token: ADMIN_TOKEN },
+)
+assert(initAuth.status === 200, 'initialize with a token succeeds with 200')
+assert(
+  (initAuth.body as { result: { serverInfo: { name: string } } }).result.serverInfo.name ===
+    'pipelinesync-work-tracker',
+  'initialize returns the server name',
+)
+const negotiated = (initAuth.body as { result: { protocolVersion: string } }).result.protocolVersion
+assert(negotiated === '2025-06-18', `negotiates protocol ${negotiated}`)
+
+const headRequest = await mcp(
+  new Request('https://tracker.example.com/mcp', {
+    method: 'HEAD',
+    headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
+  }),
+)
 assert(headRequest.status === 200, 'HEAD /mcp is a cheap liveness probe')
 assert(
   Boolean(headRequest.headers.get('mcp-protocol-version')),

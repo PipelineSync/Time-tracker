@@ -100,8 +100,22 @@ export default async function handler(request: Request): Promise<Response> {
 
   // ---- Liveness / protocol probe -----------------------------------------
   // Some hosts HEAD the endpoint before connecting to check the transport.
+  // Require authentication so unauthenticated probes cannot read the server
+  // as open.
   if (request.method === 'HEAD') {
-    return new Response(null, { status: 200, headers: headers() })
+    const token = bearerToken(request)
+    if (!token) {
+      return unauthorized(request, new AuthError('missing', 'This connector requires an OAuth token.'))
+    }
+    try {
+      await resolveCaller(token)
+      return new Response(null, { status: 200, headers: headers() })
+    } catch (error) {
+      if (error instanceof AuthError) {
+        return unauthorized(request, error)
+      }
+      throw error
+    }
   }
 
   if (request.method === 'GET') {
