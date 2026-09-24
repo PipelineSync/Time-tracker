@@ -31,6 +31,7 @@ const register = (await import('../netlify/functions/oauth-register')).default
 const authorize = (await import('../netlify/functions/oauth-authorize')).default
 const token = (await import('../netlify/functions/oauth-token')).default
 const discovery = (await import('../netlify/functions/oauth-discovery')).default
+const mcpStatus = (await import('../netlify/functions/mcp-status')).default
 
 let failures = 0
 let checks = 0
@@ -778,6 +779,142 @@ assert(deleteRequest.status === 204, 'DELETE /mcp terminates the session')
 
 const afterDelete = await rpc({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, { token: refreshedTokens.access_token })
 assert(afterDelete.status === 401, 'after DELETE the token no longer works')
+
+// ===========================================================================
+// 15. Deployment diagnostics
+//
+// A connector that "does nothing" on sign-in is almost always environmental:
+// a missing environment variable or an unreachable table. These checks pin
+// three behaviours: GET /mcp-status must report the problem in one request,
+// every failure must name the missing variable instead of staying silent, and
+// /mcp must still answer 401 without a token even while the configuration is
+// broken — that 401 is what makes Claude detect the OAuth flow at all.
+// ===========================================================================
+
+console.log('\n--- Deployment diagnostics ---')
+
+// Section 14 revoked its token, so mint a fresh one for the authenticated
+// preflight checks.
+const diagSignIn = await signIn('admin@example.com', 'admin.pipelinesync')
+assert(diagSignIn.status === 302, 'sign-in still works going into the diagnostics section')
+const diagCode = new URL(diagSignIn.headers.get('location') ?? '').searchParams.get('code') ?? ''
+const diagExchange = await exchange(diagCode, verifier)
+assert(diagExchange.status === 200, 'a fresh code can be exchanged for a diagnostics token')
+const diagToken = ((await diagExchange.json()) as { access_token: string }).access_token
+
+const statusResponse = await mcpStatus(new Request(`${ORIGIN}/mcp-status`))
+const status = (await statusResponse.json()) as {
+  ok: boolean
+  origin: string
+  env: Record<string, { set: boolean; variable: string | null }>
+  tables: Record<string, { reachable: boolean }>
+}
+assert(statusResponse.status === 200, '/mcp-status answers a healthy deployment')
+assert(status.ok === true, '/mcp-status reports ok')
+assert(status.origin === ORIGIN, '/mcp-status reports the origin the connector advertises')
+assert(
+  status.env.supabaseUrl.set && status.env.publishableKey.set && status.env.serviceRoleKey.set,
+  '/mcp-status sees every required variable (presence only)',
+)
+assert(
+  status.env.supabaseUrl.variable === 'VITE_SUPABASE_URL' &&
+    status.env.serviceRoleKey.variable === 'SUPABASE_SECRET_KEY',
+  '/mcp-status names which variable satisfies each slot',
+)
+assert(
+  status.tables.mcp_oauth_clients.reachable &&
+    status.tables.mcp_oauth_codes.reachable &&
+    status.tables.mcp_oauth_tokens.reachable,
+  '/mcp-status sees all three mcp_oauth_* tables',
+)
+assert(
+  !json(status).includes('anon-key') && !json(status).includes('service-role-key'),
+  '/mcp-status never leaks a key value',
+)
+
+const statusPost = await mcpStatus(new Request(`${ORIGIN}/mcp-status`, { method: 'POST' }))
+assert(statusPost.status === 405, '/mcp-status is a GET-only diagnostic')
+
+// Now break the configuration, and prove every endpoint explains itself.
+const savedEnv: Record<string, string | undefined> = {}
+for (const name of [
+  'VITE_SUPABASE_URL',
+  'SUPABASE_URL',
+  'VITE_SUPABASE_PUBLISHABLE_KEY',
+  'VITE_SUPABASE_ANON_KEY',
+  'SUPABASE_ANON_KEY',
+  'SUPABASE_SECRET_KEY',
+  'SUPABASE_SERVICE_ROLE_KEY',
+]) {
+  savedEnv[name] = process.env[name]
+  delete process.env[name]
+}
+try {
+  const brokenStatus = (await (
+    await mcpStatus(new Request(`${ORIGIN}/mcp-status`))
+  ).json()) as typeof status
+  assert(brokenStatus.ok === false, '/mcp-status flags a broken deployment')
+  assert(
+    brokenStatus.env.supabaseUrl.set === false && brokenStatus.env.supabaseUrl.variable === null,
+    '/mcp-status reports the unset slot without a value',
+  )
+
+  const configAuthorize = await authorize(new Request(authorizeUrl.toString()))
+  const configAuthorizeHtml = await configAuthorize.text()
+  assert(
+    configAuthorize.status === 502,
+    'the sign-in page reports a misconfigured deployment instead of failing silently',
+  )
+  assert(configAuthorizeHtml.includes('Connector is not configured'), 'the config failure gets its own heading')
+  assert(configAuthorizeHtml.includes('VITE_SUPABASE_URL'), 'the sign-in page names the missing variable')
+
+  const configSignIn = await signIn('admin@example.com', 'admin.pipelinesync')
+  const configSignInHtml = await configSignIn.text()
+  assert(
+    configSignIn.status === 502,
+    'submitting credentials on a broken deployment is an explicit 502, not silence',
+  )
+  assert(configSignInHtml.includes('VITE_SUPABASE_URL'), 'the 502 names the missing variable')
+
+  const configToken = await exchange('unused', verifier)
+  assert(configToken.status === 500, 'the token endpoint reports a broken deployment as an error')
+  const configTokenBody = (await configToken.json()) as { error: string; error_description: string }
+  assert(configTokenBody.error === 'server_error', 'the token endpoint calls it server_error')
+  assert(configTokenBody.error_description.includes('VITE_SUPABASE_URL'), 'the token error names the missing variable')
+
+  // The invariant that makes Claude detect OAuth at all: no token, 401 — even
+  // with the configuration broken (RFC 9728 §5.1).
+  const brokenNoToken = await rpc({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })
+  assert(
+    brokenNoToken.status === 401,
+    'initialize without a token is still 401 while the configuration is broken',
+  )
+  const brokenPing = await rpc({ jsonrpc: '2.0', id: 1, method: 'ping' })
+  assert(brokenPing.status === 401, 'ping without a token is still 401 while the configuration is broken')
+
+  const brokenWithToken = await rpcJson(
+    { jsonrpc: '2.0', id: 1, method: 'tools/list' },
+    { token: diagToken },
+  )
+  assert(brokenWithToken.status === 500, 'an authenticated call on a broken deployment is an explicit 500')
+  const brokenMessage = (brokenWithToken.body as { error?: { message?: string } }).error?.message ?? ''
+  assert(brokenMessage.includes('VITE_SUPABASE_URL'), 'the authenticated 500 names the missing variable')
+} finally {
+  for (const [name, value] of Object.entries(savedEnv)) {
+    if (value === undefined) delete process.env[name]
+    else process.env[name] = value
+  }
+}
+
+// With the configuration restored, a rejected password must still read as a
+// loud "Sign-in failed" with the demo hint — unmissable in Claude's popup —
+// while keeping the single generic message that prevents account enumeration.
+const refused = await signIn('admin@example.com', 'nope')
+const refusedHtml = await refused.text()
+assert(refused.status === 401, 'a wrong password is refused after the config round-trip')
+assert(refusedHtml.includes('Sign-in failed'), 'the credentials failure has its own heading')
+assert(refusedHtml.includes('do not match an account'), 'the generic auth-failure message is unchanged')
+assert(refusedHtml.includes('admin.pipelinesync'), 'the page warns that the demo login does not work here')
 
 // ===========================================================================
 // Cleanup

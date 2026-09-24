@@ -21,6 +21,7 @@ import {
 import { oauthError, parseBody } from './lib/mcp/oauth'
 import { verifyPkce, jwtExpiry } from './lib/mcp/crypto'
 import { refreshSupabaseSession } from './lib/mcp/session-refresh'
+import { connectorConfigProblem, logConnectorEvent, missingConnectorEnv } from './lib/mcp/diagnostics'
 
 const ACCESS_TTL_SECONDS = 3600
 const REFRESH_TTL_SECONDS = 60 * 60 * 24 * 30
@@ -70,6 +71,29 @@ export default async function handler(request: Request): Promise<Response> {
     return response
   }
 
+  // ---- Config preflight -----------------------------------------------------
+  // A missing variable makes every exchange fail; naming it here turns "the
+  // connector never connects" into a one-look fix. This is a JSON endpoint, so
+  // the answer is an OAuth server_error whose description names the variable.
+  const configProblem = connectorConfigProblem()
+  if (configProblem) {
+    logConnectorEvent('error', 'token.config_missing', { missing: missingConnectorEnv() })
+    return oauthError(500, 'server_error', configProblem)
+  }
+
+  // An unexpected throw (database unreachable, a store bug) must come back as
+  // a real OAuth error body, not Netlify's generic 500 page.
+  try {
+    return await handleTokenRequest(request)
+  } catch (error) {
+    logConnectorEvent('error', 'token.unhandled_error', {
+      message: error instanceof Error ? error.message : String(error),
+    })
+    return oauthError(500, 'server_error', 'The token endpoint failed. Try again.')
+  }
+}
+
+async function handleTokenRequest(request: Request): Promise<Response> {
   const body = await parseBody(request)
   const grantType = body.grant_type
   const { clientId, clientSecret } = await readClientAuth(request, body)

@@ -211,9 +211,30 @@ get HTML, the `netlify.toml` rewrites were lost — they must sit **above** the
 SPA catch-all `/*` rule.
 
 **Login page appears, but sign-in fails.**
-The connector verifies passwords with the **publishable** key. Confirm
-`VITE_SUPABASE_PUBLISHABLE_KEY` is set on Netlify. Deactivated (`inactive`)
-worker accounts are refused on purpose.
+Sign-in failures now render a banner at the top of the page with a heading of
+their own — "Sign-in failed", "Connector is not configured", "Account
+deactivated" — instead of quietly re-showing the form. Read the banner:
+
+- *Sign-in failed.* Passwords are checked against **Supabase Auth**, so use the
+  real account's **email address** (Supabase → Authentication → Users). The
+  local demo login `admin / admin.pipelinesync` has no Auth record and cannot
+  work here. The message is deliberately the same for wrong email and wrong
+  password, so it cannot be used to probe which accounts exist.
+- *Connector is not configured.* A required environment variable is missing;
+  the page names it. Set it under Netlify → Site configuration → Environment
+  variables and redeploy.
+- *Account deactivated.* Deactivated (`inactive`) worker accounts are refused
+  on purpose.
+
+**One-request deployment check.** `GET /mcp-status` reports — in one curl —
+which required environment variables are set (presence only, never values),
+whether the three `mcp_oauth_*` tables are reachable via the service-role key,
+and the origin the discovery documents advertise. `ok: true` means the
+deployment can run the whole flow:
+
+```bash
+curl -s https://your-site.netlify.app/mcp-status
+```
 
 **"The redirect address is not registered for this app."**
 The connector only allows `https://claude.ai/api/mcp/auth_callback` (plus
@@ -238,6 +259,9 @@ curl -s https://your-site.netlify.app/.well-known/oauth-authorization-server
 curl -i -X POST https://your-site.netlify.app/mcp \
   -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+
+# Deployment health: env presence (never values), mcp_oauth_* tables, origin
+curl -s https://your-site.netlify.app/mcp-status
 ```
 
 ---

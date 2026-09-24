@@ -46,7 +46,14 @@ async function main() {
   // ---- 3. schedule / reschedule / delete ----------------------------------
   const created = (await localBackend.createMeeting({
     title: '  Verify standup  ',
-    start_time: new Date(now + 60 * 60 * 1000).toISOString(),
+    // Schedule *one second into the future* rather than a rounded "in one
+    // hour": the demo seed puts a stand-up later today at 16:00, which — when
+    // this test runs in the hour before that — starts sooner than a now+1h
+    // slot and would sort ahead of it, making the "soonest upcoming"
+    // assertion below flaky by time of day. One second from now is
+    // unambiguously the soonest upcoming moment (the past half below uses the
+    // same trick, one second *ago*).
+    start_time: new Date(now + 1000).toISOString(),
     notes: '  check the agenda  ',
   })).data!
   assert(created.title === 'Verify standup', 'creating trims the title')
