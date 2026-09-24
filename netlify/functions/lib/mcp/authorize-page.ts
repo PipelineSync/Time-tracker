@@ -205,12 +205,19 @@ export function page(options: PageOptions): string {
         padding: 28px;
         box-shadow: 0 10px 30px rgba(6, 36, 91, 0.08);
       }
+      /* Brand mark. The image is the app's own icon (rendered from
+         assets/icon-only.png — see scripts/apps/generate-native-assets.sh),
+         so the connector's sign-in card is branded exactly like the web app.
+         The tile is opaque, so it covers the monogram beneath it; if the file
+         ever fails to load the monogram shows through — a CSS-only fallback
+         that keeps working under a strict script-src CSP. */
       .mark {
-        width: 40px; height: 40px; border-radius: 10px;
-        background: var(--navy); color: #fff;
+        position: relative; width: 44px; height: 44px; border-radius: 11px;
+        overflow: hidden; background: var(--navy); color: #fff;
         display: flex; align-items: center; justify-content: center;
         font-weight: 700; font-size: 18px; margin-bottom: 16px;
       }
+      .mark img { position: absolute; inset: 0; width: 100%; height: 100%; }
       h1 { margin: 0 0 6px; font-size: 19px; line-height: 1.3; }
       .sub { margin: 0 0 20px; color: var(--muted); font-size: 14px; }
       .failure {
@@ -252,7 +259,10 @@ export function page(options: PageOptions): string {
   <body>
     <main class="card">
       ${error ? errorBlock(error, errorKind) : ''}
-      <div class="mark" aria-hidden="true">W</div>
+      <div class="mark" aria-hidden="true">
+        <span>W</span>
+        <img src="/brand/pipelinesync-icon-128.png" alt="" width="44" height="44" />
+      </div>
       <h1>Connect Claude to Work Tracker</h1>
       <p class="sub">Sign in with your Work Tracker account. Claude will only ever see what this account is allowed to see.</p>
 

@@ -26,6 +26,7 @@ Claude (cloud)  ──HTTPS──▶  https://your-site.netlify.app/mcp  ──�
 - [Setup (about 10 minutes)](#setup-about-10-minutes)
 - [Using it](#using-it)
 - [Disconnecting and revoking](#disconnecting-and-revoking)
+- [Branding — the connector's logo](#branding--the-connectors-logo)
 - [Troubleshooting](#troubleshooting)
 - [How it works internally](#how-it-works-internally)
 
@@ -201,6 +202,143 @@ connector therefore stops working after 30 days and simply needs reconnecting.
 
 ---
 
+## Branding — the connector's logo
+
+There are **two** places a logo can appear around this connector, and only one
+of them is ours to control.
+
+| Where | Who renders it | Can we set it? |
+|---|---|---|
+| The **sign-in card** Claude opens when you connect | Us — `netlify/functions/lib/mcp/authorize-page.ts` | ✅ Yes, and it now shows the app's own icon |
+| The **connector's icon in Claude's UI** (Settings → Connectors) | claude.ai | ❌ Not today — see below |
+
+### The sign-in card
+
+The card used to show a bare **"W" monogram** on a navy tile. It now renders
+`public/brand/pipelinesync-icon-128.png`, the same mark the web app, the PWA
+and the native iOS/Android builds use — so signing a connector in looks like
+the product it signs you into.
+
+**One source of truth.** `assets/icon-only.png` is the single brand source for
+every icon this project ships. To rebrand, replace that one file and run:
+
+```bash
+./scripts/apps/generate-native-assets.sh
+```
+
+That re-renders the 30 native iOS/Android icons and splashes *and* the
+connector's 128×128 card mark, so the brand cannot drift between the app and
+the connector.
+
+The card is deliberately built so that **the image is decoration, never
+behaviour**. The `<img>` is layered over the monogram inside an
+`overflow: hidden` tile; the tile is opaque, so it covers the monogram, and if
+the image ever fails to load the monogram simply shows through. That fallback
+is **CSS-only on purpose**: this page ships **no JavaScript at all** (a
+verification check asserts it), because there is nothing worth hijacking on a
+page that collects a password, and its `Content-Security-Policy` is
+`script-src 'self'` — so an `onerror=` handler is neither available nor wanted.
+
+The mark is excluded from the PWA precache (`globIgnores` in `vite.config.ts`):
+only the connector page ever requests it, and precaching would push it to every
+worker's phone for nothing.
+
+### The connector's icon inside Claude — not settable today
+
+Claude does **not** let a remote connector supply its own icon. Three
+independent findings, all still open as of September 2026:
+
+1. **`serverInfo.icons` is ignored.** The MCP spec added an `icons` field to
+   `serverInfo` in version `2025-11-25` (SEP-973), but claude.ai does not read
+   it for custom connectors — every one shows a generic globe. Reported as
+   [anthropics/claude-ai-mcp#152](https://github.com/anthropics/claude-ai-mcp/issues/152)
+   (opened 6 Apr 2026, **still open**, ~114 👍). The reporter tried an HTTPS
+   `src`, a `data:` URI, serving `/favicon.ico` and `/favicon.png`, and an HTML
+   `<link rel="icon">` — none of them worked.
+
+2. **Worse: advertising it can break the connection.**
+   [anthropics/claude-ai-mcp#474](https://github.com/anthropics/claude-ai-mcp/issues/474)
+   (opened 20 Jun 2026, **still open**) reports that claude.ai *rejects* a
+   spec-conformant `initialize` response that carries `serverInfo.icons`, with
+   the generic *"returned an error when connecting"*. A clean A/B in the thread
+   (15 Jul 2026) found the exact fingerprint: `initialize` returns **200**, then
+   the client silently abandons the session — no `notifications/initialized`, no
+   `tools/list`. Removing the `icons` field alone, on a byte-identical server,
+   made the very next attempt complete the full handshake. Their icon was a
+   `data:` URI, so it is the field's *mere presence*, not icon fetching, that
+   trips it.
+
+   **⇒ We deliberately do not advertise `serverInfo.icons` on this connector.**
+   The cost of being wrong is a connector that will not connect at all, which
+   is indistinguishable from the connector being broken — the exact failure this
+   project already spent effort making diagnosable. Do not add it on the
+   strength of the spec alone; only a real add/remove test in Claude against a
+   scratch deployment would justify it.
+
+3. **The fallback icon is keyed on the wrong domain.** With no explicit icon,
+   claude.ai looks up `https://www.google.com/s2/favicons?domain=<hostname>&sz=64`
+   using a naive "last two labels" split instead of the public suffix list —
+   [anthropics/claude-ai-mcp#838](https://github.com/anthropics/claude-ai-mcp/issues/838)
+   (opened 12 Aug 2026, **still open**, labelled `bug`; most recent confirmation
+   20 Sep 2026). For this deployment the hostname
+   `pipelinesync-time-tracker.netlify.app` truncates to **`netlify.app`**, so
+   every Netlify-hosted connector surfaces *Netlify's* favicon — as does every
+   Cloudflare Pages connector with `pages.dev`. **Serving our own
+   `/favicon.ico` does not override this** (this site already serves
+   `public/favicon.svg`, `.png` and `.ico`): the real hostname is never queried.
+
+   Claude Desktop *does* render icons for local **Desktop Extensions** (`.mcpb`
+   manifests, [modelcontextprotocol/mcpb#154](https://github.com/modelcontextprotocol/mcpb/issues/154),
+   fixed Feb 2026) — but that path does not apply to a remote connector.
+
+### The one lever that works: a custom domain
+
+Because the fallback is a favicon lookup on the truncated domain, the only way
+to get a real icon today is to stop sharing `netlify.app`:
+
+1. Point a **custom domain you own** (e.g. `tracker.example.com`) at the same
+   Netlify deployment.
+2. Set **`MCP_PUBLIC_URL`** to it, so the OAuth discovery documents advertise
+   the new origin, and redeploy.
+3. **Remove and re-add the connector in Claude** using the new URL. Claude
+   resolves the icon when the connector is added, so an existing connector
+   keeps the old one.
+
+`tracker.example.com` truncates to `example.com`, which resolves to *your*
+favicon — so the lookup returns your mark instead of Netlify's.
+
+> ⚠️ **If the custom domain sits behind Cloudflare** (or any WAF), Anthropic's
+> outbound range **`160.79.104.0/21`** must reach the origin un-challenged. A
+> bot-management or TLS challenge is indistinguishable from an unreachable
+> server on Anthropic's side, and the connector will fail with the same generic
+> message. Allowlist that range, or bypass challenges on `/mcp`, `/oauth/*` and
+> `/.well-known/*`.
+
+### If Anthropic ships icon support
+
+If [#152](https://github.com/anthropics/claude-ai-mcp/issues/152) is fixed and
+[#474](https://github.com/anthropics/claude-ai-mcp/issues/474) closed, the
+change is one field on the `initialize` response:
+
+```ts
+icons: [
+  {
+    src: `${origin}/brand/pipelinesync-icon-128.png`,
+    mimeType: 'image/png',
+    sizes: ['128x128'],
+  },
+]
+```
+
+It needs a small refactor first: `SERVER_INFO` is a plain `const` in
+`netlify/functions/lib/mcp/protocol.ts`, so it cannot interpolate a URL. The
+origin is already available one level up in `netlify/functions/mcp.ts`
+(`siteOrigin(request)`) — thread it into `handleJsonRpc` rather than hardcoding
+a hostname, which would break every other deployment. **Verify with a real
+connector add/remove before merging**, not just against the spec.
+
+---
+
 ## Troubleshooting
 
 **"Could not connect" immediately.**
@@ -307,6 +445,8 @@ curl -s https://your-site.netlify.app/mcp-status
 | `netlify/functions/oauth-token.ts` | Authorization-code and refresh grants |
 | `netlify/functions/oauth-discovery.ts` | Authorization-server + protected-resource metadata |
 | `netlify/functions/lib/mcp/protocol.ts` | MCP JSON-RPC handling |
+| `netlify/functions/lib/mcp/authorize-page.ts` | That page's HTML/CSS, incl. the brand mark |
+| `public/brand/pipelinesync-icon-128.png` | Mark shown on the sign-in card (generated from `assets/icon-only.png`) |
 | `netlify/functions/lib/mcp/session.ts` | Bearer token → caller with a user-scoped Supabase client |
 | `netlify/functions/lib/mcp/oauth-store.ts` | OAuth table access (service role only) |
 | `netlify/functions/lib/mcp/tools/*` | The tools themselves |
@@ -327,7 +467,7 @@ curl -s https://your-site.netlify.app/mcp-status
 npm run verify:mcp
 ```
 
-This starts a fake Supabase, points the **real** handlers at it, and runs 145
+This starts a fake Supabase, points the **real** handlers at it, and runs 183
 assertions across the OAuth flow, PKCE enforcement, tool behaviour, worker
 scoping and protocol edge cases. No Supabase project or network access needed.
 

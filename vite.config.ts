@@ -83,7 +83,13 @@ export default defineConfig({
         // worker's phone, on every new deploy. Excluding it from the precache
         // keeps the install small; admins still get it on first visit to
         // Reports and it is then cached at runtime by the rule below.
-        globIgnores: ['**/charts-*.js'],
+        globIgnores: [
+          '**/charts-*.js',
+          // The Claude Connector's sign-in logo. Only ever requested by the
+          // connector page (a Netlify Function response), so precaching it
+          // would put it on every worker's phone for nothing.
+          '**/brand/pipelinesync-icon-128.png',
+        ],
         cleanupOutdatedCaches: true,
         navigateFallback: '/index.html',
         // Never answer a navigation from the cached app shell when it has to
