@@ -226,6 +226,32 @@ deactivated" — instead of quietly re-showing the form. Read the banner:
 - *Account deactivated.* Deactivated (`inactive`) worker accounts are refused
   on purpose.
 
+**The web app's own login page appears instead of the connector's.**
+Work Tracker is an installable **PWA**. Until the service-worker fix below was
+deployed, the app's service worker answered the navigation to
+`/oauth/authorize?...` — the link Claude opens so you can sign in — from its
+cached app shell, so React Router rendered the web app's login screen and
+signing in simply opened the dashboard. Claude never received an authorization
+code, which is why it looked as if the connector was broken even though the
+server side was fine the whole time: `/mcp` and `/.well-known/*` are fetched by
+Claude's backend with no service worker in the path, and `/oauth/authorize` is
+the one connector route a real browser navigates to.
+
+The fix denies the connector routes (`/oauth/*`, `/mcp`, `/mcp-status`,
+`/.well-known/*`) in the service worker's `navigateFallbackDenylist`, so they
+always hit the network — while every other route still gets the cached shell.
+`registerType: 'autoUpdate'` means loading the app once after the deploy swaps
+the corrected worker in, with no reinstall.
+
+If you hit this on a site that has not picked the fix up yet, any one of these
+restores the real sign-in card:
+
+- **Clear the site's data** — Chrome/Edge: DevTools → **Application** →
+  **Storage** → *Clear site data*; Safari: Settings → Advanced → Website Data.
+  This unregisters the stale service worker.
+- **Open Claude's authorize link in a private/incognito window**, which has no
+  service worker, then remove and re-add the connector in Claude.
+
 **One-request deployment check.** `GET /mcp-status` reports — in one curl —
 which required environment variables are set (presence only, never values),
 whether the three `mcp_oauth_*` tables are reachable via the service-role key,
@@ -254,6 +280,11 @@ That is the permission model working. Check the account's grants under
 ```bash
 # Discovery — what Claude reads first
 curl -s https://your-site.netlify.app/.well-known/oauth-authorization-server
+
+# The connector's own sign-in page, as the server returns it. This can be
+# correct while a browser still shows the app's login page — that is the
+# service worker described above, not the server.
+curl -s https://your-site.netlify.app/oauth/authorize | grep -o 'Connect Claude to Work Tracker'
 
 # Unauthenticated call must 401 and point at the metadata document
 curl -i -X POST https://your-site.netlify.app/mcp \

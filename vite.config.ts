@@ -86,9 +86,28 @@ export default defineConfig({
         globIgnores: ['**/charts-*.js'],
         cleanupOutdatedCaches: true,
         navigateFallback: '/index.html',
-        // Never serve a cached HTML shell to the native shells or to
-        // non-GET/asset requests.
-        navigateFallbackDenylist: [/^\/netlify\//, /^\/\.netlify\//],
+        // Never answer a navigation from the cached app shell when it has to
+        // reach the network instead:
+        //
+        //  - /netlify/*, /.netlify/*: Netlify's own paths.
+        //  - /oauth/*, /mcp, /mcp-status, /.well-known/*: the Claude Connector.
+        //
+        // The connector routes are the ones a real browser navigates to:
+        // Claude opens /oauth/authorize in a tab so the user can sign in, and
+        // netlify.toml rewrites it to the oauth-authorize function. Once this
+        // site's service worker was installed, that navigation was answered
+        // from the precached shell, React Router rendered the web app's own
+        // login page instead of the connector's sign-in card, and signing in
+        // merely opened the dashboard — Claude never received an authorization
+        // code. Denying these paths keeps them network-only. The app still
+        // gets the shell on every other route.
+        navigateFallbackDenylist: [
+          /^\/netlify\//,
+          /^\/\.netlify\//,
+          /^\/oauth\//,
+          /^\/mcp(-status)?\/?$/,
+          /^\/\.well-known\//,
+        ],
         // NOTE: Supabase requests are deliberately NOT cached. Responses are
         // scoped per signed-in user by RLS, so a URL-keyed cache could leak
         // one account's data to another account on a shared device. The app
