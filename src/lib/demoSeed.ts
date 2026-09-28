@@ -63,6 +63,7 @@ function seedTask(p: {
   status: TaskStatus
   priority?: Task['priority']
   due_date: string | null
+  start_date?: string | null
   estimated_hours?: number | null
   created_at: string
   updated_at: string
@@ -103,6 +104,9 @@ function seedTask(p: {
     status,
     priority: p.priority ?? 'medium',
     due_date: p.due_date,
+    // Every seeded task has a date started — the day the card was created
+    // unless the sample says otherwise.
+    start_date: p.start_date ?? p.created_at.slice(0, 10),
     original_due_date: p.original_due_date ?? null,
     estimated_hours: p.estimated_hours ?? null,
     assigned_at: p.assigned_at ?? p.created_at,

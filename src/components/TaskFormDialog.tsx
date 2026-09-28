@@ -26,6 +26,7 @@ interface FormState {
   description: string
   status: TaskStatus
   priority: TaskPriority
+  startDate: string
   dueDate: string
   /** Estimated hours — drives schedule-aware workload on the Team KPI page. */
   estimatedHours: string
@@ -37,6 +38,12 @@ interface FormState {
   waitingReason: WaitingReason | ''
 }
 
+/** Today as a local 'YYYY-MM-DD' — the default start date for a new task. */
+const todayLocal = (): string => {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
 const emptyForm = (status: TaskStatus): FormState => ({
   workerId: '',
   clientId: '',
@@ -44,6 +51,7 @@ const emptyForm = (status: TaskStatus): FormState => ({
   description: '',
   status,
   priority: 'medium',
+  startDate: todayLocal(),
   dueDate: '',
   estimatedHours: '',
   repeats: 'none',
@@ -97,6 +105,7 @@ export function TaskFormDialog({
         description: task.description || '',
         status: task.status,
         priority: task.priority,
+        startDate: task.start_date ? task.start_date.slice(0, 10) : todayLocal(),
         dueDate: task.due_date ? task.due_date.slice(0, 10) : '',
         estimatedHours: task.estimated_hours != null ? String(task.estimated_hours) : '',
         repeats: task.repeats,
@@ -161,6 +170,12 @@ export function TaskFormDialog({
       toast.error('Every new task needs a due date.')
       return
     }
+    // Every task records when it starts — the form pre-fills today, so this
+    // only trips if the field was actively cleared.
+    if (!form.startDate) {
+      toast.error('Every task needs a start date.')
+      return
+    }
     const estimatedHours =
       form.estimatedHours.trim() === ''
         ? null
@@ -185,6 +200,7 @@ export function TaskFormDialog({
           description: form.description.trim() || null,
           status: form.status,
           priority: form.priority,
+          start_date: form.startDate,
           due_date: form.dueDate || null,
           estimated_hours: estimatedHours,
           repeats: form.repeats,
@@ -204,6 +220,7 @@ export function TaskFormDialog({
           description: form.description.trim() || null,
           status: form.status,
           priority: form.priority,
+          start_date: form.startDate,
           due_date: form.dueDate,
           estimated_hours: estimatedHours,
           repeats: form.repeats,
@@ -303,7 +320,7 @@ export function TaskFormDialog({
               />
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-3">
+            <div className="grid gap-4 sm:grid-cols-2">
               <div className="grid gap-2">
                 <Label htmlFor="task-status">Stage</Label>
                 <Select value={form.status} onValueChange={(v) => set('status', v as TaskStatus)}>
@@ -326,6 +343,18 @@ export function TaskFormDialog({
                     ))}
                   </SelectContent>
                 </Select>
+              </div>
+
+              <div className="grid gap-2">
+                <Label htmlFor="task-start">Start date *</Label>
+                <Input
+                  id="task-start"
+                  type="date"
+                  value={form.startDate}
+                  onChange={(e) => set('startDate', e.target.value)}
+                  required
+                />
+                <p className="text-[11px] text-muted-foreground">Every task records when it starts.</p>
               </div>
 
               <div className="grid gap-2">

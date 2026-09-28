@@ -70,6 +70,7 @@ import {
   normalizeQaScore,
   normalizeRepeats,
   normalizeReworkType,
+  normalizeStartDate,
   normalizeWaitingReason,
   patchTouchesQa,
 } from './taskWorkflow'
@@ -3050,9 +3051,8 @@ export const supabaseBackend: DataBackend = {
       ...(input.series_id ? { series_id: input.series_id } : {}),
       ...(input.occurrence ? { occurrence: normalizeOccurrence(input.occurrence) } : {}),
     }
-    const { data, error } = await withClientColumn<Task>((withClient) => sb
-      .from('tasks')
-      .insert({
+    const runInsert = (withClient: boolean, withStartDate: boolean) => {
+      const payload: Record<string, unknown> = {
         worker_id: workerId,
         ...(withClient ? { client_id: input.client_id ?? null } : {}),
         title,
@@ -3067,9 +3067,26 @@ export const supabaseBackend: DataBackend = {
         created_by_role: me.data!.role,
         completed_at: status === 'completed' ? now : null,
         archived_at: null,
-      })
-      .select()
-      .single() as PromiseLike<{ data: Task | null; error: { code?: string; message?: string } | null }>)
+      }
+      // Every new task gets a date started (§4): the form sends it; anything
+      // that omits it (e.g. an older connector) starts today.
+      if (withStartDate) payload.start_date = normalizeStartDate(input.start_date) ?? now.slice(0, 10)
+      return sb
+        .from('tasks')
+        .insert(payload)
+        .select()
+        .single() as PromiseLike<{ data: Task | null; error: { code?: string; message?: string } | null }>
+    }
+    const { data, error } = await withClientColumn<Task>(async (withClient) => {
+      let res = await runInsert(withClient, true)
+      // Database without the start-date migration: save everything else —
+      // hydrateTask() back-fills the start date from created_at on read.
+      if (res.error && isMissingColumn(res.error, 'start_date')) {
+        console.warn('[work-tracker] tasks.start_date is missing on this database — run supabase/RUN-THIS-task-start-date.sql to enable it.')
+        res = await runInsert(withClient, false)
+      }
+      return res
+    })
     if (error) {
       if (isMissingColumn(error, 'estimated_hours') || isMissingColumn(error, 'stage_history') || isMissingColumn(error, 'original_due_date')) {
         return fail(TEAM_KPI_MIGRATION_MESSAGE)
@@ -3120,6 +3137,8 @@ export const supabaseBackend: DataBackend = {
     if (patch.series_id !== undefined) update.series_id = patch.series_id ?? null
     if (patch.occurrence !== undefined) update.occurrence = normalizeOccurrence(patch.occurrence)
     if (patch.waiting_reason !== undefined) update.waiting_reason = normalizeWaitingReason(patch.waiting_reason)
+    // The date started is a plain editable field (every task carries one).
+    if (patch.start_date !== undefined) update.start_date = normalizeStartDate(patch.start_date)
     // Due date: preserve the original deadline when one was already missed.
     let dueChange: { due_date: string | null; original_due_date: string | null; changed: boolean; missedDeadline: boolean } | null = null
     if (patch.due_date !== undefined) {
@@ -3175,26 +3194,35 @@ export const supabaseBackend: DataBackend = {
         .filter((rowId) => rowId !== id)
     }
 
-    const runUpdate = async (withArchived: boolean, withClient: boolean, withRecurring: boolean) => {
+    const runUpdate = async (withArchived: boolean, withClient: boolean, withRecurring: boolean, withStartDate: boolean) => {
       const payload = { ...update }
       if (!withArchived) delete payload.archived_at
       if (!withClient) delete payload.client_id
       if (!withRecurring) for (const col of RECURRING_TASK_COLUMNS) delete payload[col]
+      if (!withStartDate) delete payload.start_date
       return sb.from('tasks').update(payload).eq('id', id).select().single() as PromiseLike<{ data: Task | null; error: { code?: string; message?: string } | null }>
     }
 
     const { data, error } = await withClientColumn<Task>(async (withClient) => {
       let withArchived = true
-      let res = await runUpdate(withArchived, withClient, true)
+      let withStartDate = true
+      let res = await runUpdate(withArchived, withClient, true, withStartDate)
       if (res.error && isMissingColumn(res.error, 'archived_at')) {
         withArchived = false
-        res = await runUpdate(withArchived, withClient, true)
+        res = await runUpdate(withArchived, withClient, true, withStartDate)
+      }
+      // Database without the start-date migration: save everything else —
+      // hydrateTask() back-fills the start date from created_at on read.
+      if (res.error && isMissingColumn(res.error, 'start_date')) {
+        console.warn('[work-tracker] tasks.start_date is missing on this database — run supabase/RUN-THIS-task-start-date.sql to enable it.')
+        withStartDate = false
+        res = await runUpdate(withArchived, withClient, true, withStartDate)
       }
       // Database without recurring-tasks.sql: save everything else, drop the
       // repeat settings — the task itself must never be blocked by it.
       if (res.error && RECURRING_TASK_COLUMNS.some((col) => isMissingColumn(res.error, col))) {
         console.warn('[work-tracker] recurring-task columns are missing on this database — run supabase/recurring-tasks.sql to enable recurring tasks.')
-        res = await runUpdate(withArchived, withClient, false)
+        res = await runUpdate(withArchived, withClient, false, withStartDate)
       }
       return res
     })
@@ -3376,9 +3404,8 @@ export const supabaseBackend: DataBackend = {
       .eq('worker_id', task.worker_id)
       .eq('status', 'todo')
     const shiftIds = ((columnRows as Array<{ id: string }> | null) ?? []).map((r) => r.id)
-    const { data: occurrence, error } = await withClientColumn<Task>((withClient) => sb
-      .from('tasks')
-      .insert({
+    const runInsert = (withClient: boolean, withStartDate: boolean) => {
+      const payload: Record<string, unknown> = {
         worker_id: task.worker_id,
         ...(withClient ? { client_id: task.client_id ?? null } : {}),
         title: task.title,
@@ -3396,9 +3423,24 @@ export const supabaseBackend: DataBackend = {
         created_by_role: me.data!.role,
         completed_at: null,
         archived_at: null,
-      })
-      .select()
-      .single() as PromiseLike<{ data: Task | null; error: { code?: string; message?: string } | null }>)
+      }
+      // The occurrence starts the day it is started (every task has a date
+      // started); skipped on a database that has not run the migration yet.
+      if (withStartDate) payload.start_date = now.slice(0, 10)
+      return sb
+        .from('tasks')
+        .insert(payload)
+        .select()
+        .single() as PromiseLike<{ data: Task | null; error: { code?: string; message?: string } | null }>
+    }
+    const { data: occurrence, error } = await withClientColumn<Task>(async (withClient) => {
+      let res = await runInsert(withClient, true)
+      if (res.error && isMissingColumn(res.error, 'start_date')) {
+        console.warn('[work-tracker] tasks.start_date is missing on this database — run supabase/RUN-THIS-task-start-date.sql to enable it.')
+        res = await runInsert(withClient, false)
+      }
+      return res
+    })
     if (error) {
       if (RECURRING_TASK_COLUMNS.some((col) => isMissingColumn(error, col))) {
         return fail(RECURRING_TASKS_MIGRATION_MESSAGE)

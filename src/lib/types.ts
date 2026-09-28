@@ -1251,6 +1251,12 @@ export interface Task {
   description: string | null
   status: TaskStatus
   priority: TaskPriority
+  /**
+   * The date the task starts / started ('YYYY-MM-DD'). Every task has one:
+   * required on new tasks (the form pre-fills today) and rows written before
+   * the rule are back-filled from created_at on read — see hydrateTask.
+   */
+  start_date: string | null
   /** Optional deadline (ISO date, no time component needed). Required on new
    *  tasks; null only on legacy rows predating the rule — those are marked
    *  "Legacy / No Due Date" and excluded from on-time KPI math. */

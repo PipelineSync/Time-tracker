@@ -4,6 +4,7 @@ import {
   Pencil,
   Trash2,
   CalendarDays,
+  CalendarClock,
   ChevronRight,
   ChevronLeft,
   ChevronDown,
@@ -480,6 +481,14 @@ export function TaskBoard({
 
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
             <Badge variant={priority.variant} className="text-[10px]">{priority.label}</Badge>
+            {/* Every task carries its date started (older cards back-fill
+                from their creation date). */}
+            {task.start_date && (
+              <Badge variant="muted" className="gap-1 text-[10px]">
+                <CalendarClock className="h-3 w-3" />
+                Started {formatDate(task.start_date)}
+              </Badge>
+            )}
             {task.due_date && (
               <Badge variant={overdue ? 'destructive' : 'muted'} className="gap-1 text-[10px]">
                 <CalendarDays className="h-3 w-3" />
@@ -818,6 +827,12 @@ export function TaskBoard({
 
               <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
                 <Badge variant={priority.variant} className="text-[10px]">{priority.label}</Badge>
+                {task.start_date && (
+                  <Badge variant="muted" className="gap-1 text-[10px]">
+                    <CalendarClock className="h-3 w-3" />
+                    Started {formatDate(task.start_date)}
+                  </Badge>
+                )}
                 {task.due_date && (
                   <Badge variant="muted" className="gap-1 text-[10px]">
                     <CalendarDays className="h-3 w-3" />

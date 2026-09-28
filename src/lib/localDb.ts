@@ -66,11 +66,13 @@ import {
   applyStageTransition,
   initialStageFields,
   nextRecurringDueDate,
+  effectiveStartDate,
   normalizeEstimatedHours,
   normalizeOccurrence,
   normalizeQaScore,
   normalizeRepeats,
   normalizeReworkType,
+  normalizeStartDate,
   normalizeWaitingReason,
   patchTouchesQa,
   stageActorName,
@@ -234,6 +236,9 @@ function normalizeTask(t: Task): Task {
     priority: normalizeTaskPriority(t.priority),
     description: t.description ?? null,
     client_id: t.client_id ?? null,
+    // Every task carries a date started: rows written before start_date
+    // existed load back-filled from their creation date.
+    start_date: effectiveStartDate(t),
     due_date: t.due_date ?? null,
     // KPI-era fields: rows written before they existed simply load as nulls
     // (legacy due dates keep their "Legacy / No Due Date" handling).
@@ -2386,6 +2391,7 @@ export const localBackend: DataBackend = {
       description: input.description?.trim() || null,
       status,
       priority: normalizeTaskPriority(input.priority),
+      start_date: normalizeStartDate(input.start_date) ?? now.slice(0, 10),
       due_date: input.due_date || null,
       // Stage timestamps + history for the brand-new card (§3).
       ...initialStageFields(status, now, actor),
@@ -2457,6 +2463,7 @@ export const localBackend: DataBackend = {
       title: patch.title !== undefined ? String(patch.title).trim() || current.title : current.title,
       due_date: due.due_date,
       original_due_date: due.original_due_date,
+      start_date: patch.start_date !== undefined ? normalizeStartDate(patch.start_date) : current.start_date,
       estimated_hours: patch.estimated_hours !== undefined ? normalizeEstimatedHours(patch.estimated_hours) : current.estimated_hours,
       waiting_reason: patch.waiting_reason !== undefined ? normalizeWaitingReason(patch.waiting_reason) : current.waiting_reason,
       qa_score: patch.qa_score !== undefined ? normalizeQaScore(patch.qa_score) : current.qa_score,
