@@ -1,5 +1,5 @@
 import { BRAND_ACTION_BUTTON } from '@/lib/brand'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -53,19 +53,23 @@ export function SwitchClientDialog({
 
   const currentClientName = clients.find((c) => c.id === currentClientId)?.name || null
   // Other active clients to switch to (not the one already being worked on).
-  const others = activeClients.filter((c) => c.id !== currentClientId)
+  const others = useMemo(() => activeClients.filter((c) => c.id !== currentClientId), [activeClients, currentClientId])
   const noOtherClients = others.length === 0
+  const openingOptions = useRef({ others })
+  useEffect(() => {
+    openingOptions.current = { others }
+  }, [others])
 
-  // Every time the dialog opens, start with the first sensible target, clean
-  // task fields and today as the due date.
+  // Initialize once per opening. Updating store data must not restart the form
+  // or erase task text while the dialog remains open.
   useEffect(() => {
     if (!open) return
-    setClientId(others.length === 1 ? others[0].id : '')
+    const availableClients = openingOptions.current.others
+    setClientId(availableClients.length === 1 ? availableClients[0].id : '')
     setTaskTitle('')
     setTaskDescription('')
     setTaskDueDate(todayISO())
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, currentClientId, activeClients])
+  }, [open])
 
   // Confirming needs the task filled in; skipping only needs the client.
   const taskReady = Boolean(taskTitle.trim() && taskDueDate)

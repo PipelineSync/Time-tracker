@@ -3,7 +3,7 @@
  * demo board and a move on Supabase stamp exactly the same record:
  *
  *  - Assigned At / Started At / Waiting Since / Submitted for Review At /
- *    Rework Started At / Completed At are maintained automatically (§3).
+ *    and Completed At are maintained automatically (§3).
  *  - Stage history keeps every hop for auditability.
  *  - Pushing a due date AFTER the task already missed it preserves the
  *    original deadline, so on-time KPI history can't be rewritten (§15).
@@ -76,7 +76,7 @@ export function initialStageFields(status: TaskStatus, now: string, actor: strin
     waiting_since: stage === 'waiting' ? now : null,
     waiting_reason: null,
     submitted_for_review_at: stage === 'for_review' ? now : null,
-    rework_started_at: stage === 'rework' ? now : null,
+    rework_started_at: null,
     qa_score: null,
     qa_reviewed_at: null,
     qa_reviewed_by: null,
@@ -139,10 +139,6 @@ export function applyStageTransition(
       patch.qa_reviewed_at = null
       patch.qa_reviewed_by = null
     }
-  }
-  if (to === 'rework') {
-    patch.rework_started_at = now
-    patch.completed_at = null
   }
   if (to === 'completed') {
     patch.completed_at = current.completed_at ?? now
@@ -267,6 +263,8 @@ export function hydrateTask(t: Task): Task {
     rework_required: typeof t.rework_required === 'boolean' ? t.rework_required : null,
     rework_type: normalizeReworkType(t.rework_type),
     rework_notes: t.rework_notes ?? null,
+    // Preserve retired stage names in the append-only audit history; only the
+    // task's current status is normalized into the active workflow.
     stage_history: Array.isArray(t.stage_history) ? t.stage_history.filter((e) => e && e.to) : [],
     position: Number.isFinite(t.position) ? t.position : 0,
     created_by_role: t.created_by_role === 'admin' ? 'admin' : 'worker',

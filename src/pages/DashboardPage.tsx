@@ -104,13 +104,12 @@ export function DashboardPage() {
         in_progress: number
         waiting: number
         for_review: number
-        rework: number
         overdue: number
         lastUpdated: string
       }
     >()
     for (const w of workers)
-      countsFor.set(w.id, { todo: 0, in_progress: 0, waiting: 0, for_review: 0, rework: 0, overdue: 0, lastUpdated: '' })
+      countsFor.set(w.id, { todo: 0, in_progress: 0, waiting: 0, for_review: 0, overdue: 0, lastUpdated: '' })
     for (const t of activeTasks) {
       const row = countsFor.get(t.worker_id)
       if (!row) continue
@@ -118,14 +117,13 @@ export function DashboardPage() {
       else if (t.status === 'in_progress') row.in_progress++
       else if (t.status === 'waiting') row.waiting++
       else if (t.status === 'for_review') row.for_review++
-      else if (t.status === 'rework') row.rework++
       if (t.status !== 'completed' && isOverdueDate(t.due_date)) row.overdue++
       if (t.updated_at > row.lastUpdated) row.lastUpdated = t.updated_at
     }
     return workers
       .map((w) => {
-        const c = countsFor.get(w.id) ?? { todo: 0, in_progress: 0, waiting: 0, for_review: 0, rework: 0, overdue: 0, lastUpdated: '' }
-        const total = c.todo + c.in_progress + c.waiting + c.for_review + c.rework
+        const c = countsFor.get(w.id) ?? { todo: 0, in_progress: 0, waiting: 0, for_review: 0, overdue: 0, lastUpdated: '' }
+        const total = c.todo + c.in_progress + c.waiting + c.for_review
         return { worker: w, counts: c, total, overdue: c.overdue, lastUpdated: c.lastUpdated || undefined }
       })
       // Inactive members stay off the panel unless they still carry tasks.

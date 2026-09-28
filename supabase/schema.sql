@@ -221,9 +221,9 @@ create table if not exists public.tasks (
   worker_id       uuid not null references public.workers (id) on delete cascade,
   title           text not null check (length(btrim(title)) between 1 and 200),
   description     text,
-  -- The six Team KPI stages: To Do → In Progress → Waiting → For Review →
-  -- Rework → Completed ('approval' was renamed to 'for_review').
-  status          text not null default 'todo' check (status in ('todo','in_progress','waiting','for_review','rework','completed')),
+  -- Task stages: To Do → In Progress → Waiting → For Review → Completed.
+  -- Legacy Rework statuses are migrated to In Progress.
+  status          text not null default 'todo' check (status in ('todo','in_progress','waiting','for_review','completed')),
   priority        text not null default 'medium' check (priority in ('low','medium','high')),
   -- The date the task starts / started ('YYYY-MM-DD'). Every task has one:
   -- required by the app on new tasks; older rows are back-filled below from
@@ -290,8 +290,10 @@ alter table public.tasks add column if not exists stage_history jsonb not null d
 update public.tasks set start_date = (created_at at time zone 'utc')::date where start_date is null;
 alter table public.tasks drop constraint if exists tasks_status_check;
 update public.tasks set status = 'for_review' where status = 'approval';
+-- Legacy Rework cards now continue in the regular In Progress stage.
+update public.tasks set status = 'in_progress' where status = 'rework';
 alter table public.tasks add constraint tasks_status_check
-  check (status in ('todo','in_progress','waiting','for_review','rework','completed'));
+  check (status in ('todo','in_progress','waiting','for_review','completed'));
 
 create index if not exists tasks_user_idx on public.tasks (user_id);
 create index if not exists tasks_worker_idx on public.tasks (worker_id);

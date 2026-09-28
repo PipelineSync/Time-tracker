@@ -13,11 +13,10 @@
 --   2. adds the per-worker SCHEDULE columns (workdays + weekly capacity) —
 --      the workload maths compare open estimated hours to each person's real
 --      workweek (e.g. Jasper & Mary Mon–Fri; Matthew, Jea, April Tue–Sat)
---   3. standardises task STAGES to the six the board uses:
---      todo → in_progress → waiting → for_review → rework → completed
---      ('approval' is renamed to 'for_review'; 'rework' is new), adds the
---      KPI fields (due-date history, stage timestamps, estimates, QA score,
---      rework classification, stage history) and back-fills existing rows
+--   3. standardises task STAGES, renaming 'approval' to 'for_review'. Legacy
+--      Rework-stage tasks are returned to 'in_progress' (the Rework stage has
+--      been removed); it adds KPI fields (due-date history, stage timestamps,
+--      estimates, QA score, rework classification, stage history) and back-fills existing rows.
 --   4. creates monthly_goals — the only management numbers people type
 --      (planned tasks, on-time %, QA % per person/month)
 --   5. creates bonus_decisions — manual, Owner-only bonus records
@@ -191,10 +190,13 @@ update public.tasks
    set stage_history = '[]'::jsonb
  where stage_history is null;
 
--- 3c. the stage CHECK: all six values (the old five-value constraint used the
--- same auto-name, so dropping it covers both tasks.sql layouts).
+-- The old Rework stage is no longer used; keep those legacy tasks active.
+update public.tasks set status = 'in_progress' where status = 'rework';
+
+-- 3c. the stage CHECK (the old five-value constraint used the same auto-name,
+-- so dropping it covers both tasks.sql layouts).
 alter table public.tasks add constraint tasks_status_check check (
-  status in ('todo', 'in_progress', 'waiting', 'for_review', 'rework', 'completed')
+  status in ('todo', 'in_progress', 'waiting', 'for_review', 'completed')
 );
 
 -- ---------- 4. monthly goals ----------

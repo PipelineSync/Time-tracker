@@ -18,8 +18,9 @@
 -- ============================================================================
 
 alter table public.tasks drop constraint if exists tasks_status_check;
+update public.tasks set status = 'in_progress' where status = 'rework';
 alter table public.tasks add constraint tasks_status_check
-  check (status in ('recurring','todo','in_progress','waiting','for_review','rework','completed'));
+  check (status in ('recurring','todo','in_progress','waiting','for_review','completed'));
 
 -- Verify: any rows already sitting on the shelf (none expected on a fresh
 -- database — the stage is opt-in from the app)

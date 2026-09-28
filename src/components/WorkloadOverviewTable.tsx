@@ -5,7 +5,7 @@ import { AvatarBubble } from '@/components/AvatarBubble'
 import { cn, formatDateTime } from '@/lib/utils'
 
 /** The open (not-yet-completed) stages that make up a member's load. */
-const LOAD_STATUSES = ['todo', 'in_progress', 'waiting', 'for_review', 'rework'] as const
+const LOAD_STATUSES = ['todo', 'in_progress', 'waiting', 'for_review'] as const
 type LoadStatus = (typeof LOAD_STATUSES)[number]
 
 export interface WorkloadOverviewRow {
@@ -29,7 +29,6 @@ const CELL_COLORS: Record<TaskStatus, string> = {
   in_progress: 'text-sky-600 dark:text-sky-400',
   waiting: 'text-amber-600 dark:text-amber-500',
   for_review: 'text-violet-600 dark:text-violet-400',
-  rework: 'text-rose-600 dark:text-rose-400',
   completed: 'text-emerald-600 dark:text-emerald-400',
 }
 
@@ -80,7 +79,6 @@ export function WorkloadOverviewTable({
                   s === 'in_progress' && 'bg-sky-500',
                   s === 'waiting' && 'bg-amber-500',
                   s === 'for_review' && 'bg-violet-500',
-                  s === 'rework' && 'bg-rose-500'
                 )}
                 aria-hidden
               />

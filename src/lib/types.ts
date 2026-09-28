@@ -1074,12 +1074,11 @@ export interface UpdateTicketInput {
  * "Move to" menu on touch devices); the order is the order they appear in.
  *
  * The workflow these encode:
- *   TO DO → IN PROGRESS → WAITING → FOR REVIEW → REWORK → COMPLETED
- * Waiting is a side-pile (blocked on someone/something) and Rework is a loop
- * back to the employee after QA — the linear order here is the board's column
- * order, not a strict state machine (drag & drop stays free).
+ *   TO DO → IN PROGRESS → WAITING → FOR REVIEW → COMPLETED
+ * Waiting is a side-pile (blocked on someone/something); the linear order here
+ * is the board's column order, not a strict state machine (drag & drop stays free).
  */
-export type TaskStatus = 'recurring' | 'todo' | 'in_progress' | 'waiting' | 'for_review' | 'rework' | 'completed'
+export type TaskStatus = 'recurring' | 'todo' | 'in_progress' | 'waiting' | 'for_review' | 'completed'
 
 /** How often a task repeats — drives the "Recreate next" action. */
 export type TaskRepeats = 'none' | 'daily' | 'weekly' | 'biweekly' | 'monthly'
@@ -1099,7 +1098,7 @@ export const TaskRepeatNames: Record<TaskRepeats, string> = {
  * repeating task lives there as its template, and "starting an occurrence"
  * flips it into To Do with the due date advanced one interval.
  */
-export const TASK_STATUSES: TaskStatus[] = ['recurring', 'todo', 'in_progress', 'waiting', 'for_review', 'rework', 'completed']
+export const TASK_STATUSES: TaskStatus[] = ['recurring', 'todo', 'in_progress', 'waiting', 'for_review', 'completed']
 
 export const TaskStatusNames: Record<TaskStatus, string> = {
   recurring: 'Recurring',
@@ -1107,18 +1106,18 @@ export const TaskStatusNames: Record<TaskStatus, string> = {
   in_progress: 'In Progress',
   waiting: 'Waiting',
   for_review: 'For Review',
-  rework: 'Rework',
   completed: 'Completed',
 }
 
 /**
  * Map a stored status onto the current stage vocabulary. The pre-KPI board
  * called the QA column `approval`; those rows keep working by reading as
- * `for_review`. Anything unrecognised falls back to To Do (same rule both
- * backends already applied for unknown values).
+ * `for_review`. Legacy Rework tasks remain actionable in In Progress now that
+ * Rework is no longer a board stage. Other unknown values fall back to To Do.
  */
 export function normalizeTaskStage(value: unknown): TaskStatus {
   if (value === 'approval') return 'for_review'
+  if (value === 'rework') return 'in_progress'
   return TASK_STATUSES.includes(value as TaskStatus) ? (value as TaskStatus) : 'todo'
 }
 
@@ -1210,11 +1209,14 @@ export const QA_SCORE_NAMES: Record<QaScore, string> = {
   1: 'Major rework',
 }
 
+/** Stages may include retired names that are preserved in historic audit rows. */
+export type HistoricalTaskStatus = TaskStatus | 'rework' | 'approval'
+
 /** One hop on a task's stage history — the audit trail behind every KPI number. */
 export interface TaskStageEvent {
   /** Stage the task came from (null when the task was created into `to`). */
-  from: TaskStatus | null
-  to: TaskStatus
+  from: HistoricalTaskStatus | null
+  to: HistoricalTaskStatus
   /** ISO instant of the hop. */
   at: string
   /** Who moved it (display name), best-effort. */

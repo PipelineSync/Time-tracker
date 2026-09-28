@@ -1,5 +1,5 @@
 import { BRAND_ACTION_BUTTON } from '@/lib/brand'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -61,18 +61,24 @@ export function ClockInDialog({
   const [loading, setLoading] = useState(false)
 
   const noClients = activeClients.length === 0
+  // Keep the latest choices available to the open handler without making
+  // changes elsewhere in the store restart the form while someone is typing.
+  const openingDefaults = useRef({ activeClients, defaultClientId })
+  useEffect(() => {
+    openingDefaults.current = { activeClients, defaultClientId }
+  }, [activeClients, defaultClientId])
 
-  // Every time the dialog opens, start from the worker's usual client (their
-  // last shift, or the only one there is), clean task fields and today as
-  // the due date.
+  // Initialize once per opening. Store updates (including client selection or
+  // timer refreshes) must not wipe any task text the worker has entered.
   useEffect(() => {
     if (!open) return
-    const stillActive = activeClients.some((c) => c.id === defaultClientId)
-    setClientId(stillActive ? defaultClientId! : activeClients.length === 1 ? activeClients[0].id : '')
+    const { activeClients: availableClients, defaultClientId: preferredClientId } = openingDefaults.current
+    const stillActive = availableClients.some((c) => c.id === preferredClientId)
+    setClientId(stillActive ? preferredClientId! : availableClients.length === 1 ? availableClients[0].id : '')
     setTaskTitle('')
     setTaskDescription('')
     setTaskDueDate(todayISO())
-  }, [open, defaultClientId, activeClients])
+  }, [open])
 
   // Confirming needs the task filled in; skipping only needs the client.
   const taskReady = Boolean(taskTitle.trim() && taskDueDate)
