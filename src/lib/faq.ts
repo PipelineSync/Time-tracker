@@ -39,7 +39,7 @@ export const FAQ_SECTIONS: Record<FaqAudience, FaqSection[]> = {
           id: 'worker-clock-in',
           question: 'How do I clock in?',
           answer:
-            'Tap Clock In, pick the client you are working for, and name the task you are starting on with its due date — every shift is booked to one client, and the task lands straight on your board In Progress, which is what makes the per-client reporting work. Your shift keeps running if you refresh the page or close the app, so you never lose time by leaving it open.',
+            'Tap Clock In, pick the client you are working for, and name the task you are starting on (details optional) with its due date — every shift is booked to one client, and the task lands straight on your board In Progress, which is what makes the per-client reporting work. Not starting anything specific? Skip — set up later clocks you in without a task, and you can add one from the board any time. Your shift keeps running if you refresh the page or close the app, so you never lose time by leaving it open.',
         },
         {
           id: 'worker-breaks',
@@ -57,7 +57,7 @@ export const FAQ_SECTIONS: Record<FaqAudience, FaqSection[]> = {
           id: 'worker-switch-client',
           question: 'Can I switch client in the middle of a shift?',
           answer:
-            'Yes. Tap Switch client while the clock is running. The shift keeps its original start time and only the time after the switch is booked to the new client — and just like clocking in, you name the task you are moving on to, so a card for the new client lands on your board In Progress.',
+            'Yes. Tap Switch client while the clock is running. The shift keeps its original start time and only the time after the switch is booked to the new client — and just like clocking in, you can name the task you are moving on to (details optional) so a card for the new client lands on your board In Progress, or skip it and set the task up later.',
         },
         {
           id: 'worker-cannot-clock-in',
