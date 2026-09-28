@@ -52,13 +52,12 @@ const columnStyles: Record<TaskStatus, { icon: typeof Circle; dot: string; ring:
   in_progress: { icon: Loader2, dot: 'bg-amber-500', ring: 'ring-amber-500/40' },
   waiting: { icon: PauseCircle, dot: 'bg-orange-500', ring: 'ring-orange-500/40' },
   for_review: { icon: BadgeCheck, dot: 'bg-violet-500', ring: 'ring-violet-500/40' },
-  rework: { icon: RotateCcw, dot: 'bg-rose-500', ring: 'ring-rose-500/40' },
   completed: { icon: CheckCircle2, dot: 'bg-emerald-500', ring: 'ring-emerald-500/40' },
 }
 
 /**
  * Soft column tints — each stage sits in its own gently coloured lane, so the
- * seven columns read as seven piles at a glance.
+ * six columns read as six piles at a glance.
  */
 const columnTint: Record<TaskStatus, string> = {
   recurring: 'bg-cyan-100/80 dark:bg-cyan-400/10',
@@ -66,7 +65,6 @@ const columnTint: Record<TaskStatus, string> = {
   in_progress: 'bg-sky-100/80 dark:bg-sky-400/10',
   waiting: 'bg-amber-100/80 dark:bg-amber-400/10',
   for_review: 'bg-violet-100/80 dark:bg-violet-400/10',
-  rework: 'bg-rose-100/80 dark:bg-rose-400/10',
   completed: 'bg-emerald-100/80 dark:bg-emerald-400/10',
 }
 
@@ -1222,7 +1220,7 @@ export function TaskBoard({
         defaultClientId={filters.client !== 'all' ? filters.client : undefined}
       />
 
-      {/* QA scoring: accept → Completed, or send back → Rework (§10). */}
+      {/* QA scoring for tasks in For Review. */}
       <QaReviewDialog open={!!reviewing} onOpenChange={(v) => !v && setReviewing(null)} task={reviewing} />
 
       {/* Delete task dialog */}

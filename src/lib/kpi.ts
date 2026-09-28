@@ -290,9 +290,6 @@ export function taskHealthBadges(task: Task, workdays: number[], now = new Date(
     const d = calendarDaysSince(task.submitted_for_review_at ?? task.updated_at, now)
     out.push({ label: `For Review ${d} Day${d === 1 ? '' : 's'}`, tone: TONE.violet })
   }
-  if (stage === 'rework') {
-    out.push({ label: 'Rework', tone: TONE.danger })
-  }
   return out
 }
 

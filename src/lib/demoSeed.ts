@@ -409,7 +409,7 @@ export function buildDemoSeed() {
         { title: 'Waiting for manager sign-off on giveaway', status: 'waiting', dueInDays: 3, weight: 0.1, waitingReason: 'manager', waitingSinceDays: 4 },
         { title: 'Waiting on design templates', status: 'waiting', dueInDays: 4, weight: 0.08, waitingReason: 'teammate', waitingSinceDays: 2 },
         { title: 'Carousel draft for the product launch', status: 'for_review', dueInDays: 1, weight: 0.1, submittedDaysAgo: 1 },
-        { title: 'Fix caption typos from last review', status: 'rework', dueInDays: 1, weight: 0.06, client: 'Acme Corp' },
+        { title: 'Fix caption typos from last review', status: 'in_progress', dueInDays: 1, weight: 0.06, client: 'Acme Corp' },
         { title: 'Schedule week-2 community replies', status: 'in_progress', dueInDays: 5, weight: 0.04, client: 'Northwind Traders' },
       ],
     },

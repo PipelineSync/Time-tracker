@@ -88,7 +88,7 @@ function TopCard({
 /**
  * Team KPI dashboard (§6–§13): month/employee/client/status filters over
  * task-derived metrics — nothing is ever entered twice. Every number drills
- * into the tasks behind it; only targets, QA scores, rework classes and bonus
+ * into the tasks behind it; targets, QA scores and bonus
  * approvals are management inputs.
  */
 export function TeamKpiPage() {
@@ -377,8 +377,8 @@ export function TeamKpiPage() {
       <KpiAuditCard events={kpiAudit} />
 
       <p className="pb-4 text-center text-xs text-muted-foreground">
-        Signed in as {user?.email} · KPI data is computed from the task board automatically — only
-        targets, QA scores, rework classification and bonus approvals are entered by hand.
+        Signed in as {user?.email} · Task metrics are computed automatically; QA scores, targets and bonus
+        approvals are entered by hand. Historical rework classifications remain in existing KPI records.
       </p>
 
       <KpiDrillDialog

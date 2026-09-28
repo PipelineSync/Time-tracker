@@ -20,7 +20,7 @@ create table if not exists public.tasks (
   worker_id       uuid not null references public.workers (id) on delete cascade,
   title           text not null check (length(btrim(title)) between 1 and 200),
   description     text,
-  status          text not null default 'todo' check (status in ('todo','in_progress','waiting','for_review','rework','completed')),
+  status          text not null default 'todo' check (status in ('todo','in_progress','waiting','for_review','completed')),
   priority        text not null default 'medium' check (priority in ('low','medium','high')),
   due_date        date,
   -- Manual ordering inside a column (smaller sorts first).
@@ -44,8 +44,9 @@ create index if not exists tasks_worker_status_position_idx
 -- Drop the old constraint first so renaming 'approval' -> 'for_review' does not violate it.
 alter table public.tasks drop constraint if exists tasks_status_check;
 update public.tasks set status = 'for_review' where status = 'approval';
+update public.tasks set status = 'in_progress' where status = 'rework';
 alter table public.tasks add constraint tasks_status_check
-  check (status in ('todo','in_progress','waiting','for_review','rework','completed'));
+  check (status in ('todo','in_progress','waiting','for_review','completed'));
 
 alter table public.tasks enable row level security;
 
