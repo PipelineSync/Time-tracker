@@ -85,6 +85,9 @@ export interface CreateTaskInput {
   description?: string | null
   status?: TaskStatus
   priority?: Task['priority']
+  /** The date the task starts ('YYYY-MM-DD'). Required on new tasks (§4);
+   *  backends fall back to the creation date when omitted. */
+  start_date?: string | null
   /** Required on new tasks (§4) — legacy rows are the only null due dates. */
   due_date?: string | null
   /** Estimated hours — the primary workload input. */

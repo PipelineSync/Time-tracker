@@ -27,7 +27,7 @@ const STAGE_FIELDS: Partial<Record<(typeof STATUSES)[number], string>> = {
 
 /** Columns of the row we project into results — the rest is KPI bookkeeping. */
 const TASK_COLUMNS =
-  'id, title, description, status, priority, due_date, worker_id, client_id, estimated_hours, completed_at, archived_at, created_at, updated_at, qa_score, rework_required'
+  'id, title, description, status, priority, start_date, due_date, worker_id, client_id, estimated_hours, completed_at, archived_at, created_at, updated_at, qa_score, rework_required'
 
 async function listTasks(caller: Caller, args: Args): Promise<ListResult> {
   const page = limit(args, 'limit', 50, 200)
@@ -69,6 +69,7 @@ async function listTasks(caller: Caller, args: Args): Promise<ListResult> {
     assignedTo: t.worker_id ? (names.get(t.worker_id as string) ?? 'Unknown worker') : null,
     workerId: t.worker_id,
     client: t.client_id ? (clients.get(t.client_id as string) ?? null) : null,
+    startDate: t.start_date ?? null,
     dueDate: t.due_date ?? null,
     overdue: Boolean(t.due_date && (t.due_date as string) < today && t.status !== 'completed'),
     estimatedHours: t.estimated_hours === null ? null : Number(t.estimated_hours),
@@ -114,6 +115,8 @@ async function createTask(caller: Caller, args: Args): Promise<unknown> {
     description: str(args, 'description') ?? null,
     status,
     priority: oneOf(args, 'priority', PRIORITIES) ?? 'medium',
+    // Every task carries a date started (default: today).
+    start_date: dateOnly(args, 'start_date') ?? now.slice(0, 10),
     due_date: dateOnly(args, 'due_date') ?? null,
     created_by_role: caller.role,
   }
@@ -166,6 +169,11 @@ async function updateTask(caller: Caller, args: Args): Promise<unknown> {
   }
   if (args.description !== undefined) patch.description = str(args, 'description') ?? null
   if (args.priority !== undefined) patch.priority = oneOf(args, 'priority', PRIORITIES)
+  if (args.start_date !== undefined) {
+    const startDate = dateOnly(args, 'start_date')
+    // A blank start date is ignored: every task keeps a date started.
+    if (startDate) patch.start_date = startDate
+  }
   if (args.due_date !== undefined) patch.due_date = dateOnly(args, 'due_date') ?? null
   if (args.estimated_hours !== undefined) {
     patch.estimated_hours = args.estimated_hours === null ? null : Number(args.estimated_hours)
@@ -214,6 +222,7 @@ async function updateTask(caller: Caller, args: Args): Promise<unknown> {
     taskId: updated.id,
     title: updated.title,
     status: updated.status,
+    startDate: updated.start_date ?? null,
     dueDate: updated.due_date ?? null,
     message: nextStatus && nextStatus !== row.status
       ? `Task moved from ${row.status} to ${nextStatus}.`
@@ -245,7 +254,7 @@ export const taskTools: Tool[] = [
     name: 'list_tasks',
     title: 'List tasks',
     description:
-      "List tasks on the team's kanban board: title, stage, priority, who it is assigned to, client and due date. Sorted by due date. Use overdue=true to find late work.",
+      "List tasks on the team's kanban board: title, stage, priority, who it is assigned to, client, start date and due date. Sorted by due date. Use overdue=true to find late work.",
     annotations: { readOnlyHint: true, openWorldHint: false },
     inputSchema: {
       type: 'object',
@@ -265,7 +274,7 @@ export const taskTools: Tool[] = [
     name: 'create_task',
     title: 'Create a task',
     description:
-      'Add a card to a worker\'s board with a title, optional description, priority, due date, client and estimate. Every member can add cards to their own board; creating one for somebody else needs the tasks.manage_all permission.',
+      'Add a card to a worker\'s board with a title, optional description, priority, start date, due date, client and estimate. Every member can add cards to their own board; creating one for somebody else needs the tasks.manage_all permission.',
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     inputSchema: {
       type: 'object',
@@ -276,6 +285,7 @@ export const taskTools: Tool[] = [
         client_id: { type: 'string' },
         status: { type: 'string', enum: [...STATUSES], description: 'Starting column. Default todo.' },
         priority: { type: 'string', enum: [...PRIORITIES], description: 'Default medium.' },
+        start_date: { type: 'string', description: 'YYYY-MM-DD. The date the task starts. Defaults to today.' },
         due_date: { type: 'string', description: 'YYYY-MM-DD.' },
         estimated_hours: { type: 'number' },
       },
@@ -288,7 +298,7 @@ export const taskTools: Tool[] = [
     name: 'update_task',
     title: 'Update or move a task',
     description:
-      'Change a task\'s title, description, priority, due date, client, assignee or estimate — or move it between board columns (todo → in_progress → waiting → for_review → rework → completed). Stage moves are recorded in the task history so Team KPI stays accurate.',
+      'Change a task\'s title, description, priority, start date, due date, client, assignee or estimate — or move it between board columns (todo → in_progress → waiting → for_review → rework → completed). Stage moves are recorded in the task history so Team KPI stays accurate.',
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     inputSchema: {
       type: 'object',
@@ -298,6 +308,7 @@ export const taskTools: Tool[] = [
         description: { type: 'string' },
         status: { type: 'string', enum: [...STATUSES] },
         priority: { type: 'string', enum: [...PRIORITIES] },
+        start_date: { type: 'string', description: 'YYYY-MM-DD. When the task starts / started.' },
         due_date: { type: 'string', description: 'YYYY-MM-DD.' },
         worker_id: { type: 'string', description: 'Reassign to this worker.' },
         client_id: { type: 'string' },

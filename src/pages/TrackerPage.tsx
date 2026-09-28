@@ -11,7 +11,7 @@ import { ClockInDialog } from '@/components/ClockInDialog'
 import { SwitchClientDialog } from '@/components/SwitchClientDialog'
 import { toast } from 'sonner'
 import { Square, Pause, PlayCircle, LogIn, TimerReset, Repeat } from 'lucide-react'
-import { formatMinutes, money, timerBreakMs, timerElapsedMs, timerSessionStart } from '@/lib/utils'
+import { formatMinutes, money, timerBreakMs, timerElapsedMs, timerSessionStart, todayISO } from '@/lib/utils'
 import { clientColorStyles } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { BRAND_ACTION_BUTTON } from '@/lib/brand'
@@ -21,7 +21,7 @@ import { BRAND_ACTION_BUTTON } from '@/lib/brand'
  * The admin has no start-timer — they add time via manual entries.
  */
 export function TrackerPage() {
-  const { workers, entries, clients, activeClients, activeTimer, startTimer, pauseTimer, resumeTimer, stopTimer, switchClient, cancelTimer, settings, user, dataLoading } = useStore()
+  const { workers, entries, clients, activeClients, activeTimer, startTimer, pauseTimer, resumeTimer, stopTimer, switchClient, cancelTimer, createTask, settings, user, dataLoading } = useStore()
 
   const [starting, setStarting] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -58,24 +58,52 @@ export function TrackerPage() {
     return latest?.clientId ?? null
   }, [entries, currentWorkerId])
 
-  async function handleClockIn(input?: { clientId?: string; notes?: string }) {
+  /**
+   * The shift task: confirming the clock-in / switch dialog creates a task on
+   * the worker's own board for the chosen client — In Progress from today,
+   * due on the picked date, with the optional details as its description.
+   * Runs AFTER the timer action succeeded, so a failure here never loses
+   * worked time; the store surfaces its own error toast, and the worker can
+   * add the card by hand from the board.
+   */
+  async function createShiftTask(clientId: string, task: { title: string; description: string; dueDate: string }) {
+    if (!currentWorkerId) return
+    const created = await createTask({
+      worker_id: currentWorkerId,
+      client_id: clientId,
+      title: task.title,
+      description: task.description || null,
+      due_date: task.dueDate,
+      start_date: todayISO(),
+      status: 'in_progress',
+    })
+    if (created) {
+      toast.success(`Task “${created.title}” added to your board — In Progress, due ${created.due_date}.`)
+    }
+  }
+
+  async function handleClockIn(input?: { clientId?: string; task?: { title: string; description: string; dueDate: string } | null }) {
     if (!currentWorkerId) {
       toast.error('No worker profile linked to this account. Please contact your administrator.')
       return
     }
-    // A client is required to clock in. The dialog already disables the
-    // "Clock In" button until one is chosen, but never accept a missing
-    // selection here either.
+    // A client is required to clock in. The dialog already disables both
+    // buttons until one is chosen, but never accept a missing selection here
+    // either. The task is optional — null means "skip, set it up later".
     const clientId = input?.clientId?.trim()
     if (!clientId) {
       toast.error('Choose a client before clocking in.')
+      return
+    }
+    const task = input?.task ?? null
+    if (task && (!task.title.trim() || !task.dueDate)) {
+      toast.error('Name the task and pick a due date — or skip it.')
       return
     }
     setStarting(true)
     const res = await startTimer({
       worker_id: currentWorkerId,
       client_id: clientId,
-      notes: input?.notes?.trim() || undefined,
     })
     setStarting(false)
     if (res.error || !res.data) {
@@ -91,6 +119,11 @@ export function TrackerPage() {
     } else {
       const scope = clients.find((c) => c.id === res.data!.client_id)?.name || res.data.project
       toast.success(`Clocked in${scope ? ` — ${scope}` : ''}.`)
+    }
+    if (task) {
+      await createShiftTask(clientId, task)
+    } else {
+      toast.message('No task created — you can add one from your board any time.')
     }
   }
 
@@ -124,9 +157,9 @@ export function TrackerPage() {
     )
   }
 
-  async function handleSwitchClient(input: { clientId: string; notes: string }) {
+  async function handleSwitchClient(input: { clientId: string; task: { title: string; description: string; dueDate: string } | null }) {
     setSwitching(true)
-    const res = await switchClient(input.clientId, input.notes)
+    const res = await switchClient(input.clientId)
     setSwitching(false)
     if (res.error || !res.data) {
       toast.error(res.error || 'Could not switch client. Please try again.')
@@ -135,6 +168,11 @@ export function TrackerPage() {
     setSwitchOpen(false)
     const toClient = clients.find((c) => c.id === res.data!.client_id)?.name || null
     toast.success(`Switched to ${toClient || 'a new client'} — your clock is still running.`)
+    if (input.task) {
+      await createShiftTask(input.clientId, input.task)
+    } else {
+      toast.message('No task created — you can add one from your board any time.')
+    }
   }
 
   if (dataLoading && workers.length === 0 && !user?.workerId) {
@@ -276,8 +314,8 @@ export function TrackerPage() {
         onOpenChange={setClockInOpen}
         workerName={workerProfile?.name || null}
         defaultClientId={lastClientId}
-        onConfirm={async ({ clientId, notes }) => {
-          await handleClockIn({ clientId, notes })
+        onConfirm={async ({ clientId, task }) => {
+          await handleClockIn({ clientId, task })
         }}
       />
 
@@ -286,8 +324,8 @@ export function TrackerPage() {
         onOpenChange={setSwitchOpen}
         workerName={workerProfile?.name || null}
         currentClientId={myTimer?.client_id ?? null}
-        onConfirm={async ({ clientId, notes }) => {
-          await handleSwitchClient({ clientId, notes })
+        onConfirm={async ({ clientId, task }) => {
+          await handleSwitchClient({ clientId, task })
         }}
       />
 

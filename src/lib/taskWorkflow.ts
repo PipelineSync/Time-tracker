@@ -221,6 +221,21 @@ export function normalizeEstimatedHours(value: unknown): number | null {
   return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : null
 }
 
+/** A 'YYYY-MM-DD' start date (datetime strings are cut to the date part), or null. */
+export function normalizeStartDate(value: unknown): string | null {
+  return typeof value === 'string' && value ? value.slice(0, 10) : null
+}
+
+/**
+ * The start date a task row should carry: its own when present, otherwise the
+ * creation date — the rule is that EVERY task has a date started, so rows
+ * written before `start_date` existed are back-filled from created_at on read
+ * (and the Supabase migration writes it back for real).
+ */
+export function effectiveStartDate(t: Pick<Task, 'start_date' | 'created_at'>): string | null {
+  return normalizeStartDate(t.start_date) ?? normalizeStartDate(t.created_at)
+}
+
 /**
  * Read-side hydration for a stored task row: maps legacy `approval` onto
  * `for_review`, fills every KPI-era field with its neutral default, and keeps
@@ -236,6 +251,7 @@ export function hydrateTask(t: Task): Task {
     priority,
     description: t.description ?? null,
     client_id: t.client_id ?? null,
+    start_date: effectiveStartDate(t),
     due_date: t.due_date ?? null,
     original_due_date: t.original_due_date ?? null,
     estimated_hours: normalizeEstimatedHours(t.estimated_hours),

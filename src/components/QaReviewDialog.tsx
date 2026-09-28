@@ -101,6 +101,7 @@ export function QaReviewDialog({
           <DialogDescription>
             QA for “{task.title}” — assigned to {assignee}
             {client ? ` · ${client}` : ''}
+            {task.start_date ? ` · started ${formatDate(task.start_date)}` : ''}
             {task.due_date ? ` · due ${formatDate(task.due_date)}` : ' · legacy (no due date)'}
           </DialogDescription>
         </DialogHeader>

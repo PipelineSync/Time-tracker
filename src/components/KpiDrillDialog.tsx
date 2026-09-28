@@ -179,6 +179,7 @@ export function KpiDrillDialog({
                         <p className="truncate text-sm font-medium">{t.title}</p>
                         <p className="mt-0.5 text-xs text-muted-foreground">
                           {workerName(t.worker_id)}
+                          {t.start_date ? ` · started ${formatDate(t.start_date)}` : ''}
                           {t.due_date ? ` · due ${formatDate(t.due_date)}` : ' · legacy (no due date)'}
                           {t.estimated_hours != null ? ` · ~${t.estimated_hours}h est.` : ''}
                           {' · '}

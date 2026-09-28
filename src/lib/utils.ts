@@ -42,6 +42,12 @@ export function formatDate(d: string | Date): string {
   })
 }
 
+/** Today as a local 'YYYY-MM-DD' (no timezone shift — built from the parts). */
+export function todayISO(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
 export function formatTime(d: string | Date): string {
   return new Date(d).toLocaleTimeString(undefined, {
     hour: 'numeric',

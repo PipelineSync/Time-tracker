@@ -225,6 +225,10 @@ create table if not exists public.tasks (
   -- Rework → Completed ('approval' was renamed to 'for_review').
   status          text not null default 'todo' check (status in ('todo','in_progress','waiting','for_review','rework','completed')),
   priority        text not null default 'medium' check (priority in ('low','medium','high')),
+  -- The date the task starts / started ('YYYY-MM-DD'). Every task has one:
+  -- required by the app on new tasks; older rows are back-filled below from
+  -- created_at so nothing is blank.
+  start_date      date,
   due_date        date,
   -- Original due date before an edit (first change wins) — due-date audits.
   original_due_date date,
@@ -265,6 +269,7 @@ create table if not exists public.tasks (
 
 -- Databases created before Team KPI existed: same columns + checks, plus the
 -- 'approval' → 'for_review' rename (RUN-THIS-team-kpi.sql does this too).
+alter table public.tasks add column if not exists start_date date;
 alter table public.tasks add column if not exists original_due_date date;
 alter table public.tasks add column if not exists estimated_hours numeric;
 alter table public.tasks add column if not exists assigned_at timestamptz;
@@ -280,6 +285,9 @@ alter table public.tasks add column if not exists rework_required boolean;
 alter table public.tasks add column if not exists rework_type text;
 alter table public.tasks add column if not exists rework_notes text;
 alter table public.tasks add column if not exists stage_history jsonb not null default '[]'::jsonb;
+-- Every task has a date started: back-fill rows written before the column
+-- existed from their creation date (UTC day, matching what the app reads).
+update public.tasks set start_date = (created_at at time zone 'utc')::date where start_date is null;
 alter table public.tasks drop constraint if exists tasks_status_check;
 update public.tasks set status = 'for_review' where status = 'approval';
 alter table public.tasks add constraint tasks_status_check

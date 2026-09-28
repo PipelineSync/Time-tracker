@@ -110,6 +110,24 @@ async function main() {
   const movedToTodo = await localBackend.moveTask(comp1.data!.id, 'todo', 0)
   assert(movedToTodo.data!.archived_at === null, 'moving away from completed clears archived_at')
 
+  // 7) EVERY task has a date started (start_date).
+  const today = new Date().toISOString().slice(0, 10)
+  const sd = await localBackend.createTask({ due_date: '2099-12-31', worker_id: john.id, client_id: client.id, title: 'VT-SD default start', status: 'todo' })
+  assert(!sd.error, 'task without an explicit start date created')
+  assert(sd.data!.start_date === today, `start date defaults to today when omitted (got: ${sd.data!.start_date})`)
+
+  const sd2 = await localBackend.createTask({ due_date: '2099-12-31', start_date: '2026-01-15', worker_id: john.id, client_id: client.id, title: 'VT-SD explicit start', status: 'todo' })
+  assert(!sd2.error && sd2.data!.start_date === '2026-01-15', 'an explicit start date is stored as sent')
+
+  const sdEdited = await localBackend.updateTask(sd2.data!.id, { start_date: '2026-02-20' })
+  assert(!sdEdited.error && sdEdited.data!.start_date === '2026-02-20', 'editing the start date works')
+
+  // Legacy rows written before start_date existed read back-filled from
+  // their creation date — both in the storage normalizer and hydrateTask.
+  const { hydrateTask } = await import('../src/lib/taskWorkflow')
+  const legacy = hydrateTask({ id: 'legacy', worker_id: john.id, title: 'legacy', status: 'todo', priority: 'medium', created_at: '2025-03-09T04:05:06.000Z', updated_at: '2025-03-09T04:05:06.000Z' } as Task)
+  assert(legacy.start_date === '2025-03-09', `legacy row back-fills its start date from created_at (got: ${legacy.start_date})`)
+
   console.log(failures ? `\n${failures} check(s) failed.` : '\nAll checks passed.')
   if (failures) process.exitCode = 1
 }
