@@ -17,6 +17,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { ClientSelect } from '@/components/ClientSelect'
 import { ManageClientsDialog } from '@/components/ManageClientsDialog'
+import { todayISO } from '@/lib/utils'
 import { toast } from 'sonner'
 
 interface FormState {
@@ -38,12 +39,6 @@ interface FormState {
   waitingReason: WaitingReason | ''
 }
 
-/** Today as a local 'YYYY-MM-DD' — the default start date for a new task. */
-const todayLocal = (): string => {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
-
 const emptyForm = (status: TaskStatus): FormState => ({
   workerId: '',
   clientId: '',
@@ -51,7 +46,7 @@ const emptyForm = (status: TaskStatus): FormState => ({
   description: '',
   status,
   priority: 'medium',
-  startDate: todayLocal(),
+  startDate: todayISO(),
   dueDate: '',
   estimatedHours: '',
   repeats: 'none',
@@ -105,7 +100,7 @@ export function TaskFormDialog({
         description: task.description || '',
         status: task.status,
         priority: task.priority,
-        startDate: task.start_date ? task.start_date.slice(0, 10) : todayLocal(),
+        startDate: task.start_date ? task.start_date.slice(0, 10) : todayISO(),
         dueDate: task.due_date ? task.due_date.slice(0, 10) : '',
         estimatedHours: task.estimated_hours != null ? String(task.estimated_hours) : '',
         repeats: task.repeats,

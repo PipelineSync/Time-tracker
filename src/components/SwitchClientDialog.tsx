@@ -9,19 +9,23 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Textarea } from '@/components/ui/textarea'
 import { Repeat } from 'lucide-react'
 import { useStore } from '@/lib/store'
 import { ClientSelect } from '@/components/ClientSelect'
+import { todayISO } from '@/lib/utils'
 
 /**
  * Shown while a worker is on the clock so they can move to a different client
  * without clocking out. The time already worked is split into a finished entry
  * for the previous client (so each client is billed correctly), while the
  * on-screen shift clock keeps counting — it does not reset. Only ACTIVE
- * clients (other than the one they're currently on) are offered, and an
- * optional note rides along on the new segment.
+ * clients (other than the one they're currently on) are offered.
+ *
+ * Like clocking in, the worker names the task they are moving on to: a task
+ * is created on their board for the newly chosen client, landing straight in
+ * In Progress with the picked due date. The shift itself keeps no note.
  */
 export function SwitchClientDialog({
   open,
@@ -35,11 +39,12 @@ export function SwitchClientDialog({
   onOpenChange: (v: boolean) => void
   workerName?: string | null
   currentClientId?: string | null
-  onConfirm: (input: { clientId: string; notes: string }) => Promise<void> | void
+  onConfirm: (input: { clientId: string; taskTitle: string; taskDueDate: string }) => Promise<void> | void
 }) {
   const { clients, activeClients } = useStore()
   const [clientId, setClientId] = useState('')
-  const [notes, setNotes] = useState('')
+  const [taskTitle, setTaskTitle] = useState('')
+  const [taskDueDate, setTaskDueDate] = useState('')
   const [loading, setLoading] = useState(false)
 
   const currentClientName = clients.find((c) => c.id === currentClientId)?.name || null
@@ -47,20 +52,23 @@ export function SwitchClientDialog({
   const others = activeClients.filter((c) => c.id !== currentClientId)
   const noOtherClients = others.length === 0
 
-  // Every time the dialog opens, start with the first sensible target and a
-  // clean note.
+  // Every time the dialog opens, start with the first sensible target, a
+  // clean task title and today as the due date.
   useEffect(() => {
     if (!open) return
     setClientId(others.length === 1 ? others[0].id : '')
-    setNotes('')
+    setTaskTitle('')
+    setTaskDueDate(todayISO())
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, currentClientId, activeClients])
 
+  const ready = Boolean(clientId && taskTitle.trim() && taskDueDate)
+
   async function handleConfirm() {
-    if (!clientId) return
+    if (!clientId || !taskTitle.trim() || !taskDueDate) return
     setLoading(true)
     try {
-      await onConfirm({ clientId, notes: notes.trim() })
+      await onConfirm({ clientId, taskTitle: taskTitle.trim(), taskDueDate })
     } finally {
       setLoading(false)
     }
@@ -99,14 +107,33 @@ export function SwitchClientDialog({
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="switch-note">Note (optional)</Label>
-            <Textarea
-              id="switch-note"
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder="What are you moving on to? Anything your admin should know…"
-              maxLength={2000}
-              rows={3}
+            <Label htmlFor="switch-task">
+              What are you moving on to? <span className="text-destructive" aria-hidden>*</span>
+            </Label>
+            <Input
+              id="switch-task"
+              value={taskTitle}
+              onChange={(e) => setTaskTitle(e.target.value)}
+              placeholder="e.g. Monthly report for the new client"
+              maxLength={200}
+              disabled={noOtherClients}
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Becomes a task on your board for the chosen client — In Progress from today.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="switch-due">
+              Due date <span className="text-destructive" aria-hidden>*</span>
+            </Label>
+            <Input
+              id="switch-due"
+              type="date"
+              value={taskDueDate}
+              onChange={(e) => setTaskDueDate(e.target.value)}
+              required
+              disabled={noOtherClients}
             />
           </div>
         </div>
@@ -117,8 +144,8 @@ export function SwitchClientDialog({
           </Button>
           <Button
             onClick={handleConfirm}
-            disabled={loading || !clientId}
-            title={!clientId ? 'Choose a client first' : undefined}
+            disabled={loading || !ready}
+            title={!ready ? 'Choose a client, name the task and pick a due date' : undefined}
             className={`gap-2 ${BRAND_ACTION_BUTTON}`}
           >
             <Repeat className="h-4 w-4" />

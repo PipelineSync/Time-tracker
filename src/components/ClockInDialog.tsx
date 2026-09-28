@@ -9,22 +9,26 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Textarea } from '@/components/ui/textarea'
 import { LogIn } from 'lucide-react'
 import { useStore } from '@/lib/store'
 import { ClientSelect } from '@/components/ClientSelect'
+import { todayISO } from '@/lib/utils'
 
 /**
  * Shown when a worker clocks in: they must pick the client they are working
- * for (every hour is attributed to a client) and may leave a note. The client
- * rides along on the running timer and lands on the time entry at clock-out.
+ * for (every hour is attributed to a client) and name the task they are
+ * starting on. The shift itself keeps no note any more — instead a task is
+ * created on the worker's board for the chosen client, landing straight in
+ * In Progress with the picked due date.
  *
  * The client is pre-filled with the one from their last shift (or the only
- * active one), so the common case is still just "Clock In". A worker cannot
- * clock in without a client — the button stays disabled until one is chosen,
- * and if the workspace has no active clients at all the dialog tells the
- * worker to ask the admin to add one before they can clock in.
+ * active one), and the due date with today, so the common case is still just
+ * "Clock In". A worker cannot clock in without a client — the button stays
+ * disabled until everything required is filled in, and if the workspace has
+ * no active clients at all the dialog tells the worker to ask the admin to
+ * add one before they can clock in.
  */
 export function ClockInDialog({
   open,
@@ -38,31 +42,36 @@ export function ClockInDialog({
   onOpenChange: (v: boolean) => void
   workerName?: string | null
   defaultClientId?: string | null
-  onConfirm: (input: { clientId: string; notes: string }) => Promise<void> | void
+  onConfirm: (input: { clientId: string; taskTitle: string; taskDueDate: string }) => Promise<void> | void
 }) {
   const { activeClients } = useStore()
   const [clientId, setClientId] = useState('')
-  const [notes, setNotes] = useState('')
+  const [taskTitle, setTaskTitle] = useState('')
+  const [taskDueDate, setTaskDueDate] = useState('')
   const [loading, setLoading] = useState(false)
 
   const noClients = activeClients.length === 0
 
   // Every time the dialog opens, start from the worker's usual client (their
-  // last shift, or the only one there is) and a clean note.
+  // last shift, or the only one there is), a clean task title and today as
+  // the due date.
   useEffect(() => {
     if (!open) return
     const stillActive = activeClients.some((c) => c.id === defaultClientId)
     setClientId(stillActive ? defaultClientId! : activeClients.length === 1 ? activeClients[0].id : '')
-    setNotes('')
+    setTaskTitle('')
+    setTaskDueDate(todayISO())
   }, [open, defaultClientId, activeClients])
 
+  const ready = Boolean(clientId && taskTitle.trim() && taskDueDate)
+
   async function handleConfirm() {
-    // Hard guard — the button is already disabled without a client, but never
-    // let a clock-in proceed without one.
-    if (!clientId) return
+    // Hard guard — the button is already disabled without the required
+    // fields, but never let a clock-in proceed without them.
+    if (!clientId || !taskTitle.trim() || !taskDueDate) return
     setLoading(true)
     try {
-      await onConfirm({ clientId, notes: notes.trim() })
+      await onConfirm({ clientId, taskTitle: taskTitle.trim(), taskDueDate })
     } finally {
       setLoading(false)
     }
@@ -76,7 +85,7 @@ export function ClockInDialog({
           <DialogDescription>
             {noClients
               ? 'A client is required to clock in. Ask your admin to add one, then try again.'
-              : "Pick who you're working for. The client and note are saved on this shift and appear on the time entry when you clock out."}
+              : "Pick who you're working for and what you're starting on — a task is created on your board for this shift, already In Progress."}
           </DialogDescription>
         </DialogHeader>
 
@@ -100,14 +109,33 @@ export function ClockInDialog({
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="clock-in-note">Note (optional)</Label>
-            <Textarea
-              id="clock-in-note"
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder="What are you starting on? Anything your admin should know…"
-              maxLength={2000}
-              rows={3}
+            <Label htmlFor="clock-in-task">
+              What are you starting on? <span className="text-destructive" aria-hidden>*</span>
+            </Label>
+            <Input
+              id="clock-in-task"
+              value={taskTitle}
+              onChange={(e) => setTaskTitle(e.target.value)}
+              placeholder="e.g. Replace the pump seal"
+              maxLength={200}
+              disabled={noClients}
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Becomes a task on your board for the chosen client — In Progress from today.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="clock-in-due">
+              Due date <span className="text-destructive" aria-hidden>*</span>
+            </Label>
+            <Input
+              id="clock-in-due"
+              type="date"
+              value={taskDueDate}
+              onChange={(e) => setTaskDueDate(e.target.value)}
+              required
+              disabled={noClients}
             />
           </div>
         </div>
@@ -118,8 +146,8 @@ export function ClockInDialog({
           </Button>
           <Button
             onClick={handleConfirm}
-            disabled={loading || !clientId}
-            title={!clientId ? 'Choose a client first' : undefined}
+            disabled={loading || !ready}
+            title={!ready ? 'Choose a client, name the task and pick a due date' : undefined}
             className={`gap-2 ${BRAND_ACTION_BUTTON}`}
           >
             <LogIn className="h-4 w-4" />

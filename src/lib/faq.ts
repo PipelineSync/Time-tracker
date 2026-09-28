@@ -39,7 +39,7 @@ export const FAQ_SECTIONS: Record<FaqAudience, FaqSection[]> = {
           id: 'worker-clock-in',
           question: 'How do I clock in?',
           answer:
-            'Tap Clock In and pick the client you are working for — every shift has to be booked to one, which is what makes the per-client reporting work. Your shift keeps running if you refresh the page or close the app, so you never lose time by leaving it open.',
+            'Tap Clock In, pick the client you are working for, and name the task you are starting on with its due date — every shift is booked to one client, and the task lands straight on your board In Progress, which is what makes the per-client reporting work. Your shift keeps running if you refresh the page or close the app, so you never lose time by leaving it open.',
         },
         {
           id: 'worker-breaks',
@@ -57,7 +57,7 @@ export const FAQ_SECTIONS: Record<FaqAudience, FaqSection[]> = {
           id: 'worker-switch-client',
           question: 'Can I switch client in the middle of a shift?',
           answer:
-            'Yes. Tap Switch client while the clock is running. The shift keeps its original start time and only the time after the switch is booked to the new client.',
+            'Yes. Tap Switch client while the clock is running. The shift keeps its original start time and only the time after the switch is booked to the new client — and just like clocking in, you name the task you are moving on to, so a card for the new client lands on your board In Progress.',
         },
         {
           id: 'worker-cannot-clock-in',
