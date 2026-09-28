@@ -39,7 +39,7 @@ export const FAQ_SECTIONS: Record<FaqAudience, FaqSection[]> = {
           id: 'worker-clock-in',
           question: 'How do I clock in?',
           answer:
-            'Tap Clock In, pick the client you are working for, and name the task you are starting on (details optional) with its due date — every shift is booked to one client, and the task lands straight on your board In Progress, which is what makes the per-client reporting work. Not starting anything specific? Skip — set up later clocks you in without a task, and you can add one from the board any time. Your shift keeps running if you refresh the page or close the app, so you never lose time by leaving it open.',
+            'Tap Clock In, pick the client you are working for, and name the task you are starting on with its due date (details optional) — it lands on your board In Progress. Nothing specific yet? Skip — set up later clocks you in without a task; add one from the board any time. Your shift keeps running if you refresh the page or close the app, so you never lose time by leaving it open.',
         },
         {
           id: 'worker-breaks',
