@@ -12,6 +12,27 @@
  *
  * Run: npx tsx scripts/verify-team-kpi-local.ts
  */
+
+// Run on a fixed calendar day, not on whatever day CI happens to fire. The
+// workload maths divide the open estimated hours by the workdays LEFT in the
+// month, and the demo seed sizes its cards against the clock too — so in the
+// last days of any month the fixtures overshot their target bands and the
+// workload assertions failed for reasons unrelated to the code under test.
+// "Now" is moved to midday on Wed 10 Jun 2026 and then keeps ticking (a
+// shifted clock, not a frozen one, so timestamps and ids stay distinct).
+// Everything below loads after this, so the app code sees the same clock.
+{
+  const RealDate = Date
+  const shiftMs = new RealDate(2026, 5, 10, 12, 0, 0).getTime() - RealDate.now()
+  const shiftedNow = () => RealDate.now() + shiftMs
+  globalThis.Date = new Proxy(RealDate, {
+    construct: (target, args, newTarget) =>
+      args.length === 0 ? new target(shiftedNow()) : Reflect.construct(target, args, newTarget),
+    apply: () => new RealDate(shiftedNow()).toString(),
+    get: (target, prop, receiver) => (prop === 'now' ? shiftedNow : Reflect.get(target, prop, receiver)),
+  })
+}
+
 // Minimal browser stub so storage.ts works in Node.
 const mem = new Map<string, string>()
 ;(globalThis as any).window = {
