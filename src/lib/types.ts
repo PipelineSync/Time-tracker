@@ -58,8 +58,35 @@ export interface Worker {
    * vocabulary as client colour tags. Default null.
    */
   color: string | null
+  /**
+   * The worker's KPI role — picks which Monthly Goal formula Team KPI uses for
+   * them (see KPI_ROLES below and kpi.ts). null = no role: the Monthly Goal
+   * stays "tasks completed ÷ the Tasks plan the Owner typed in". Set by whoever
+   * manages workers; a worker can never change their own.
+   */
+  kpi_role: KpiRole | null
   created_at: string
   updated_at: string
+}
+
+/**
+ * The Monthly Goal formulas. Each role splits a person's month into two kinds
+ * of work, scores each on its own completion %, and blends them — the weights
+ * live next to the maths in kpi.ts (KPI_ROLE_GOALS).
+ */
+export type KpiRole = 'project' | 'maintenance_outreach' | 'social_media'
+
+export const KPI_ROLES: KpiRole[] = ['project', 'maintenance_outreach', 'social_media']
+
+export const KpiRoleNames: Record<KpiRole, string> = {
+  project: 'Client & project work',
+  maintenance_outreach: 'Maintenance & outreach',
+  social_media: 'Social media & content',
+}
+
+/** A valid KPI role, or null for anything else (unset, junk, a role that no longer exists). */
+export function normalizeKpiRole(value: unknown): KpiRole | null {
+  return typeof value === 'string' && (KPI_ROLES as string[]).includes(value) ? (value as KpiRole) : null
 }
 
 /** Mon–Fri — the default workweek when nobody has set one yet. */
@@ -784,6 +811,7 @@ export function normalizeWorker(w: Partial<Worker> & Record<string, any>): Worke
     workdays: normalizeWorkdays(w.workdays),
     weekly_capacity_hours: normalizeWeeklyCapacity(w.weekly_capacity_hours),
     color: normalizeWorkerColor(w.color),
+    kpi_role: normalizeKpiRole(w.kpi_role),
     created_at: w.created_at ? String(w.created_at) : new Date().toISOString(),
     updated_at: w.updated_at ? String(w.updated_at) : new Date().toISOString(),
   }

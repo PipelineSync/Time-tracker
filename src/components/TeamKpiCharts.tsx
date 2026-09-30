@@ -65,7 +65,7 @@ export function KpiScoreByEmployeeChart({ employees }: { employees: EmployeeKpi[
           </ResponsiveContainer>
         )}
         <p className="mt-1 text-center text-[11px] text-muted-foreground">
-          30% on-time · 30% QA · 25% goal · 15% rework — green ≥90, amber 75–89, red &lt;75
+          40% on-time · 40% QA · 20% monthly goal — green ≥90, amber 75–89, red &lt;75
         </p>
       </CardContent>
     </Card>

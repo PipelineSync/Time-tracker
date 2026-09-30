@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import type { BonusDecision, KpiAuditEvent, MonthlyGoal, Worker } from '@/lib/types'
+import { KpiRoleNames, normalizeKpiRole } from '@/lib/types'
 import { useStore } from '@/lib/store'
-import { KPI_TARGETS, fmtPct, effectiveBonus } from '@/lib/kpi'
+import { KPI_TARGETS, describeKpiRole, fmtPct, effectiveBonus } from '@/lib/kpi'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -15,7 +16,9 @@ import { toast } from 'sonner'
 /**
  * Monthly targets (management input §14): the only numbers people type are
  * the planned task count and role-specific on-time/QA targets. KPI scores are
- * computed — never entered.
+ * computed — never entered. The planned task count only applies to people
+ * without a KPI role: for everyone else the Monthly Goal is worked out from the
+ * tasks due that month, so there is nothing to type.
  */
 export function MonthlyTargetsCard({
   employees,
@@ -85,6 +88,7 @@ export function MonthlyTargetsCard({
         {employees.map((w) => {
           const d = drafts[w.id]
           if (!d) return null
+          const role = normalizeKpiRole(w.kpi_role)
           return (
             <div key={w.id} className="grid grid-cols-1 items-end gap-2 rounded-xl border p-3 sm:grid-cols-[1fr,110px,110px,110px,auto]">
               <div className="flex min-w-0 items-center gap-2">
@@ -99,10 +103,11 @@ export function MonthlyTargetsCard({
                 <Input
                   type="number"
                   min="0"
-                  value={d.target}
-                  disabled={!editable}
+                  value={role ? '' : d.target}
+                  disabled={!editable || role !== null}
                   onChange={(e) => setDrafts((p) => ({ ...p, [w.id]: { ...d, target: e.target.value } }))}
-                  placeholder="—"
+                  placeholder={role ? 'Auto' : '—'}
+                  title={role ? `${KpiRoleNames[role]}: worked out from the tasks due this month — ${describeKpiRole(role)}` : undefined}
                   className="h-8"
                 />
               </div>
@@ -141,8 +146,10 @@ export function MonthlyTargetsCard({
           )
         })}
         <p className="text-[11px] text-muted-foreground">
-          Defaults: on-time {KPI_TARGETS.onTime}% · QA {KPI_TARGETS.qa}% · rework ≤{KPI_TARGETS.rework}% · goal
-          achievement {KPI_TARGETS.goal}%+ of the plan. Mary’s role uses a 95% on-time target.
+          Defaults: on-time {KPI_TARGETS.onTime}% · QA {KPI_TARGETS.qa}% · monthly goal {KPI_TARGETS.goal}%+ ·
+          rework ≤{KPI_TARGETS.rework}% (flagged, not scored). Tasks plan only applies to people without a
+          KPI role (Workers → edit); with a role the goal is worked out from the tasks due this month, so
+          it shows “Auto”. Mary’s role uses a 95% on-time target.
         </p>
       </CardContent>
     </Card>

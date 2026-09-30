@@ -54,6 +54,17 @@ function cleanColor(value: unknown): string | null {
   return null
 }
 
+/**
+ * KPI roles (which Monthly Goal formula Team KPI uses). Kept in step with
+ * KPI_ROLES in src/lib/types.ts (duplicated so the function bundle stays
+ * independent of the app source). Anything else is dropped, never stored.
+ */
+const KPI_ROLES = ['project', 'maintenance_outreach', 'social_media']
+
+function cleanKpiRole(value: unknown): string | null {
+  return typeof value === 'string' && KPI_ROLES.includes(value) ? value : null
+}
+
 export default async function handler(request: Request) {
   if (request.method !== 'POST') return json(405, { error: 'Method not allowed.' })
   // The admin, or a worker they granted "Add, edit and remove workers".
@@ -64,7 +75,7 @@ export default async function handler(request: Request) {
   try {
     const body = await request.json() as {
       name?: string; email?: string; hourly_rate?: number; status?: 'active' | 'inactive';
-      position?: string | null; color?: unknown;
+      position?: string | null; color?: unknown; kpi_role?: unknown;
       workdays?: unknown; weekly_capacity_hours?: unknown;
       permissions?: unknown; accountEmail?: string; accountPassword?: string
     }
@@ -76,6 +87,7 @@ export default async function handler(request: Request) {
     const permissions = cleanPermissions(body.permissions)
     const position = (body.position || '').trim() || null
     const color = cleanColor(body.color)
+    const kpiRole = cleanKpiRole(body.kpi_role)
     // Schedule (Team KPI workload): day indexes 0–6 (Sun–Sat) and a positive
     // weekly capacity, defaulting to the standard Mon–Fri / 40h week.
     const days = Array.isArray(body.workdays)
@@ -103,12 +115,29 @@ export default async function handler(request: Request) {
 
     const authUserId = authData.user.id
     const row: Record<string, any> = { user_id: userId, name, email, hourly_rate: hourlyRate, status, position, color }
+    // Only written when a role was chosen, so a worker with none can still be
+    // added on a database that has not run supabase/RUN-THIS-kpi-role.sql.
+    if (kpiRole) row.kpi_role = kpiRole
     let { data: worker, error: workerError } = await sb
       .from('workers')
       .insert({ ...row, permissions, ...schedule })
       .select()
       .single()
     let warning: string | undefined
+    if (workerError && kpiRole && /kpi_role/i.test(workerError.message || '')) {
+      // Database without supabase/RUN-THIS-kpi-role.sql: create the worker
+      // without a role (their Monthly Goal uses the Tasks plan until it is set).
+      delete row.kpi_role
+      ;({ data: worker, error: workerError } = await sb
+        .from('workers')
+        .insert({ ...row, permissions, ...schedule })
+        .select()
+        .single())
+      if (!workerError) {
+        warning =
+          'KPI role was not saved: run supabase/RUN-THIS-kpi-role.sql in the Supabase SQL editor to add it.'
+      }
+    }
     if (workerError && /color/i.test(workerError.message || '')) {
       // Database without supabase/RUN-THIS-worker-color.sql: create worker without color
       delete row.color

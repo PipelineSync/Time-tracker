@@ -38,6 +38,7 @@ import type {
   MonthlyGoal,
   BonusDecision,
   KpiAuditEvent,
+  KpiRole,
 } from './types'
 import {
   CLIENT_PRIORITY_LANES,
@@ -52,6 +53,7 @@ import {
   ALL_ENTRIES_VIEW_PERMISSIONS,
   normalizePermissions,
   normalizeWorkerColor,
+  normalizeKpiRole,
   isValidClientColor,
   normalizeTaskStage,
   normalizeWeeklyCapacity,
@@ -205,6 +207,22 @@ function normalizePaymentMethods(methods: unknown): PaymentMethod[] {
   return methods.filter((m): m is PaymentMethod => m === 'cash' || m === 'qr')
 }
 
+/**
+ * Demo workspaces saved before KPI roles existed have no `kpi_role` on their
+ * workers at all. So the sample team still shows the role-based Monthly Goal
+ * without resetting the demo data, those rows (and only those — a role that was
+ * ever set or cleared is stored explicitly and left alone) pick up the role the
+ * sample seed gives them. Demo mode only: real workspaces get their roles from
+ * the Owner, in Workers → edit.
+ */
+const LEGACY_DEMO_KPI_ROLES: Record<string, KpiRole> = {
+  'jasper@example.com': 'project',
+  'matthew@example.com': 'project',
+  'jea@example.com': 'maintenance_outreach',
+  'april@example.com': 'maintenance_outreach',
+  'mary@example.com': 'social_media',
+}
+
 /** Normalize a worker row loaded from storage (or the demo seed) to the current shape. */
 export function normalizeWorker(w: Worker): Worker {
   const payment_methods = normalizePaymentMethods(w.payment_methods)
@@ -217,6 +235,11 @@ export function normalizeWorker(w: Worker): Worker {
     workdays: normalizeWorkdays(w.workdays),
     weekly_capacity_hours: normalizeWeeklyCapacity(w.weekly_capacity_hours),
     color: normalizeWorkerColor(w.color),
+    // Rows saved before KPI roles existed have none — the old Tasks-plan goal
+    // (except the demo team, see LEGACY_DEMO_KPI_ROLES).
+    kpi_role: Object.prototype.hasOwnProperty.call(w, 'kpi_role')
+      ? normalizeKpiRole(w.kpi_role)
+      : (LEGACY_DEMO_KPI_ROLES[(w.email ?? '').toLowerCase()] ?? null),
     // A QR image only makes sense while the worker accepts QR payments.
     qr_code_url: payment_methods.includes('qr') ? (w.qr_code_url ?? null) : null,
   }
@@ -1146,6 +1169,7 @@ export const localBackend: DataBackend = {
       workdays: normalizeWorkdays(input.workdays),
       weekly_capacity_hours: normalizeWeeklyCapacity(input.weekly_capacity_hours),
       color: normalizeWorkerColor(input.color),
+      kpi_role: normalizeKpiRole(input.kpi_role),
       created_at: now,
       updated_at: now,
     }
@@ -1182,6 +1206,7 @@ export const localBackend: DataBackend = {
     if (patch.workdays !== undefined) merged.workdays = normalizeWorkdays(patch.workdays)
     if (patch.weekly_capacity_hours !== undefined) merged.weekly_capacity_hours = normalizeWeeklyCapacity(patch.weekly_capacity_hours)
     if (patch.color !== undefined) merged.color = normalizeWorkerColor(patch.color)
+    if (patch.kpi_role !== undefined) merged.kpi_role = normalizeKpiRole(patch.kpi_role)
     c.data.workers[idx] = merged
     // If admin set a new password, update the linked account.
     const newPassword = (patch as { newPassword?: string }).newPassword

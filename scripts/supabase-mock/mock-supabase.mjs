@@ -35,6 +35,9 @@ export const state = {
   // setting this to the error message to surface.
   workersPermissionsColumnMissing: false,
   workersColorColumnMissing: false,
+  // Simulates a database that has not run supabase/RUN-THIS-kpi-role.sql: a
+  // workers select/update that names `kpi_role` fails the way PostgREST does.
+  workersKpiRoleColumnMissing: false,
   // Simulates a database that has not run supabase/RUN-THIS-task-qa-required.sql:
   // a tasks insert/update that names `qa_required` fails the way PostgREST does
   // (PGRST204, "Could not find the 'qa_required' column of 'tasks'…").
@@ -60,6 +63,7 @@ export function resetState() {
   state.lastWorkersUpdatePayload = null
   state.workersPermissionsColumnMissing = false
   state.workersColorColumnMissing = false
+  state.workersKpiRoleColumnMissing = false
   state.tasksQaColumnMissing = false
 }
 
@@ -146,6 +150,19 @@ function from(table) {
           maybeSingle: async () => ({ data: null, error: { code: 'PGRST204', message: "Could not find the 'color' column of 'workers' in the schema cache" } }),
           single: async () => ({ data: null, error: { code: 'PGRST204', message: "Could not find the 'color' column of 'workers' in the schema cache" } }),
           then: (resolve) => resolve({ data: null, error: { code: 'PGRST204', message: "Could not find the 'color' column of 'workers' in the schema cache" } }),
+        }
+        return errApi
+      }
+      if (table === 'workers' && state.workersKpiRoleColumnMissing && typeof columns === 'string' && columns.includes('kpi_role')) {
+        const err = { code: 'PGRST204', message: "Could not find the 'kpi_role' column of 'workers' in the schema cache" }
+        const errApi = {
+          ...baseApi,
+          eq: () => errApi,
+          order: () => errApi,
+          limit: () => errApi,
+          maybeSingle: async () => ({ data: null, error: err }),
+          single: async () => ({ data: null, error: err }),
+          then: (resolve) => resolve({ data: null, error: err }),
         }
         return errApi
       }
@@ -262,6 +279,9 @@ function from(table) {
               single: async () => {
                 if (table === 'workers' && state.workersColorColumnMissing && payload && 'color' in payload) {
                   return { data: null, error: { code: 'PGRST204', message: "Could not find the 'color' column of 'workers' in the schema cache" } }
+                }
+                if (table === 'workers' && state.workersKpiRoleColumnMissing && payload && 'kpi_role' in payload) {
+                  return { data: null, error: { code: 'PGRST204', message: "Could not find the 'kpi_role' column of 'workers' in the schema cache" } }
                 }
                 const violation = table === 'clients' ? clientColorViolation(payload) : null
                 if (violation) return { data: null, error: violation }

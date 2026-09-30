@@ -21,6 +21,9 @@ create table if not exists public.workers (
   weekly_capacity_hours numeric not null default 40,
   -- Optional colour tag (8 built-in tags or #hex) mirroring clients.color
   color       text,
+  -- Team KPI: which Monthly Goal formula applies to this person (null = none,
+  -- i.e. tasks completed ÷ the Tasks plan). See supabase/RUN-THIS-kpi-role.sql.
+  kpi_role    text,
   created_at  timestamptz not null default now(),
   updated_at  timestamptz not null default now(),
   constraint workers_schedule_valid check (
@@ -54,6 +57,16 @@ alter table public.workers add constraint workers_color_check check (
   or color in ('blue','aqua','violet','emerald','amber','orange','rose','slate')
   or color ~* '^#[0-9a-fA-F]{6}$'
   or color ~* '^#[0-9a-fA-F]{3}$'
+);
+
+-- Databases created before the KPI role column existed (safe re-run). The KPI
+-- role picks the Monthly Goal formula: project, maintenance_outreach or
+-- social_media (empty = the Tasks-plan goal).
+alter table public.workers add column if not exists kpi_role text;
+alter table public.workers drop constraint if exists workers_kpi_role_check;
+alter table public.workers add constraint workers_kpi_role_check check (
+  kpi_role is null
+  or kpi_role in ('project', 'maintenance_outreach', 'social_media')
 );
 
 -- ---------- time_entries ----------

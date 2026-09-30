@@ -161,6 +161,12 @@ export const FAQ_SECTIONS: Record<FaqAudience, FaqSection[]> = {
             'Yes (the default) means the worker can’t move that task to Completed: it goes to For Review, and only you — or a worker ticked for Team KPI under Workers → edit → Access — can complete it. No lets the worker finish it themselves. Only you and Team KPI holders see the tick; older tasks are No.',
         },
         {
+          id: 'admin-team-kpi',
+          question: 'How is the Team KPI score worked out?',
+          answer:
+            'Score = 40% On-Time + 40% QA + 20% Monthly Goal, all taken from the task board. The goal follows the KPI role you pick under Workers → edit — e.g. 70% maintenance + 30% outreach for Jea and Joy, each side scored as completed ÷ due that month. Rework is flagged, not scored.',
+        },
+        {
           id: 'admin-it-support',
           question: 'Who sees the IT Support tickets?',
           answer:

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Permission, Worker } from '@/lib/types'
-import { normalizePermissions, normalizeWorkdays, normalizeWeeklyCapacity, WEEKDAY_NAMES } from '@/lib/types'
+import type { KpiRole, Permission, Worker } from '@/lib/types'
+import { KPI_ROLES, KpiRoleNames, normalizeKpiRole, normalizePermissions, normalizeWorkdays, normalizeWeeklyCapacity, WEEKDAY_NAMES } from '@/lib/types'
+import { describeKpiRole } from '@/lib/kpi'
 import { useStore } from '@/lib/store'
 import {
   Dialog,
@@ -14,6 +15,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { WorkerPermissionsField } from '@/components/WorkerPermissionsField'
 import { WorkerColorPicker } from '@/components/WorkerBadge'
 import { IT_SUPPORT_PERMISSION } from '@/lib/tickets'
@@ -43,6 +45,8 @@ export function WorkerFormDialog({
   const [workdays, setWorkdays] = useState<number[]>([1, 2, 3, 4, 5])
   const [capacity, setCapacity] = useState('40')
   const [color, setColor] = useState<string | null>(null)
+  // Which Monthly Goal formula Team KPI uses for this person (null = none).
+  const [kpiRole, setKpiRole] = useState<KpiRole | null>(null)
   const [saving, setSaving] = useState(false)
   const seededKeyRef = useRef<string | null>(null)
 
@@ -72,6 +76,7 @@ export function WorkerFormDialog({
     setWorkdays(normalizeWorkdays(worker?.workdays))
     setCapacity(String(normalizeWeeklyCapacity(worker?.weekly_capacity_hours)))
     setColor(worker?.color ?? null)
+    setKpiRole(normalizeKpiRole(worker?.kpi_role))
   }, [open, worker, settings])
 
   async function handleSubmit(e: React.FormEvent) {
@@ -105,6 +110,10 @@ export function WorkerFormDialog({
         workdays: normalizeWorkdays(workdays),
         weekly_capacity_hours: normalizeWeeklyCapacity(capacity),
         color,
+        // Only sent when it changed, so editing someone on a database that has
+        // not run supabase/RUN-THIS-kpi-role.sql does not raise a migration
+        // warning for a field nobody touched.
+        ...(kpiRole !== normalizeKpiRole(worker.kpi_role) ? { kpi_role: kpiRole } : {}),
         newPassword: newPassword || undefined,
       })
       setSaving(false)
@@ -126,6 +135,7 @@ export function WorkerFormDialog({
       workdays: normalizeWorkdays(workdays),
       weekly_capacity_hours: normalizeWeeklyCapacity(capacity),
       color,
+      kpi_role: kpiRole,
       accountEmail: accountEmail.trim(),
       accountPassword: password,
     })
@@ -190,6 +200,28 @@ export function WorkerFormDialog({
               <p className="text-xs text-muted-foreground">
                 Their position or role, shown on their profile. Time entries are tagged with the
                 client they pick when clocking in.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="w-kpi-role">KPI role</Label>
+              <Select
+                value={kpiRole ?? 'none'}
+                onValueChange={(v) => setKpiRole(normalizeKpiRole(v))}
+                disabled={saving}
+              >
+                <SelectTrigger id="w-kpi-role"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">No KPI role</SelectItem>
+                  {KPI_ROLES.map((r) => (
+                    <SelectItem key={r} value={r}>{KpiRoleNames[r]}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs leading-snug text-muted-foreground">
+                {kpiRole
+                  ? `Team KPI's Monthly Goal for this person: ${describeKpiRole(kpiRole)}. Recurring tasks and tasks for the Internal client count as the recurring side; every other task counts as planned work.`
+                  : 'Picks how this person’s Monthly Goal is worked out on Team KPI. With no role it is tasks completed ÷ the Tasks plan you set each month.'}
               </p>
             </div>
 

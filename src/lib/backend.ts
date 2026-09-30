@@ -39,6 +39,7 @@ import type {
   BonusDecision,
   BonusEligibility,
   KpiAuditEvent,
+  KpiRole,
 } from './types'
 
 export interface BackendResult<T> {
@@ -57,6 +58,8 @@ export interface CreateWorkerInput {
   status?: Worker['status']
   position?: string
   color?: string | null
+  /** Which Monthly Goal formula Team KPI uses for them (default: none). */
+  kpi_role?: KpiRole | null
   /** Admin capabilities to grant this worker (default: none). */
   permissions?: Permission[]
   /** Workdays (0=Sun…6=Sat); defaults to Mon–Fri. */

@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
-import type { Task } from '@/lib/types'
-import { normalizeTaskStage, TaskStatusNames, QA_SCORE_NAMES, ReworkTypeNames, TaskPriorityNames, isEmployeeCausedRework } from '@/lib/types'
+import type { KpiRole, Task, Worker } from '@/lib/types'
+import { normalizeKpiRole, normalizeTaskStage, TaskStatusNames, QA_SCORE_NAMES, ReworkTypeNames, TaskPriorityNames, isEmployeeCausedRework } from '@/lib/types'
 import {
   Dialog,
   DialogContent,
@@ -11,9 +11,14 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { formatDate, cn } from '@/lib/utils'
 import {
+  computeRoleGoal,
+  goalBucketOf,
+  isDoneByMonthEnd,
   isOpen,
   isOverdueTask,
   isLegacyNoDue,
+  isPlannedInMonth,
+  KPI_ROLE_GOALS,
   monthLabel,
   openEstimatedHours,
   wasOnTime,
@@ -72,8 +77,26 @@ const STATUS_TINTS: Record<string, string> = {
   completed: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300',
 }
 
+/** What a drill needs beyond the tasks: who has a KPI role (their goal is made of different tasks). */
+export interface DrillContext {
+  workers?: Worker[]
+  internalClientIds?: ReadonlySet<string>
+}
+
+function roleOf(ctx: DrillContext | undefined, workerId: string | null): KpiRole | null {
+  if (!workerId) return null
+  const worker = ctx?.workers?.find((w) => w.id === workerId)
+  return worker ? normalizeKpiRole(worker.kpi_role) : null
+}
+
 /** Pick the tasks a drill target refers to, from the already-scoped list. */
-export function drillTasks(tasks: Task[], target: KpiDrillTarget, month: string, _workerName: (id: string) => string): Task[] {
+export function drillTasks(
+  tasks: Task[],
+  target: KpiDrillTarget,
+  month: string,
+  _workerName: (id: string) => string,
+  ctx?: DrillContext,
+): Task[] {
   let rows = tasks.filter((t) => !t.archived_at)
   if (target.workerId) rows = rows.filter((t) => t.worker_id === target.workerId)
   const completedInMonth = (t: Task) => normalizeTaskStage(t.status) === 'completed' && (t.completed_at ?? '').slice(0, 7) === month
@@ -97,9 +120,26 @@ export function drillTasks(tasks: Task[], target: KpiDrillTarget, month: string,
     case 'workload':
       return rows.filter((t) => isOpen(t) && openEstimatedHours(t) > 0)
     case 'goal':
+      // A KPI role's goal is made of the tasks DUE in the month (archived ones
+      // included — see goalSourceTasks); without a role it is the completions
+      // counted against the typed Tasks plan.
+      if (roleOf(ctx, target.workerId)) {
+        return tasks.filter((t) => t.worker_id === target.workerId && isPlannedInMonth(t, month))
+      }
       return rows.filter(completedInMonth)
-    case 'score':
-      return rows.filter((t) => isOpen(t) || completedInMonth(t))
+    case 'score': {
+      // Everything behind the three components: open work, this month's
+      // completions and — for people with a KPI role — what was due this month.
+      const fromGoal = tasks.filter(
+        (t) =>
+          (!target.workerId || t.worker_id === target.workerId) &&
+          roleOf(ctx, t.worker_id) !== null &&
+          isPlannedInMonth(t, month),
+      )
+      const seen = new Map<string, Task>()
+      for (const t of [...rows.filter((r) => isOpen(r) || completedInMonth(r)), ...fromGoal]) seen.set(t.id, t)
+      return [...seen.values()]
+    }
     case 'clientHours':
       // All hours in scope are open + completed (no month slice); an explicit
       // clientId (possibly null = the unassigned bucket) narrows by client.
@@ -122,6 +162,8 @@ export function KpiDrillDialog({
   month,
   workerName,
   clientName,
+  workers,
+  internalClientIds,
 }: {
   open: boolean
   onOpenChange: (v: boolean) => void
@@ -132,15 +174,30 @@ export function KpiDrillDialog({
   workerName: (id: string) => string
   /** Used by the 'clientHours' drill to name the client in the subtitle. */
   clientName?: (id: string | null) => string
+  /** Who has a KPI role — their Monthly Goal drill lists the tasks due that month. */
+  workers?: Worker[]
+  /** The Internal client(s): their tasks sit on the recurring side of a role goal. */
+  internalClientIds?: ReadonlySet<string>
 }) {
   const rows = useMemo(() => {
     if (!target) return []
-    return drillTasks(tasks, target, month, workerName).sort((a, b) => {
+    return drillTasks(tasks, target, month, workerName, { workers, internalClientIds }).sort((a, b) => {
       const ad = a.due_date ?? '9999-12-31'
       const bd = b.due_date ?? '9999-12-31'
       return ad.localeCompare(bd)
     })
-  }, [tasks, target, month, workerName])
+  }, [tasks, target, month, workerName, workers, internalClientIds])
+
+  // The Monthly Goal drill of someone with a KPI role shows the arithmetic
+  // (two buckets, their completion %, their weights) above the source tasks.
+  const goalRole = target?.kind === 'goal' ? roleOf({ workers }, target.workerId) : null
+  const goalMath = useMemo(
+    () =>
+      goalRole && target?.workerId
+        ? computeRoleGoal(goalRole, target.workerId, tasks, month, internalClientIds ?? new Set<string>())
+        : null,
+    [goalRole, target?.workerId, tasks, month, internalClientIds],
+  )
 
   if (!target) return null
   const title = TITLES[target.kind]
@@ -150,6 +207,7 @@ export function KpiDrillDialog({
     target.kind === 'clientHours' && target.clientId !== undefined ?
       ` — ${clientName ? clientName(target.clientId) : 'selected client'}` :
     target.kind === 'clientHours' ? ' — all clients in scope' :
+    goalRole && target.workerId ? ` — ${workerName(target.workerId)} · tasks due in ${monthLabel(month)}` :
     target.workerId ? ` — ${workerName(target.workerId)}` : ` — ${monthLabel(month)}`
 
   return (
@@ -164,6 +222,36 @@ export function KpiDrillDialog({
         </DialogHeader>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+          {goalMath && (
+            <div className="mb-3 rounded-xl border bg-muted/30 p-3 text-xs">
+              <p className="mb-1.5 text-sm font-semibold">
+                Monthly Goal = {goalMath.pct === null ? '—' : `${goalMath.pct}%`}
+              </p>
+              <ul className="space-y-1">
+                {goalMath.buckets.map((b) => (
+                  <li key={b.key} className="flex flex-wrap justify-between gap-x-3">
+                    <span>
+                      {b.label}{' '}
+                      <span className="text-muted-foreground">
+                        × {Math.round(b.effectiveWeight * 100)}%
+                        {b.effectiveWeight > 0 && Math.abs(b.effectiveWeight - b.weight) > 1e-9
+                          ? ` (set at ${Math.round(b.weight * 100)}%)`
+                          : ''}
+                      </span>
+                    </span>
+                    <span className="tabular-nums">
+                      {b.pct === null ? 'none due' : `${b.done} of ${b.planned} done · ${b.pct}%`}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-2 text-muted-foreground">
+                Counts the tasks due in {monthLabel(month)}; done = completed by month end. Recurring
+                tasks and Internal-client work are the recurring side, everything else is planned work.
+                A side with nothing due is left out and the other carries the whole goal.
+              </p>
+            </div>
+          )}
           {rows.length === 0 ? (
             <p className="py-10 text-center text-sm text-muted-foreground">No tasks in this slice.</p>
           ) : (
@@ -205,6 +293,16 @@ export function KpiDrillDialog({
                         )}
                         {legacy && (
                           <Badge variant="muted" className="text-[10px]">Legacy</Badge>
+                        )}
+                        {goalRole && (
+                          <>
+                            <Badge variant="outline" className="text-[10px]">
+                              {KPI_ROLE_GOALS[goalRole].find((b) => b.key === goalBucketOf(t, internalClientIds ?? new Set<string>()))?.label}
+                            </Badge>
+                            <Badge variant={isDoneByMonthEnd(t, month) ? 'success' : 'muted'} className="text-[10px]">
+                              {isDoneByMonthEnd(t, month) ? 'Done' : 'Not done'}
+                            </Badge>
+                          </>
                         )}
                         {t.qa_score != null && (
                           <Badge variant="secondary" className="text-[10px]" title={QA_SCORE_NAMES[t.qa_score]}>

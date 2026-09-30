@@ -43,6 +43,7 @@ import {
   ALL_ENTRIES_VIEW_PERMISSIONS,
   normalizePermissions,
   normalizeWorkerColor,
+  normalizeKpiRole,
   isValidClientColor,
   normalizeTaskStage,
   normalizeWorkdays,
@@ -114,6 +115,12 @@ const QA_COLUMN_MISSING_WARNING =
 
 const WORKER_COLOR_MIGRATION_MESSAGE =
   'Worker colour tag was not saved: run supabase/RUN-THIS-worker-color.sql in the Supabase SQL editor to add the color column. Everything else was saved.'
+
+const KPI_ROLE_MIGRATION_MESSAGE =
+  'KPI role was not saved: run supabase/RUN-THIS-kpi-role.sql in the Supabase SQL editor to add it. Everything else was saved.'
+
+const KPI_ROLE_COLUMN_MISSING_WARNING =
+  '[workers] the workers.kpi_role column is missing — run supabase/RUN-THIS-kpi-role.sql to give workers a KPI role (their Monthly Goal formula).'
 
 const PERMISSIONS_MIGRATION_MESSAGE =
   'Worker access levels need the database migration supabase/worker-permissions.sql to be applied. Everything else was saved.'
@@ -251,6 +258,9 @@ function normalizeWorker(w: Worker): Worker {
     workdays: normalizeWorkdays(w.workdays),
     weekly_capacity_hours: normalizeWeeklyCapacity(w.weekly_capacity_hours),
     color: normalizeWorkerColor(w.color),
+    // Databases without supabase/RUN-THIS-kpi-role.sql have no role column:
+    // everyone reads as "no role" and keeps the Tasks-plan Monthly Goal.
+    kpi_role: normalizeKpiRole(w.kpi_role),
   }
 }
 const normalizeWorkers = (rows: Worker[] | null): Worker[] => (rows ?? []).map(normalizeWorker)
@@ -1123,7 +1133,7 @@ export const supabaseBackend: DataBackend = {
     // behaviour) made a freshly saved tick box look like it had snapped
     // back to off — the database was correct, the round-trip was just
     // dropping the column.
-    const columns = 'id, name, email, hourly_rate, status, position, payment_methods, qr_code_url, permissions, workdays, weekly_capacity_hours, color, created_at, updated_at'
+    const columns = 'id, name, email, hourly_rate, status, position, payment_methods, qr_code_url, permissions, workdays, weekly_capacity_hours, color, kpi_role, created_at, updated_at'
     // QR codes are not profile avatars: admins need the worker's QR image in
     // the Mark paid dialog so they can scan it. Keep it in the worker list;
     // avatar images are still loaded separately to avoid making this query
@@ -1139,6 +1149,19 @@ export const supabaseBackend: DataBackend = {
     }
     let cols = columns
     let { data, error } = (await fetchRows(cols)) as { data: Worker[] | null; error: { code?: string; message?: string } | null }
+    // A database without supabase/RUN-THIS-kpi-role.sql: read everything else
+    // and let normalizeWorker() leave the role empty. Checked before AND after
+    // the ladder below, because the database names only one missing column at
+    // a time and this one can be reported first or last.
+    const dropKpiRoleIfMissing = async () => {
+      if (!error || !cols.includes('kpi_role, ') || !isMissingColumn(error as { code?: string; message?: string }, 'kpi_role')) return
+      console.warn(KPI_ROLE_COLUMN_MISSING_WARNING)
+      cols = cols.replace('kpi_role, ', '')
+      const retry = (await fetchRows(cols)) as { data: Worker[] | null; error: { code?: string; message?: string } | null }
+      data = retry.data
+      error = retry.error
+    }
+    await dropKpiRoleIfMissing()
     if (error && isMissingColumn(error as { code?: string; message?: string }, 'color')) {
       console.warn('[workers] the workers.color column is missing — run supabase/RUN-THIS-worker-color.sql to enable worker colour tags.')
       cols = cols.replace('color, ', '')
@@ -1166,6 +1189,7 @@ export const supabaseBackend: DataBackend = {
       data = retry.data
       error = retry.error
     }
+    await dropKpiRoleIfMissing()
     if (!error) return ok(stripImages((data as Worker[]) ?? []))
     // A database from before the position/payment-methods columns existed:
     // fall back to the original column set instead of breaking the worker list.
@@ -1223,6 +1247,7 @@ export const supabaseBackend: DataBackend = {
           workdays: normalizeWorkdays(input.workdays),
           weekly_capacity_hours: normalizeWeeklyCapacity(input.weekly_capacity_hours),
           color: normalizeWorkerColor(input.color),
+          kpi_role: normalizeKpiRole(input.kpi_role),
           accountEmail,
           accountPassword: input.accountPassword,
         }),
@@ -1245,6 +1270,13 @@ export const supabaseBackend: DataBackend = {
     const { newPassword, ...rest } = patch as { newPassword?: string } & Partial<Worker>
     if (rest.permissions) rest.permissions = normalizePermissions(rest.permissions)
     if (rest.color !== undefined) rest.color = normalizeWorkerColor(rest.color)
+    // The KPI role is written in its own statement after the main save (below):
+    // a database without supabase/RUN-THIS-kpi-role.sql then never disturbs the
+    // rest of the edit, whatever other migrations it is also missing.
+    const kpiRolePatch = rest.kpi_role !== undefined ? normalizeKpiRole(rest.kpi_role) : undefined
+    delete rest.kpi_role
+    // Nothing else to save: keep the main update a valid, non-empty statement.
+    if (kpiRolePatch !== undefined && Object.keys(rest).length === 0) rest.updated_at = new Date().toISOString()
     // Old databases reject unknown permission keys one migration at a time.
     // Each step below saves everything the database accepts so far, drops the
     // keys it cannot accept yet (accumulating in `dropped` so several stale
@@ -1305,6 +1337,16 @@ export const supabaseBackend: DataBackend = {
     }
     const { data, error } = upd
     if (error) return fail(error.message)
+    // The KPI role, on its own. A database without the column keeps everything
+    // just saved and gets a message naming the file to run.
+    let saved = data as Worker
+    let kpiRoleWarning: string | null = null
+    if (kpiRolePatch !== undefined) {
+      const roleRes = await client().from('workers').update({ kpi_role: kpiRolePatch }).eq('id', id).select().single()
+      if (!roleRes.error) saved = roleRes.data as Worker
+      else if (isMissingColumn(roleRes.error, 'kpi_role')) kpiRoleWarning = KPI_ROLE_MIGRATION_MESSAGE
+      else return fail(roleRes.error.message)
+    }
     if (newPassword) {
       if (newPassword.length < 6) return fail('New password must be at least 6 characters.')
       const auth = await client().auth.getSession()
@@ -1325,7 +1367,9 @@ export const supabaseBackend: DataBackend = {
         return fail(mapErr(e))
       }
     }
-    return ok(data as Worker)
+    // Everything else is saved; say why the KPI role was not.
+    if (kpiRoleWarning) return fail(kpiRoleWarning)
+    return ok(saved)
   },
 
   async getWorkerLogin(id) {

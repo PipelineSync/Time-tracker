@@ -134,9 +134,12 @@ async function main() {
   assert(empKpi.onTimePct !== null, `Jasper's on-time % computes (${empKpi.onTimePct})`)
 
   const weights = kpi.KPI_WEIGHTS
-  const weightSum = weights.onTime + weights.qa + weights.goal + weights.rework
-  assert(Math.abs(weightSum - 1) < 1e-9, 'the KPI weights sum to 100% (30/30/25/15)')
-  assert(weights.onTime === 0.3 && weights.qa === 0.3 && weights.goal === 0.25 && weights.rework === 0.15, 'the weights match the spec')
+  const weightSum = weights.onTime + weights.qa + weights.goal
+  assert(Math.abs(weightSum - 1) < 1e-9, 'the KPI weights sum to 100% (40/40/20)')
+  assert(
+    weights.onTime === 0.4 && weights.qa === 0.4 && weights.goal === 0.2 && !('rework' in weights),
+    'the weights match the spec: 40% on-time + 40% QA + 20% monthly goal, no rework share',
+  )
 
   // ---- 9. schedule-aware workload lands on the seeded targets ----
   const band = (label: string, worker: typeof jasper, target: number) => {
@@ -260,7 +263,16 @@ async function main() {
     }),
   )
   const scoreAfterGrant = kpi.computeTeamKpi(rowsAfterGrant).score
-  assert(scoreAfterGrant !== null && scoreAfterGrant !== baseTeamScore, `team score recomputes without him (${scoreAfterGrant} vs ${baseTeamScore})`)
+  // The team score is the (rounded) mean of the members' own scores, so check
+  // exactly that over the members who are left. Comparing it with the old
+  // figure is not a safe test: dropping one person can move the mean by less
+  // than a point, and both round to the same whole number.
+  const remainingScores = rowsAfterGrant.filter((r) => r.score !== null).map((r) => r.score as number)
+  const expectedAfterGrant = Math.round(remainingScores.reduce((s, v) => s + v, 0) / remainingScores.length)
+  assert(
+    rowsAfterGrant.length === baseEmpRows.length - 1 && scoreAfterGrant === expectedAfterGrant,
+    `team score recomputes without him (${scoreAfterGrant} from ${rowsAfterGrant.length} of ${baseEmpRows.length} members; was ${baseTeamScore})`,
+  )
 
   // employee filter omits him
   const filterOptions = workersAfterGrant.filter((w) => w.status === 'active' && kpi.isKpiSubject(w))
