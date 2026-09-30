@@ -694,9 +694,9 @@ export function buildDemoSeed() {
     avatar_url: null,
   }
 
-  // Finance: a couple of subscriptions, a paid + an unpaid payroll run per
-  // active worker, and one-off bills — enough that the Finance page and the
-  // reports finance card show overdue / upcoming / paid states at once.
+  // Finance: subscriptions, a paid + an unpaid payroll run per active worker,
+  // bills and categorized expenses — enough to preview due dates, category
+  // totals, client/project tags and the reports finance card.
   const lastMonth = monthOffset(-1)
   const thisMonth = monthOffset(0)
   const financeItems: FinanceItem[] = [
@@ -771,6 +771,46 @@ export function buildDemoSeed() {
       status: 'paid', paid_at: daysAgo(41).toISOString(), note: 'Renewed for 12 months',
       max_occurrences: null, billed_count: 0,
       created_at: daysAgo(45).toISOString(), updated_at: daysAgo(41).toISOString(),
+    },
+    {
+      id: 'f-seed-11', kind: 'expense', name: 'Studio lighting kit', worker_id: null,
+      amount: 248.5, cycle: null, period_month: null, due_date: dateOffset(-2),
+      status: 'paid', paid_at: daysAgo(2).toISOString(), note: 'Equipment for the design team',
+      expense_category: 'Equipment', client_id: 'c-seed-1', project_name: null,
+      max_occurrences: null, billed_count: 0,
+      created_at: daysAgo(2).toISOString(), updated_at: daysAgo(2).toISOString(),
+    },
+    {
+      id: 'f-seed-12', kind: 'expense', name: 'Landing page stock photos', worker_id: null,
+      amount: 64, cycle: null, period_month: null, due_date: dateOffset(-4),
+      status: 'paid', paid_at: daysAgo(4).toISOString(), note: null,
+      expense_category: 'Software', client_id: null, project_name: 'Landing page refresh',
+      max_occurrences: null, billed_count: 0,
+      created_at: daysAgo(4).toISOString(), updated_at: daysAgo(4).toISOString(),
+    },
+    {
+      id: 'f-seed-13', kind: 'expense', name: 'Client kickoff lunch', worker_id: null,
+      amount: 52.35, cycle: null, period_month: null, due_date: dateOffset(-8),
+      status: 'paid', paid_at: daysAgo(8).toISOString(), note: 'Project kickoff with the Acme team',
+      expense_category: 'Meals & entertainment', client_id: 'c-seed-1', project_name: null,
+      max_occurrences: null, billed_count: 0,
+      created_at: daysAgo(8).toISOString(), updated_at: daysAgo(8).toISOString(),
+    },
+    {
+      id: 'f-seed-14', kind: 'expense', name: 'Domain and DNS renewal', worker_id: null,
+      amount: 32, cycle: null, period_month: null, due_date: dateOffset(-34),
+      status: 'paid', paid_at: daysAgo(34).toISOString(), note: 'Annual project domain',
+      expense_category: 'Software', client_id: null, project_name: 'Northwind storefront',
+      max_occurrences: null, billed_count: 0,
+      created_at: daysAgo(34).toISOString(), updated_at: daysAgo(34).toISOString(),
+    },
+    {
+      id: 'f-seed-15', kind: 'expense', name: 'Courier supplies', worker_id: null,
+      amount: 18.75, cycle: null, period_month: null, due_date: dateOffset(-52),
+      status: 'paid', paid_at: daysAgo(52).toISOString(), note: null,
+      expense_category: 'Office supplies', client_id: null, project_name: null,
+      max_occurrences: null, billed_count: 0,
+      created_at: daysAgo(52).toISOString(), updated_at: daysAgo(52).toISOString(),
     },
   ]
 

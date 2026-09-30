@@ -40,7 +40,7 @@ function iso(d: Date): string {
 async function main() {
   const { localBackend } = await import('../src/lib/localDb')
   const { PERMISSIONS, PERMISSION_PRESETS, normalizePermissions } = await import('../src/lib/types')
-  const { advanceCycle, currentMonthKey, summarizeFinance, subscriptionsPerMonth } = await import('../src/lib/finance')
+  const { advanceCycle, buildDueRows, currentMonthKey, financeByMonth, summarizeFinance, subscriptionsPerMonth } = await import('../src/lib/finance')
 
   // ---- 1. permission vocabulary -------------------------------------------
   assert(PERMISSIONS.includes('finance.view') && PERMISSIONS.includes('finance.manage'), 'finance permissions exist')
@@ -65,8 +65,8 @@ async function main() {
   const items = (await localBackend.listFinanceItems()).data || []
   assert(items.length > 0, 'the demo seed ships a finance ledger')
   assert(
-    items.some((f) => f.kind === 'subscription') && items.some((f) => f.kind === 'payroll') && items.some((f) => f.kind === 'bill'),
-    'the seed covers all three kinds: subscriptions, payroll and bills'
+    items.some((f) => f.kind === 'subscription') && items.some((f) => f.kind === 'payroll') && items.some((f) => f.kind === 'bill') && items.some((f) => f.kind === 'expense'),
+    'the seed covers subscriptions, payroll, bills and one-time expenses'
   )
   assert(items.every((f) => /^\d{4}-\d{2}-\d{2}$/.test(f.due_date)), 'every finance line carries a due date')
   const workers = (await localBackend.listWorkers()).data || []
@@ -85,6 +85,35 @@ async function main() {
   assert(!!noName.error, 'a subscription without a name is refused')
   const noDue = await localBackend.createFinanceItem({ kind: 'bill', name: 'Mystery', amount: 10, due_date: '' })
   assert(!!noDue.error, 'a bill without a due date is refused')
+
+  const expense = (await localBackend.createFinanceItem({
+    kind: 'expense', name: 'Project photo license', amount: 42.5, due_date: due,
+    expense_category: 'Software', project_name: 'Website refresh',
+  })).data!
+  assert(expense?.kind === 'expense' && expense.status === 'paid', 'one-time expenses are recorded as completed transactions')
+  assert(expense?.expense_category === 'Software' && expense.project_name === 'Website refresh', 'an expense stores its category and project tag')
+  assert(!buildDueRows([expense]).some((row) => row.item.id === expense.id), 'a recorded expense never appears on the upcoming due-date agenda')
+  const expenseReport = financeByMonth([expense], [due.slice(0, 7)])[0]
+  assert(expenseReport.expenses === 42.5 && expenseReport.bills === 0, 'reports keep one-time expenses separate from due-date bills')
+  const expenseClient = (await localBackend.createClient({ name: 'Expense-only client' })).data!
+  const clientExpense = (await localBackend.createFinanceItem({
+    kind: 'expense', name: 'Client research', amount: 25, due_date: due,
+    expense_category: 'Professional services', client_id: expenseClient.id,
+  })).data!
+  const deleteExpenseClient = await localBackend.deleteClient(expenseClient.id)
+  const retainedClientExpense = ((await localBackend.listFinanceItems()).data || []).find((f) => f.id === clientExpense.id)
+  assert(!deleteExpenseClient.error && retainedClientExpense?.client_id === null, 'deleting a client clears its expense tag but preserves the expense')
+  await localBackend.deleteFinanceItem(clientExpense.id)
+  const noExpenseCategory = await localBackend.createFinanceItem({ kind: 'expense', name: 'Uncategorized', amount: 10, due_date: due })
+  assert(!!noExpenseCategory.error, 'an expense needs a category')
+  const conflictingExpenseTags = await localBackend.createFinanceItem({
+    kind: 'expense', name: 'Mixed tag', amount: 10, due_date: due,
+    expense_category: 'Travel', client_id: 'c-seed-1', project_name: 'Website refresh',
+  })
+  assert(!!conflictingExpenseTags.error, 'an expense cannot be tagged to a client and project at once')
+  const expenseUnpaid = (await localBackend.updateFinanceItem(expense.id, { status: 'unpaid' })).data!
+  assert(expenseUnpaid.status === 'paid', 'expense records stay paid when a status patch is requested')
+  await localBackend.deleteFinanceItem(expense.id)
 
   const billed = (await localBackend.updateFinanceItem(sub.id, { due_date: advanceCycle(due, 'monthly') })).data!
   assert(billed.due_date.startsWith(due.slice(0, 7)) === false, 'advancing a monthly subscription moves it to the next month')

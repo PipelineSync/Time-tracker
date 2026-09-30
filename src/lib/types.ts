@@ -387,7 +387,7 @@ export const PERMISSION_GROUPS: PermissionGroup[] = [
       { key: 'finance.view', label: 'View the finance section', hint: "The business's subscriptions, worker payroll and due dates — plus the finance part of Reports. Off by default: Finance is admin-only until this is ticked." },
       { key: 'finance.subscription', label: 'View subscriptions', hint: 'Worker can view subscriptions but not manage them.' },
       { key: 'finance.payroll', label: 'View payroll', hint: 'Worker can view payroll runs but not manage them.' },
-      { key: 'finance.manage', label: 'Manage finance', hint: 'Add and edit subscriptions, payroll runs and bills, mark items paid, advance billing dates.', requires: 'finance.view' },
+      { key: 'finance.manage', label: 'Manage finance', hint: 'Add and edit subscriptions, payroll runs, bills and one-time expenses; mark bills and payroll paid, and advance billing dates.', requires: 'finance.view' },
     ],
   },
   {
@@ -1459,15 +1459,34 @@ export interface Payment {
  *  - `payroll` — a worker's pay for one month (amount entered by the admin,
  *    suggested from that worker's tracked earnings for the month).
  *  - `bill` — a one-off amount that is due on a date (rent, tax, insurance…).
+ *  - `expense` — a completed, one-time purchase tagged with a category and
+ *    optionally to a client or a named project.
  */
-export type FinanceKind = 'subscription' | 'payroll' | 'bill'
+export type FinanceKind = 'subscription' | 'payroll' | 'bill' | 'expense'
 
-export const FINANCE_KINDS: FinanceKind[] = ['subscription', 'payroll', 'bill']
+export const FINANCE_KINDS: FinanceKind[] = ['subscription', 'payroll', 'bill', 'expense']
+
+/** Starting categories for non-recurring business expenses. */
+export const EXPENSE_CATEGORIES = [
+  'Advertising & marketing',
+  'Contractors',
+  'Equipment',
+  'Meals & entertainment',
+  'Office supplies',
+  'Professional services',
+  'Software',
+  'Travel',
+  'Utilities',
+  'Other',
+] as const
+
+export type ExpenseCategory = (typeof EXPENSE_CATEGORIES)[number]
 
 export const FinanceKindNames: Record<FinanceKind, string> = {
   subscription: 'Subscription',
   payroll: 'Payroll',
   bill: 'Bill',
+  expense: 'Expense',
 }
 
 /** How often a subscription is billed. */
@@ -1479,16 +1498,15 @@ export const BillingCycleNames: Record<BillingCycle, string> = {
 }
 
 /**
- * `active`/`paused` are the subscription states; `unpaid`/`paid` are the
- * states a payroll run or a bill moves through. Kept in one column because all
- * three kinds share the same ledger and due-date list.
+ * `active`/`paused` are subscription states; payroll and due-date bills move
+ * between `unpaid`/`paid`. A recorded expense is always `paid`.
  */
 export type FinanceStatus = 'active' | 'paused' | 'unpaid' | 'paid'
 
 export interface FinanceItem {
   id: string
   kind: FinanceKind
-  /** Label — required for subscriptions and bills; payroll rows use the worker's name. */
+  /** Label — required for subscriptions, bills and expenses; payroll uses the worker's name. */
   name: string | null
   /** The worker being paid (payroll rows only). */
   worker_id: string | null
@@ -1499,16 +1517,23 @@ export interface FinanceItem {
   period_month: string | null
   /**
    * The date this line is due — next billing date (subscription), pay day
-   * (payroll) or the deadline (bill). A plain calendar date ('YYYY-MM-DD'),
-   * like task due dates: no time component, interpreted locally.
+   * (payroll) or the deadline (bill). For an expense, this is the date the
+   * purchase was recorded. A plain calendar date ('YYYY-MM-DD'), like task
+   * due dates: no time component, interpreted locally.
    */
   due_date: string
   status: FinanceStatus
-  /** When a payroll run or bill was marked paid (subscriptions never use it). */
+  /** When a payroll run or bill was marked paid, or an expense was recorded. */
   paid_at: string | null
   /** How a payroll run was paid. */
   payment_method?: PaymentMethod | null
   note: string | null
+  /** Expense only: the category of a one-time purchase. */
+  expense_category?: string | null
+  /** Expense only: optional client tag (mutually exclusive with project_name). */
+  client_id?: string | null
+  /** Expense only: optional free-text project tag (mutually exclusive with client_id). */
+  project_name?: string | null
   /**
    * Subscriptions only: how many times the subscription bills before it
    * pauses by itself — "for a set number of bills". Null means it runs until

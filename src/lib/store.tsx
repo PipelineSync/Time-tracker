@@ -160,8 +160,8 @@ interface StoreValue {
    */
   invoices: Invoice[]
   /**
-   * The Finance ledger (subscriptions, payroll runs, bills), oldest due date
-   * first. Empty for anyone the admin has not granted `finance.view`.
+   * The Finance ledger (subscriptions, payroll runs, bills and expenses),
+   * oldest due date first. Empty for anyone the admin has not granted `finance.view`.
    */
   financeItems: FinanceItem[]
   /**
@@ -1217,6 +1217,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       return false
     }
     await refreshClients()
+    const financeRes = await backend.listFinanceItems()
+    if (financeRes.data) setFinanceItems(financeRes.data)
     return true
   }, [backend, refreshClients])
 

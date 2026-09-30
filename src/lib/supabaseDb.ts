@@ -37,6 +37,7 @@ import {
   DEFAULT_SLACK_SETTINGS,
   DEFAULT_CLIENT_COLOR,
   DEFAULT_NOTE_COLOR,
+  EXPENSE_CATEGORIES,
   NOTE_COLORS,
   PERMISSIONS,
   TEAM_VIEW_PERMISSIONS,
@@ -128,6 +129,9 @@ const PERMISSIONS_MIGRATION_MESSAGE =
 /** Shown when the database's permission allow-list predates supabase/finance.sql. */
 const FINANCE_PERMISSIONS_MIGRATION_MESSAGE =
   'Finance access was not saved: run supabase/finance.sql in the Supabase SQL editor — it widens the allowed permission keys with the finance.* access. Everything else was saved.'
+
+const FINANCE_EXPENSE_MIGRATION_MESSAGE =
+  'One-time expenses need a database update. Run supabase/finance-one-time-expenses.sql in the Supabase SQL editor, then try again.'
 
 /** Shown when the database's permission allow-list predates the priority board. */
 const PRIORITY_BOARD_PERMISSIONS_MIGRATION_MESSAGE =
@@ -787,36 +791,43 @@ function normalizeClientRow(c: Client): Client {
 
 // ---- Finance rows -----------------------------------------------------------
 
-const FINANCE_COLUMNS =
+const FINANCE_BASE_COLUMNS =
   'id, kind, name, worker_id, amount, cycle, period_month, due_date, status, paid_at, note, created_at, updated_at'
-
-// supabase/finance-subscription-occurrences.sql adds the subscription
-// occurrence limit; databases without it answer "column not found", and the
-// finance queries retry with the legacy list so everything else keeps working.
+const FINANCE_EXPENSE_COLUMNS = 'expense_category, client_id, project_name'
+// Keep both optional schema additions tolerant: existing databases can still
+// load the original ledger until their matching SQL migrations are applied.
+const FINANCE_COLUMNS = `${FINANCE_BASE_COLUMNS}, ${FINANCE_EXPENSE_COLUMNS}`
 const FINANCE_OCCURRENCE_COLUMNS = 'max_occurrences, billed_count'
 const FINANCE_COLUMNS_FULL = `${FINANCE_COLUMNS}, ${FINANCE_OCCURRENCE_COLUMNS}`
+const FINANCE_COLUMNS_OCCURRENCES_ONLY = `${FINANCE_BASE_COLUMNS}, ${FINANCE_OCCURRENCE_COLUMNS}`
 
-/** Subscriptions live in active/paused; payroll and bills in unpaid/paid. */
+/** Subscriptions live in active/paused; bills and payroll in unpaid/paid; expenses are paid. */
 function financeStatusFor(kind: FinanceItem['kind'], status: unknown): FinanceItem['status'] {
   if (kind === 'subscription') return status === 'paused' ? 'paused' : 'active'
+  if (kind === 'expense') return 'paid'
   return status === 'paid' ? 'paid' : 'unpaid'
 }
 
 /** Defensive defaults for finance rows loaded from the database. */
 function normalizeFinanceRow(f: FinanceItem): FinanceItem {
-  const kind: FinanceItem['kind'] = f.kind === 'subscription' || f.kind === 'payroll' || f.kind === 'bill' ? f.kind : 'bill'
+  const kind: FinanceItem['kind'] = f.kind === 'subscription' || f.kind === 'payroll' || f.kind === 'bill' || f.kind === 'expense' ? f.kind : 'bill'
+  const amount = Number(f.amount)
+  const status = financeStatusFor(kind, f.status)
   return {
     ...f,
     kind,
     name: typeof f.name === 'string' && f.name.trim() ? f.name.trim() : null,
     worker_id: kind === 'payroll' ? f.worker_id ?? null : null,
-    amount: Number.isFinite(f.amount) ? Math.max(0, f.amount) : 0,
+    amount: Number.isFinite(amount) ? Math.max(0, amount) : 0,
     cycle: kind === 'subscription' ? (f.cycle === 'yearly' ? 'yearly' : 'monthly') : null,
     period_month: kind === 'payroll' && typeof f.period_month === 'string' ? f.period_month : null,
     due_date: typeof f.due_date === 'string' ? f.due_date.slice(0, 10) : new Date().toISOString().slice(0, 10),
-    status: financeStatusFor(kind, f.status),
-    paid_at: financeStatusFor(kind, f.status) === 'paid' ? f.paid_at ?? null : null,
+    status,
+    paid_at: status === 'paid' ? f.paid_at ?? null : null,
     note: typeof f.note === 'string' && f.note.trim() ? f.note : null,
+    expense_category: kind === 'expense' && typeof f.expense_category === 'string' && f.expense_category.trim() ? f.expense_category.trim() : null,
+    client_id: kind === 'expense' && typeof f.client_id === 'string' ? f.client_id : null,
+    project_name: kind === 'expense' && typeof f.project_name === 'string' && f.project_name.trim() ? f.project_name.trim() : null,
     // Rows from a database without the occurrence migration come back with
     // both fields undefined — they read as "runs until switched off".
     max_occurrences:
@@ -851,12 +862,22 @@ function normalizeInvoiceRow(inv: Invoice): Invoice {
 /** Client-side validation mirroring the database constraints, for nice errors. */
 function validateFinanceInput(input: CreateFinanceItemInput): string | null {
   const name = input.name?.trim() || null
-  if (input.kind === 'subscription' || input.kind === 'bill') {
-    if (!name) return input.kind === 'subscription' ? 'Give the subscription a name.' : 'Give the bill a label.'
+  if (input.kind === 'subscription' || input.kind === 'bill' || input.kind === 'expense') {
+    if (!name) {
+      const label = input.kind === 'subscription' ? 'subscription' : input.kind === 'bill' ? 'bill' : 'expense'
+      return `Give the ${label} a label.`
+    }
     if (name.length > 80) return 'Names are limited to 80 characters.'
   }
   if (!Number.isFinite(Number(input.amount)) || Number(input.amount) < 0) return 'Enter an amount of 0 or more.'
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(input.due_date ?? ''))) return 'Pick a due date.'
+  if (input.kind === 'expense') {
+    const category = input.expense_category?.trim() || ''
+    const projectName = input.project_name?.trim() || ''
+    if (!(EXPENSE_CATEGORIES as readonly string[]).includes(category)) return 'Choose an expense category.'
+    if (input.client_id && projectName) return 'Choose either a client or a project tag, not both.'
+    if (projectName.length > 120) return 'Project names are limited to 120 characters.'
+  }
   if (input.kind === 'payroll') {
     if (!input.worker_id) return 'Choose the worker being paid.'
     if (!/^\d{4}-\d{2}$/.test(String(input.period_month ?? ''))) return 'Choose the month this pay covers.'
@@ -869,6 +890,12 @@ function financeWriteError(input: CreateFinanceItemInput, error: { code?: string
   if (isMissingTable(error as { code?: string; message?: string }, 'finance_items')) {
     return 'Finance is not set up on this database yet. Run supabase/finance.sql in the Supabase SQL editor.'
   }
+  if (input.kind === 'expense' && (
+    isMissingColumn(error as { code?: string; message?: string }, 'expense_category') ||
+    isMissingColumn(error as { code?: string; message?: string }, 'client_id') ||
+    isMissingColumn(error as { code?: string; message?: string }, 'project_name') ||
+    /finance_items_kind_check|finance_items_expense_fields/i.test(error.message ?? '')
+  )) return FINANCE_EXPENSE_MIGRATION_MESSAGE
   // One payroll run per worker per month (finance_items_payroll_unique).
   if ((error.code === '23505' || error.code === '23514') && input.kind === 'payroll') {
     return 'That worker already has a payroll line for this month — edit it instead.'
@@ -2246,7 +2273,7 @@ export const supabaseBackend: DataBackend = {
     return ok(null)
   },
 
-  // ---- Finance (subscriptions, payroll, bills) ------------------------------
+  // ---- Finance (subscriptions, payroll, bills and expenses) -----------------
   // supabase/finance.sql owns the boundary: the workspace's rows are readable
   // by the admin and by workers holding finance.view, writable only by the
   // admin or a finance.manage holder. A database without the migration behaves
@@ -2256,18 +2283,23 @@ export const supabaseBackend: DataBackend = {
     const me = await requireUser()
     if (me.error) return fail(me.error)
     if (!canDo(me.data!, 'finance.view')) return ok([] as FinanceItem[])
-    let res = await (client()
-      .from('finance_items')
-      .select(FINANCE_COLUMNS_FULL)
-      .order('due_date', { ascending: true })
-      .order('created_at', { ascending: false }) as PromiseLike<{ data: unknown; error: { code?: string; message?: string } | null }>)
-    if (res.error && isMissingColumn(res.error as { code?: string; message?: string }, 'max_occurrences')) {
-      // Database without supabase/finance-subscription-occurrences.sql.
+    const columnSets = [FINANCE_COLUMNS_FULL, FINANCE_COLUMNS, FINANCE_COLUMNS_OCCURRENCES_ONLY, FINANCE_BASE_COLUMNS]
+    let res: { data: unknown; error: { code?: string; message?: string } | null } = { data: null, error: null }
+    for (const columns of columnSets) {
       res = await (client()
         .from('finance_items')
-        .select(FINANCE_COLUMNS)
+        .select(columns)
         .order('due_date', { ascending: true })
         .order('created_at', { ascending: false }) as PromiseLike<{ data: unknown; error: { code?: string; message?: string } | null }>)
+      if (!res.error || isMissingTable(res.error, 'finance_items')) break
+      const optionalColumnMissing = [
+        'max_occurrences',
+        'billed_count',
+        'expense_category',
+        'client_id',
+        'project_name',
+      ].some((column) => isMissingColumn(res.error, column))
+      if (!optionalColumnMissing) break
     }
     if (res.error) {
       if (isMissingTable(res.error as { code?: string; message?: string }, 'finance_items')) {
@@ -2300,8 +2332,15 @@ export const supabaseBackend: DataBackend = {
       due_date: input.due_date,
       status,
       paid_at: status === 'paid' ? now : null,
-      payment_method: input.kind === 'payroll' && status === 'paid' ? (input.payment_method ?? null) : null,
       note: input.note?.trim() || null,
+    }
+    if (input.kind === 'payroll') {
+      base.payment_method = status === 'paid' ? input.payment_method ?? null : null
+    }
+    if (input.kind === 'expense') {
+      base.expense_category = input.expense_category?.trim() || null
+      base.client_id = input.client_id || null
+      base.project_name = input.project_name?.trim() || null
     }
     // The occurrence limit rides along only when the database has the
     // columns; older databases get the same subscription without it.
@@ -2326,11 +2365,22 @@ export const supabaseBackend: DataBackend = {
     const me = await requireUser()
     if (me.error) return fail(me.error)
     if (!canDo(me.data!, 'finance.manage')) return denied('edit finance lines')
-    // The occurrence columns exist only after the migration; read with the
-    // full list and fall back so older databases still load the row.
-    let current = await (client().from('finance_items').select(FINANCE_COLUMNS_FULL).eq('id', id).maybeSingle() as PromiseLike<{ data: unknown; error: { code?: string; message?: string } | null }>)
-    if (current.error && isMissingColumn(current.error as { code?: string; message?: string }, 'max_occurrences')) {
-      current = await (client().from('finance_items').select(FINANCE_COLUMNS).eq('id', id).maybeSingle() as PromiseLike<{ data: unknown; error: { code?: string; message?: string } | null }>)
+    // Expense tags and subscription occurrence counters are optional schema
+    // additions on existing workspaces. Try the richest row shape first, then
+    // drop unavailable columns so older ledgers remain editable.
+    const columnSets = [FINANCE_COLUMNS_FULL, FINANCE_COLUMNS, FINANCE_COLUMNS_OCCURRENCES_ONLY, FINANCE_BASE_COLUMNS]
+    let current: { data: unknown; error: { code?: string; message?: string } | null } = { data: null, error: null }
+    for (const columns of columnSets) {
+      current = await (client().from('finance_items').select(columns).eq('id', id).maybeSingle() as PromiseLike<{ data: unknown; error: { code?: string; message?: string } | null }>)
+      if (!current.error) break
+      const optionalColumnMissing = [
+        'max_occurrences',
+        'billed_count',
+        'expense_category',
+        'client_id',
+        'project_name',
+      ].some((column) => isMissingColumn(current.error, column))
+      if (!optionalColumnMissing) break
     }
     if (current.error) return fail(current.error.message ?? 'Could not load the finance line.')
     if (!current.data) return fail('Finance line not found.')
@@ -2338,6 +2388,18 @@ export const supabaseBackend: DataBackend = {
     const kind = currentRow.kind
     if (patch.amount !== undefined && (!Number.isFinite(Number(patch.amount)) || Number(patch.amount) < 0)) {
       return fail('Enter an amount of 0 or more.')
+    }
+    if (kind === 'expense') {
+      const category = patch.expense_category !== undefined
+        ? patch.expense_category?.trim() || null
+        : currentRow.expense_category ?? null
+      const clientId = patch.client_id !== undefined ? patch.client_id : currentRow.client_id ?? null
+      const projectName = patch.project_name !== undefined
+        ? patch.project_name?.trim() || null
+        : currentRow.project_name ?? null
+      if (!category || !(EXPENSE_CATEGORIES as readonly string[]).includes(category)) return fail('Choose an expense category.')
+      if (clientId && projectName) return fail('Choose either a client or a project tag, not both.')
+      if (projectName && projectName.length > 120) return fail('Project names are limited to 120 characters.')
     }
     if (patch.due_date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(String(patch.due_date))) {
       return fail('Pick a due date.')
@@ -2358,6 +2420,9 @@ export const supabaseBackend: DataBackend = {
       update.paid_at = update.status === 'paid' ? (currentRow.paid_at ?? new Date().toISOString()) : null
     }
     if (patch.note !== undefined) update.note = patch.note?.trim() || null
+    if (kind === 'expense' && patch.expense_category !== undefined) update.expense_category = patch.expense_category?.trim() || null
+    if (kind === 'expense' && patch.client_id !== undefined) update.client_id = patch.client_id
+    if (kind === 'expense' && patch.project_name !== undefined) update.project_name = patch.project_name?.trim() || null
     if (patch.max_occurrences !== undefined) update.max_occurrences = kind === 'subscription' ? (patch.max_occurrences ?? null) : null
     // Rolling a subscription's due date forward is one more billing. When it
     // reaches the limit the subscription pauses by itself — the last bill on
@@ -2376,6 +2441,11 @@ export const supabaseBackend: DataBackend = {
       void legacy
       res = await (client().from('finance_items').update(legacy).eq('id', id).select().single() as PromiseLike<{ data: unknown; error: { code?: string; message?: string } | null }>)
     }
+    if (res.error && kind === 'expense' && (
+      isMissingColumn(res.error as { code?: string; message?: string }, 'expense_category') ||
+      isMissingColumn(res.error as { code?: string; message?: string }, 'client_id') ||
+      isMissingColumn(res.error as { code?: string; message?: string }, 'project_name')
+    )) return fail(FINANCE_EXPENSE_MIGRATION_MESSAGE)
     if (res.error) return fail(res.error.message ?? 'Could not save the finance line.')
     return ok(normalizeFinanceRow(res.data as FinanceItem))
   },

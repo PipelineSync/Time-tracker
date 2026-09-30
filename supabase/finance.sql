@@ -1,5 +1,5 @@
 -- ============================================================
--- Work Tracker — Finance (subscriptions, worker payroll, due dates)
+-- Work Tracker — Finance (subscriptions, worker payroll, bills and expenses)
 --
 -- Run this in the Supabase SQL editor on an existing database to add the
 -- Finance section. New databases get it from supabase/schema.sql, which
@@ -7,8 +7,8 @@
 --
 -- What it does
 --   1. creates public.finance_items — the business ledger of recurring
---      subscriptions, per-worker monthly payroll runs and one-off bills,
---      each carrying a due date
+--      subscriptions, per-worker monthly payroll runs, one-off bills and
+--      categorized one-time expenses tagged to a client or project
 --   2. opens it up per permission: the admin always sees everything;
 --      a worker sees the ledger only with `finance.view` and may change it
 --      only with `finance.manage` — both off by default (admin-only section)
@@ -26,8 +26,8 @@ create table if not exists public.finance_items (
   -- Workspace owner (the admin). Set automatically by trg_finance_items_user.
   user_id      uuid not null references auth.users (id) on delete cascade,
   -- What the line is. The whole Finance section reads one table.
-  kind         text not null check (kind in ('subscription','payroll','bill')),
-  -- Label for subscriptions and bills; payroll rows are named by their worker.
+  kind         text not null check (kind in ('subscription','payroll','bill','expense')),
+  -- Label for subscriptions, bills and expenses; payroll rows are named by their worker.
   name         text check (name is null or length(btrim(name)) between 1 and 80),
   -- The worker being paid (payroll only). Deleting the worker removes the run.
   worker_id    uuid references public.workers (id) on delete cascade,
@@ -36,14 +36,18 @@ create table if not exists public.finance_items (
   cycle        text check (cycle is null or cycle in ('monthly','yearly')),
   -- The month a payroll run covers, 'YYYY-MM' (payroll only).
   period_month text check (period_month is null or period_month ~ '^[0-9]{4}-[0-9]{2}$'),
-  -- Next bill date / pay day / deadline. A plain calendar date, like tasks.
+  -- Next bill date / pay day / deadline; an expense's transaction date.
   due_date     date not null,
-  -- active/paused are subscription states; unpaid/paid the other two.
+  -- active/paused are subscription states; expenses are always completed/paid.
   status       text not null default 'active'
                check (status in ('active','paused','unpaid','paid')),
   -- When a payroll run or bill was marked paid (subscriptions never use it).
   paid_at      timestamptz,
   note         text,
+  -- Expense-only detail; projects are free text because there is no project master list.
+  expense_category text check (expense_category is null or length(btrim(expense_category)) between 1 and 80),
+  client_id    uuid,
+  project_name text check (project_name is null or length(btrim(project_name)) between 1 and 120),
   created_at   timestamptz not null default now(),
   updated_at   timestamptz not null default now(),
   -- Shape rules per kind, so rows written outside the app cannot go rogue.
@@ -59,16 +63,77 @@ create table if not exists public.finance_items (
   ),
   constraint finance_items_status_per_kind check (
     (kind = 'subscription' and status in ('active','paused'))
-    or (kind <> 'subscription' and status in ('unpaid','paid'))
+    or (kind = 'expense' and status = 'paid')
+    or (kind in ('payroll','bill') and status in ('unpaid','paid'))
+  ),
+  constraint finance_items_expense_fields check (
+    (kind = 'expense'
+      and expense_category is not null
+      and btrim(expense_category) <> ''
+      and (client_id is null or project_name is null))
+    or (kind <> 'expense'
+      and expense_category is null
+      and client_id is null
+      and project_name is null)
   ),
   constraint finance_items_paid_stamp check (
     (status = 'paid' and paid_at is not null) or (status <> 'paid' and paid_at is null)
   )
 );
 
+-- Upgrade an existing Finance ledger in place when this file is re-run.
+-- Expense tags use an optional FK so this migration can still run before
+-- supabase/clients.sql; once clients exists the FK is installed below.
+alter table public.finance_items add column if not exists expense_category text;
+alter table public.finance_items add column if not exists client_id uuid;
+alter table public.finance_items add column if not exists project_name text;
+
+do $$
+begin
+  if to_regclass('public.clients') is not null
+     and not exists (
+       select 1 from pg_constraint
+        where conname = 'finance_items_client_id_fkey'
+          and conrelid = 'public.finance_items'::regclass
+     ) then
+    alter table public.finance_items
+      add constraint finance_items_client_id_fkey
+      foreign key (client_id) references public.clients (id) on delete set null;
+  end if;
+end
+$$;
+
+alter table public.finance_items drop constraint if exists finance_items_kind_check;
+alter table public.finance_items add constraint finance_items_kind_check
+  check (kind in ('subscription','payroll','bill','expense'));
+alter table public.finance_items drop constraint if exists finance_items_status_per_kind;
+alter table public.finance_items add constraint finance_items_status_per_kind check (
+  (kind = 'subscription' and status in ('active','paused'))
+  or (kind = 'expense' and status = 'paid')
+  or (kind in ('payroll','bill') and status in ('unpaid','paid'))
+);
+alter table public.finance_items drop constraint if exists finance_items_expense_fields;
+alter table public.finance_items add constraint finance_items_expense_fields check (
+  (kind = 'expense'
+    and expense_category is not null
+    and btrim(expense_category) <> ''
+    and (client_id is null or project_name is null))
+  or (kind <> 'expense'
+    and expense_category is null
+    and client_id is null
+    and project_name is null)
+);
+alter table public.finance_items drop constraint if exists finance_items_expense_category_length;
+alter table public.finance_items add constraint finance_items_expense_category_length
+  check (expense_category is null or length(btrim(expense_category)) between 1 and 80);
+alter table public.finance_items drop constraint if exists finance_items_project_name_length;
+alter table public.finance_items add constraint finance_items_project_name_length
+  check (project_name is null or length(btrim(project_name)) between 1 and 120);
+
 create index if not exists finance_items_user_idx on public.finance_items (user_id);
 -- The agenda query: one workspace's open lines, oldest due date first.
 create index if not exists finance_items_user_due_idx on public.finance_items (user_id, due_date);
+create index if not exists finance_items_client_idx on public.finance_items (client_id);
 -- One payroll run per worker per month.
 create unique index if not exists finance_items_payroll_unique
   on public.finance_items (user_id, worker_id, period_month)
@@ -207,6 +272,8 @@ begin
   end if;
 end
 $$;
+
+notify pgrst, 'reload schema';
 
 -- ---------- verify ----------
 -- Expect: the finance_items table with RLS on, and its four policies.

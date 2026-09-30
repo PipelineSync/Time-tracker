@@ -4,10 +4,12 @@ import {
   CalendarClock,
   Check,
   CreditCard,
+  Folder,
   HandCoins,
   Pencil,
   Plus,
   Receipt,
+  Tag,
   RefreshCw,
   Trash2,
   Undo2,
@@ -16,6 +18,7 @@ import { useSearchParams } from 'react-router-dom'
 import { useStore } from '@/lib/store'
 import { PageHeader } from '@/components/PageHeader'
 import { PaymentsPanel } from '@/components/PaymentsPanel'
+import { ClientBadge } from '@/components/ClientBadge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -26,7 +29,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { StatCard } from '@/components/StatCard'
-import { SubscriptionFormDialog, PayrollFormDialog, BillFormDialog } from '@/components/FinanceFormDialogs'
+import { SubscriptionFormDialog, PayrollFormDialog, BillFormDialog, ExpenseFormDialog } from '@/components/FinanceFormDialogs'
 import { toast } from 'sonner'
 import type { FinanceItem } from '@/lib/types'
 import { FinanceKindNames } from '@/lib/types'
@@ -42,7 +45,23 @@ import {
   summarizeFinance,
 } from '@/lib/finance'
 
-const kindIcon = { subscription: CreditCard, payroll: HandCoins, bill: Receipt } as const
+const kindIcon = { subscription: CreditCard, payroll: HandCoins, bill: Receipt, expense: Receipt } as const
+
+const expenseAccentColors = [
+  'bg-violet-500',
+  'bg-sky-500',
+  'bg-amber-500',
+  'bg-emerald-500',
+  'bg-rose-500',
+  'bg-cyan-500',
+  'bg-indigo-500',
+  'bg-orange-500',
+]
+
+function expenseAccent(category: string) {
+  const hash = [...category].reduce((value, char) => value + char.charCodeAt(0), 0)
+  return expenseAccentColors[hash % expenseAccentColors.length]
+}
 
 function KindBadge({ kind }: { kind: FinanceItem['kind'] }) {
   const Icon = kindIcon[kind]
@@ -94,8 +113,8 @@ function OccurrencesChip({ item }: { item: FinanceItem }) {
 }
 
 /**
- * The Finance section — subscriptions, worker payroll and bill due dates,
- * plus the former standalone Payments section, now under the Payroll tab.
+ * The Finance section — subscriptions, worker payroll, bill due dates and
+ * tagged one-time expenses, plus the former standalone Payments section under Payroll.
  *
  * Admin-only content unless the admin grants a worker `finance.view` (Workers
  * → Access → Finance); `finance.manage` additionally opens the edit controls.
@@ -106,17 +125,17 @@ function OccurrencesChip({ item }: { item: FinanceItem }) {
  * entry "Payroll" instead of "Finance").
  */
 export function FinancePage() {
-  const { financeItems, workers, entries, settings, can, dataLoading, updateFinanceItem, deleteFinanceItem } = useStore()
+  const { financeItems, workers, clients, entries, settings, can, dataLoading, updateFinanceItem, deleteFinanceItem } = useStore()
   const canManage = can('finance.manage')
   const canFinance = can('finance.view')
   const currency = settings?.currency || 'USD'
 
   const [params, setParams] = useSearchParams()
   const urlTab = params.get('tab')
-  const [tab, setTab] = useState<'due' | 'subscriptions' | 'payroll'>(
-    urlTab === 'payroll' || urlTab === 'subscriptions' || urlTab === 'due' ? urlTab : 'due'
+  const [tab, setTab] = useState<'due' | 'subscriptions' | 'payroll' | 'expenses'>(
+    urlTab === 'payroll' || urlTab === 'subscriptions' || urlTab === 'due' || (urlTab === 'expenses' && canFinance) ? urlTab : 'due'
   )
-  function changeTab(v: 'due' | 'subscriptions' | 'payroll') {
+  function changeTab(v: 'due' | 'subscriptions' | 'payroll' | 'expenses') {
     setTab(v)
     // Keep the URL honest so the Payroll deep link (nav, PWA, /payments
     // redirect) and the visible tab agree after a reload or a share.
@@ -127,12 +146,13 @@ export function FinancePage() {
   // Follow navigations that happen outside the tab strip (nav link, redirect).
   useEffect(() => {
     const t = params.get('tab')
-    if (t === 'due' || t === 'subscriptions' || t === 'payroll') setTab(t)
-  }, [params])
+    if (t === 'due' || t === 'subscriptions' || t === 'payroll' || (t === 'expenses' && canFinance)) setTab(t)
+  }, [params, canFinance])
   const [month, setMonth] = useState(currentMonthKey())
   const [subDialog, setSubDialog] = useState<{ open: boolean; item: FinanceItem | null }>({ open: false, item: null })
   const [payDialog, setPayDialog] = useState<{ open: boolean; item: FinanceItem | null }>({ open: false, item: null })
   const [billDialog, setBillDialog] = useState<{ open: boolean; item: FinanceItem | null }>({ open: false, item: null })
+  const [expenseDialog, setExpenseDialog] = useState<{ open: boolean; item: FinanceItem | null }>({ open: false, item: null })
   const [deleting, setDeleting] = useState<FinanceItem | null>(null)
 
   const workerName = (id: string | null) => (id ? workers.find((w) => w.id === id)?.name || 'Former worker' : '—')
@@ -140,6 +160,31 @@ export function FinancePage() {
   const subscriptions = useMemo(() => financeItems.filter((f) => f.kind === 'subscription'), [financeItems])
   const payroll = useMemo(() => financeItems.filter((f) => f.kind === 'payroll'), [financeItems])
   const bills = useMemo(() => financeItems.filter((f) => f.kind === 'bill'), [financeItems])
+  const expenses = useMemo(() => financeItems.filter((f) => f.kind === 'expense'), [financeItems])
+  const recentExpenses = useMemo(
+    () => [...expenses].sort((a, b) => b.due_date.localeCompare(a.due_date) || b.created_at.localeCompare(a.created_at)),
+    [expenses]
+  )
+  const expenseCategoryRows = useMemo(() => {
+    const totals = new Map<string, { amount: number; count: number }>()
+    for (const expense of expenses) {
+      const category = expense.expense_category || 'Other'
+      const current = totals.get(category) || { amount: 0, count: 0 }
+      current.amount += expense.amount
+      current.count += 1
+      totals.set(category, current)
+    }
+    return [...totals.entries()]
+      .map(([category, total]) => ({ category, ...total }))
+      .sort((a, b) => b.amount - a.amount || a.category.localeCompare(b.category))
+  }, [expenses])
+  const currentFinanceMonth = currentMonthKey()
+  const currentMonthExpenses = useMemo(
+    () => expenses.filter((expense) => expense.due_date.slice(0, 7) === currentFinanceMonth),
+    [expenses, currentFinanceMonth]
+  )
+  const currentMonthExpenseTotal = currentMonthExpenses.reduce((sum, expense) => sum + expense.amount, 0)
+  const allTimeExpenseTotal = expenses.reduce((sum, expense) => sum + expense.amount, 0)
   const dueRows = useMemo(() => buildDueRows(financeItems), [financeItems])
   const summary = useMemo(() => summarizeFinance(financeItems), [financeItems])
 
@@ -221,6 +266,11 @@ export function FinancePage() {
           <Plus className="mr-1 h-4 w-4" /> Add payroll run
         </Button>
       )}
+      {canFinance && tab === 'expenses' && (
+        <Button size="sm" onClick={() => setExpenseDialog({ open: true, item: null })}>
+          <Plus className="mr-1 h-4 w-4" /> Add expense
+        </Button>
+      )}
       {tab === 'due' && (
         <>
           {can('finance.subscription') && (
@@ -256,15 +306,15 @@ export function FinancePage() {
         title="Finance"
         description={
           canManage
-            ? 'Subscriptions, worker payroll, due dates and settlements for the business.'
-            : "Subscriptions, worker payroll, due dates and settlements. You can view the ledger; only the admin can change it."
+            ? 'Subscriptions, worker payroll, upcoming bills and one-time expenses for the business.'
+            : "Subscriptions, worker payroll, upcoming bills and one-time expenses. You can view the ledger; only a finance manager can change it."
         }
       >
         {addButtons}
       </PageHeader>
 
       {/* Summary */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
         <StatCard
           label="Subscriptions / month"
           value={money(summary.subsMonthly, currency)}
@@ -294,9 +344,16 @@ export function FinancePage() {
           loading={loading}
           className={cn(summary.overdueCount > 0 && 'border-destructive/40')}
         />
+        <StatCard
+          label="Expenses this month"
+          value={money(currentMonthExpenseTotal, currency)}
+          sub={`${currentMonthExpenses.length} expense${currentMonthExpenses.length === 1 ? '' : 's'}`}
+          icon={Receipt}
+          loading={loading}
+        />
       </div>
 
-      <Tabs value={tab} onValueChange={(v) => changeTab(v as 'due' | 'subscriptions' | 'payroll')}>
+      <Tabs value={tab} onValueChange={(v) => changeTab(v as 'due' | 'subscriptions' | 'payroll' | 'expenses')}>
         <TabsList>
           <TabsTrigger value="due">Due dates</TabsTrigger>
           {can('finance.subscription') && (
@@ -305,6 +362,7 @@ export function FinancePage() {
           {can('finance.payroll') && (
             <TabsTrigger value="payroll">Payroll</TabsTrigger>
           )}
+          {canFinance && <TabsTrigger value="expenses">One Time Expenses</TabsTrigger>}
         </TabsList>
 
         {/* ---------------- Due dates ---------------- */}
@@ -624,18 +682,148 @@ export function FinancePage() {
             <PaymentsPanel />
           </div>
         </TabsContent>
+        {canFinance && (
+          <TabsContent value="expenses" className="mt-4 space-y-4">
+            {loading ? (
+              <div className="grid gap-4 lg:grid-cols-3">
+                <Skeleton className="h-64" />
+                <Skeleton className="h-64 lg:col-span-2" />
+              </div>
+            ) : (
+              <div className="grid items-start gap-4 lg:grid-cols-3">
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <Tag className="h-4 w-4" /> Expense categories
+                    </CardTitle>
+                    <p className="text-xs text-muted-foreground">All recorded one-time spend</p>
+                  </CardHeader>
+                  <CardContent>
+                    {expenseCategoryRows.length === 0 ? (
+                      <p className="py-5 text-center text-sm text-muted-foreground">Categories will appear here when you log an expense.</p>
+                    ) : (
+                      <div className="space-y-4">
+                        {expenseCategoryRows.map((row) => {
+                          const share = allTimeExpenseTotal > 0 ? Math.round((row.amount / allTimeExpenseTotal) * 100) : 0
+                          const accent = expenseAccent(row.category)
+                          return (
+                            <div key={row.category} className="space-y-1.5">
+                              <div className="flex items-center justify-between gap-3 text-sm">
+                                <div className="flex min-w-0 items-center gap-2">
+                                  <span className={cn('h-2.5 w-2.5 shrink-0 rounded-full', accent)} aria-hidden />
+                                  <span className="truncate font-medium">{row.category}</span>
+                                  <span className="shrink-0 text-xs text-muted-foreground">{row.count}</span>
+                                </div>
+                                <span className="shrink-0 text-right font-semibold">{money(row.amount, currency)}</span>
+                              </div>
+                              <div
+                                className="h-1.5 overflow-hidden rounded-full bg-muted"
+                                role="progressbar"
+                                aria-label={`${row.category}: ${share}% of expenses`}
+                                aria-valuemin={0}
+                                aria-valuemax={100}
+                                aria-valuenow={share}
+                              >
+                                <div className={cn('h-full rounded-full transition-all', accent)} style={{ width: `${share}%` }} />
+                              </div>
+                            </div>
+                          )
+                        })}
+                        <div className="border-t pt-3 text-sm">
+                          <div className="flex items-center justify-between font-semibold">
+                            <span>Total recorded</span>
+                            <span>{money(allTimeExpenseTotal, currency)}</span>
+                          </div>
+                          <p className="mt-1 text-xs text-muted-foreground">{expenses.length} expense{expenses.length === 1 ? '' : 's'}</p>
+                        </div>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                <Card className="lg:col-span-2">
+                  <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0">
+                    <div className="space-y-1.5">
+                      <CardTitle className="text-base">Recent Expenses</CardTitle>
+                      <p className="text-xs text-muted-foreground">Latest expenses first · {expenses.length} recorded</p>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="overflow-x-auto">
+                    {recentExpenses.length === 0 ? (
+                      <EmptyState
+                        icon={Receipt}
+                        title="No expenses yet"
+                        description="Log one-time purchases to see spending by category and client or project."
+                        action={canManage ? <Button size="sm" onClick={() => setExpenseDialog({ open: true, item: null })}><Plus className="mr-1 h-4 w-4" /> Add expense</Button> : undefined}
+                      />
+                    ) : (
+                      <table className="w-full text-sm">
+                        <thead className="text-left text-xs uppercase tracking-wide text-muted-foreground">
+                          <tr>
+                            <th className="px-3 py-2 font-medium">Date</th>
+                            <th className="px-3 py-2 font-medium">Expense</th>
+                            <th className="px-3 py-2 font-medium">Category</th>
+                            <th className="px-3 py-2 font-medium">Client / project</th>
+                            <th className="px-3 py-2 text-right font-medium">Amount</th>
+                            {canManage && <th className="px-3 py-2 text-right font-medium">Actions</th>}
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border">
+                          {recentExpenses.map((item) => {
+                            const client = item.client_id ? clients.find((candidate) => candidate.id === item.client_id) : null
+                            return (
+                              <tr key={item.id} className="hover:bg-muted/40">
+                                <td className="whitespace-nowrap px-3 py-3 align-top text-muted-foreground">{formatDate(item.due_date)}</td>
+                                <td className="max-w-[220px] px-3 py-3 align-top">
+                                  <p className="truncate font-medium" title={item.name || 'Untitled expense'}>{item.name || 'Untitled expense'}</p>
+                                  {item.note && <p className="truncate text-xs text-muted-foreground" title={item.note}>{item.note}</p>}
+                                </td>
+                                <td className="px-3 py-3 align-top"><Badge variant="secondary" className="whitespace-nowrap">{item.expense_category || 'Other'}</Badge></td>
+                                <td className="px-3 py-3 align-top">
+                                  {client ? (
+                                    <ClientBadge client={client} />
+                                  ) : item.project_name ? (
+                                    <Badge variant="outline" className="max-w-[180px] gap-1 whitespace-nowrap">
+                                      <Folder className="h-3 w-3 shrink-0" />
+                                      <span className="truncate">{item.project_name}</span>
+                                    </Badge>
+                                  ) : (
+                                    <span className="text-muted-foreground">General</span>
+                                  )}
+                                </td>
+                                <td className="whitespace-nowrap px-3 py-3 text-right align-top font-semibold">{money(item.amount, currency)}</td>
+                                {canManage && (
+                                  <td className="px-3 py-2 align-top">
+                                    <div className="flex justify-end gap-1">
+                                      <RowActions item={item} onEdit={openEditor} onDelete={() => setDeleting(item)} />
+                                    </div>
+                                  </td>
+                                )}
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+            )}
+          </TabsContent>
+        )}
       </Tabs>
 
       {/* Dialogs */}
       <SubscriptionFormDialog open={subDialog.open} onOpenChange={(v) => setSubDialog((s) => ({ ...s, open: v }))} item={subDialog.item} />
       <PayrollFormDialog open={payDialog.open} onOpenChange={(v) => setPayDialog((s) => ({ ...s, open: v }))} item={payDialog.item} defaultMonth={month} />
       <BillFormDialog open={billDialog.open} onOpenChange={(v) => setBillDialog((s) => ({ ...s, open: v }))} item={billDialog.item} />
+      <ExpenseFormDialog open={expenseDialog.open} onOpenChange={(v) => setExpenseDialog((s) => ({ ...s, open: v }))} item={expenseDialog.item} />
 
       {deleting && (
         <ConfirmDialog
           open={!!deleting}
           onOpenChange={(v) => { if (!v) setDeleting(null) }}
-          title="Delete finance line?"
+          title={deleting.kind === 'expense' ? 'Delete expense?' : 'Delete finance line?'}
           description={`Remove "${labelFor(deleting)}" (${money(deleting.amount, currency)}) from the ledger? This cannot be undone.`}
           confirmLabel="Delete"
           onConfirm={async () => {
@@ -650,6 +838,7 @@ export function FinancePage() {
   function openEditor(item: FinanceItem) {
     if (item.kind === 'subscription') setSubDialog({ open: true, item })
     else if (item.kind === 'payroll') setPayDialog({ open: true, item })
+    else if (item.kind === 'expense') setExpenseDialog({ open: true, item })
     else setBillDialog({ open: true, item })
   }
 

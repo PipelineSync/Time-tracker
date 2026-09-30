@@ -65,7 +65,7 @@ export function ReportsPage() {
   const byWorker = useMemo(() => hoursByWorker(filtered, workers), [filtered, workers])
   const byClient = useMemo(() => hoursByClient(filtered, clients), [filtered, clients])
 
-  // ---- Finance for the same range (subscriptions + payroll + bills) ----
+  // ---- Finance for the same range (subscriptions, payroll, bills and expenses) ----
   // Only ever computed when the Finance section is visible to this account;
   // the ledger arrives empty for everyone else anyway.
   const finance = useMemo(() => {
@@ -80,6 +80,7 @@ export function ReportsPage() {
     let subsBilled = 0
     let payrollTotal = 0
     let billsTotal = 0
+    let expensesTotal = 0
     let paidTotal = 0
     let unpaidTotal = 0
     const agenda: typeof financeItems = []
@@ -99,11 +100,14 @@ export function ReportsPage() {
           else unpaidTotal += item.amount
           if (item.status !== 'paid') agenda.push(item)
         }
-      } else if (dueInRange(item.due_date)) {
+      } else if (item.kind === 'bill' && dueInRange(item.due_date)) {
         billsTotal += item.amount
         if (item.status === 'paid') paidTotal += item.amount
         else unpaidTotal += item.amount
         agenda.push(item)
+      } else if (item.kind === 'expense' && dueInRange(item.due_date)) {
+        expensesTotal += item.amount
+        paidTotal += item.amount
       }
     }
     agenda.sort((a, b) => a.due_date.localeCompare(b.due_date))
@@ -117,7 +121,8 @@ export function ReportsPage() {
       subsBilled: Math.round(subsBilled * 100) / 100,
       payrollTotal: Math.round(payrollTotal * 100) / 100,
       billsTotal: Math.round(billsTotal * 100) / 100,
-      grandTotal: Math.round((subsBilled + payrollTotal + billsTotal) * 100) / 100,
+      expensesTotal: Math.round(expensesTotal * 100) / 100,
+      grandTotal: Math.round((subsBilled + payrollTotal + billsTotal + expensesTotal) * 100) / 100,
       paidTotal: Math.round(paidTotal * 100) / 100,
       unpaidTotal: Math.round(unpaidTotal * 100) / 100,
       agenda,
@@ -267,6 +272,20 @@ export function ReportsPage() {
       }
       lines.push(line(['Payroll in period', '', '', '', finance.payrollTotal.toFixed(2), '']))
       lines.push(line(['Bills due in period', '', '', '', finance.billsTotal.toFixed(2), '']))
+      lines.push('')
+      lines.push(line(['FINANCE — ONE-TIME EXPENSES']))
+      lines.push(line(['Date', 'Description', 'Category', 'Client / project', 'Amount']))
+      for (const expense of financeItems.filter((f) => {
+        if (f.kind !== 'expense') return false
+        const date = new Date(`${f.due_date.slice(0, 10)}T12:00:00`).getTime()
+        return date >= range.from.getTime() && date <= range.to.getTime()
+      })) {
+        const scope = expense.client_id
+          ? clients.find((c) => c.id === expense.client_id)?.name || 'Client'
+          : expense.project_name || 'General'
+        lines.push(line([expense.due_date, expense.name || '', expense.expense_category || 'Other', scope, expense.amount.toFixed(2)]))
+      }
+      lines.push(line(['One-time expenses in period', '', '', '', finance.expensesTotal.toFixed(2)]))
       lines.push(line(['TOTAL FINANCE IN PERIOD', '', '', '', finance.grandTotal.toFixed(2), '']))
     }
 
@@ -454,7 +473,7 @@ export function ReportsPage() {
           </CardContent>
         </Card>
 
-        {/* Finance — subscriptions, payroll and bills for the same period.
+        {/* Finance — subscriptions, payroll, bills and expenses for the same period.
             Only rendered when the Finance section is open to this account
             and there is actually a ledger to summarize. */}
         {finance && financeItems.length > 0 && (
@@ -465,7 +484,7 @@ export function ReportsPage() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-5">
-              <div className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm sm:grid-cols-4">
+              <div className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm sm:grid-cols-3 xl:grid-cols-5">
                 <div>
                   <p className="text-xs uppercase tracking-wide text-muted-foreground">Subscriptions</p>
                   <p className="font-semibold">{money(finance.subsBilled, currency)}</p>
@@ -482,6 +501,11 @@ export function ReportsPage() {
                   <p className="text-xs text-muted-foreground">due inside the period</p>
                 </div>
                 <div>
+                  <p className="text-xs uppercase tracking-wide text-muted-foreground">One-time expenses</p>
+                  <p className="font-semibold">{money(finance.expensesTotal, currency)}</p>
+                  <p className="text-xs text-muted-foreground">recorded in the period</p>
+                </div>
+                <div>
                   <p className="text-xs uppercase tracking-wide text-muted-foreground">Total out</p>
                   <p className="font-semibold">{money(finance.grandTotal, currency)}</p>
                   <p className="text-xs text-muted-foreground">{money(finance.unpaidTotal, currency)} still open</p>
@@ -494,11 +518,12 @@ export function ReportsPage() {
                     <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
                     <XAxis dataKey="label" fontSize={12} />
                     <YAxis fontSize={12} />
-                    <Tooltip formatter={(v: number, key: string) => [money(v, currency), key === 'subscriptions' ? 'Subscriptions' : key === 'payroll' ? 'Payroll' : 'Bills']} />
+                    <Tooltip formatter={(v: number, key: string) => [money(v, currency), key === 'subscriptions' ? 'Subscriptions' : key === 'payroll' ? 'Payroll' : key === 'bills' ? 'Bills' : 'One-time expenses']} />
                     <Legend />
                     <Bar dataKey="subscriptions" stackId="costs" fill="#8b5cf6" />
                     <Bar dataKey="payroll" stackId="costs" fill="#3b82f6" />
-                    <Bar dataKey="bills" stackId="costs" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="bills" stackId="costs" fill="#f59e0b" />
+                    <Bar dataKey="expenses" stackId="costs" fill="#10b981" radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               )}
