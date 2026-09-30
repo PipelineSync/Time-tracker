@@ -644,6 +644,107 @@ assert(String(badId.data).includes('must be an id'), 'the error explains what an
 const overdue = await callTool('list_tasks', { overdue: true }, ADMIN_TOKEN)
 assert(!overdue.isError, 'the overdue filter runs')
 
+// ---------------------------------------------------------------------------
+// QA Required?  Yes → only the admin / team_kpi.view can complete the task.
+// ---------------------------------------------------------------------------
+
+console.log('\n--- Tasks: QA Required? ---')
+
+const taskRow = (id: string) => table('tasks').find((t) => t.id === id)
+const created = (result: { data: unknown }) => result.data as { taskId: string; qaRequired: boolean }
+const benRow = () => table('workers').find((w) => w.id === BEN_WORKER)
+
+const listed = await rpcJson({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, { token: ADMIN_TOKEN })
+const listedTools = (listed.body as { result: { tools: { name: string; inputSchema: { properties: Record<string, { type?: string }> } }[] } }).result.tools
+for (const name of ['create_task', 'update_task']) {
+  const tool = listedTools.find((t) => t.name === name)
+  assert(tool?.inputSchema.properties.qa_required?.type === 'boolean', `${name} advertises a boolean qa_required argument`)
+}
+
+// The admin: new tasks require QA unless told otherwise.
+const adminYes = await callTool('create_task', { title: 'QA default task', worker_id: BEN_WORKER }, ADMIN_TOKEN)
+assert(!adminYes.isError && created(adminYes).qaRequired === true, 'admin: a new task requires QA by default')
+assert(taskRow(created(adminYes).taskId)?.qa_required === true, 'the flag is stored on the row')
+const adminNo = await callTool('create_task', { title: 'QA free task', worker_id: BEN_WORKER, qa_required: false, status: 'in_progress' }, ADMIN_TOKEN)
+assert(!adminNo.isError && created(adminNo).qaRequired === false && taskRow(created(adminNo).taskId)?.qa_required === false, 'admin: can create a task with qa_required=false')
+
+// A plain worker (Ben).
+const tasksBefore = table('tasks').length
+const benDefault = await callTool('create_task', { title: 'QA Ben own', status: 'in_progress' }, BEN_TOKEN)
+assert(!benDefault.isError && created(benDefault).qaRequired === true, "worker: a task on their own board requires QA by default")
+const benNo = await callTool('create_task', { title: 'QA Ben asks no', qa_required: false }, BEN_TOKEN)
+assert(benNo.isError && String(benNo.data).includes('KPI access'), 'worker: cannot create a task with qa_required=false')
+const benDoneCreate = await callTool('create_task', { title: 'QA Ben done', status: 'completed' }, BEN_TOKEN)
+assert(benDoneCreate.isError && String(benDoneCreate.data).includes('requires QA'), 'worker: cannot create a QA-required task straight into completed')
+const benBadFlag = await callTool('create_task', { title: 'QA Ben typo', qa_required: 'maybe' }, BEN_TOKEN)
+assert(benBadFlag.isError && String(benBadFlag.data).includes('true or false'), 'a non-boolean qa_required is rejected')
+assert(table('tasks').length === tasksBefore + 1, 'the refused creates stored nothing')
+
+const benTask = created(benDefault).taskId
+const benComplete = await callTool('update_task', { task_id: benTask, status: 'completed' }, BEN_TOKEN)
+assert(benComplete.isError && String(benComplete.data).includes('for_review'), 'worker: cannot move a QA-required task to completed (and is pointed at for_review)')
+assert(taskRow(benTask)?.status === 'in_progress' && !taskRow(benTask)?.completed_at, 'the refused move changed nothing')
+const benReview = await callTool('update_task', { task_id: benTask, status: 'for_review' }, BEN_TOKEN)
+assert(!benReview.isError && taskRow(benTask)?.status === 'for_review', 'worker: can move it to for_review')
+const benUntick = await callTool('update_task', { task_id: benTask, qa_required: false }, BEN_TOKEN)
+assert(benUntick.isError && taskRow(benTask)?.qa_required === true, 'worker: cannot change qa_required')
+const benUntickDone = await callTool('update_task', { task_id: benTask, qa_required: false, status: 'completed' }, BEN_TOKEN)
+assert(benUntickDone.isError && taskRow(benTask)?.qa_required === true && taskRow(benTask)?.status === 'for_review', 'worker: cannot untick and complete in one call')
+const benSame = await callTool('update_task', { task_id: benTask, qa_required: true, title: 'QA Ben own (renamed)' }, BEN_TOKEN)
+assert(!benSame.isError && taskRow(benTask)?.title === 'QA Ben own (renamed)', 'worker: sending the current value while editing is fine')
+
+// QA No → the worker moves it themselves.
+const freeTask = created(adminNo).taskId
+const benFree = await callTool('update_task', { task_id: freeTask, status: 'completed' }, BEN_TOKEN)
+assert(!benFree.isError && taskRow(freeTask)?.status === 'completed' && Boolean(taskRow(freeTask)?.completed_at), 'worker: can complete a task that does not require QA')
+assert(taskRow(freeTask)?.stage_history?.at(-1)?.to === 'completed', 'and the move is in the stage history')
+
+// The admin decides.
+const adminDone = await callTool('update_task', { task_id: benTask, status: 'completed' }, ADMIN_TOKEN)
+assert(!adminDone.isError && taskRow(benTask)?.status === 'completed', 'admin: completes the QA-required task')
+const adminFlip = await callTool('update_task', { task_id: created(adminYes).taskId, qa_required: false }, ADMIN_TOKEN)
+assert(!adminFlip.isError && taskRow(created(adminYes).taskId)?.qa_required === false, 'admin: can switch a task to qa_required=false')
+const nowFree = await callTool('update_task', { task_id: created(adminYes).taskId, status: 'completed' }, BEN_TOKEN)
+assert(!nowFree.isError, 'worker: completes it once it no longer requires QA')
+
+// KPI access: Ben is granted team_kpi.view (permissions are read on every call).
+const lockedAgain = await callTool('create_task', { title: 'QA Ben locked again', worker_id: BEN_WORKER, status: 'in_progress' }, ADMIN_TOKEN)
+benRow().permissions = ['team_kpi.view']
+const kpiComplete = await callTool('update_task', { task_id: created(lockedAgain).taskId, status: 'completed' }, BEN_TOKEN)
+assert(!kpiComplete.isError && taskRow(created(lockedAgain).taskId)?.status === 'completed', 'KPI access: can move a QA-required task to completed')
+const kpiFlag = await callTool('update_task', { task_id: created(lockedAgain).taskId, qa_required: false }, BEN_TOKEN)
+assert(!kpiFlag.isError && taskRow(created(lockedAgain).taskId)?.qa_required === false, 'KPI access: can change qa_required')
+const kpiNo = await callTool('create_task', { title: 'QA Ben kpi no', qa_required: false }, BEN_TOKEN)
+assert(!kpiNo.isError && created(kpiNo).qaRequired === false, 'KPI access: can create a task with qa_required=false')
+const kpiDone = await callTool('create_task', { title: 'QA Ben kpi done', status: 'completed', qa_required: true }, BEN_TOKEN)
+assert(!kpiDone.isError && taskRow(created(kpiDone).taskId)?.status === 'completed', 'KPI access: can create a QA-required task straight into completed')
+benRow().permissions = []
+const revokedTask = await callTool('create_task', { title: 'QA Ben after revoke', status: 'in_progress' }, BEN_TOKEN)
+const revoked = await callTool('update_task', { task_id: created(revokedTask).taskId, status: 'completed' }, BEN_TOKEN)
+assert(revoked.isError, 'revoking KPI access puts the gate back')
+
+// Tasks that predate the column count as "No".
+table('tasks').push({
+  id: 'ddddddd9-9999-4999-8999-999999999999', user_id: ADMIN_ID, worker_id: BEN_WORKER, title: 'QA legacy row',
+  status: 'in_progress', priority: 'medium', due_date: '2026-09-30', stage_history: [], archived_at: null,
+})
+const legacyDone = await callTool('update_task', { task_id: 'ddddddd9-9999-4999-8999-999999999999', status: 'completed' }, BEN_TOKEN)
+assert(!legacyDone.isError, 'worker: a task with no qa_required value completes exactly as before')
+
+// A database that has not run supabase/RUN-THIS-task-qa-required.sql yet.
+state.missingColumns = { tasks: ['qa_required'] }
+try {
+  const oldDb = await callTool('create_task', { title: 'QA un-migrated create', worker_id: BEN_WORKER }, ADMIN_TOKEN)
+  assert(!oldDb.isError && created(oldDb).qaRequired === false, 'un-migrated database: create_task still works (and reports no QA)')
+  assert(taskRow(created(oldDb).taskId) && !('qa_required' in taskRow(created(oldDb).taskId)), 'the row is saved without the column')
+  const oldEdit = await callTool('update_task', { task_id: created(oldDb).taskId, qa_required: true, title: 'QA un-migrated renamed' }, ADMIN_TOKEN)
+  assert(!oldEdit.isError && taskRow(created(oldDb).taskId)?.title === 'QA un-migrated renamed', 'un-migrated database: an update naming the flag still saves everything else')
+  const oldWorker = await callTool('update_task', { task_id: created(oldDb).taskId, status: 'completed' }, BEN_TOKEN)
+  assert(!oldWorker.isError, 'un-migrated database: the worker can complete it (nothing to enforce yet)')
+} finally {
+  state.missingColumns = {}
+}
+
 // ===========================================================================
 // 11. Protocol edge cases
 // ===========================================================================

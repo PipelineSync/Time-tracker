@@ -6,16 +6,37 @@
  * is computed from that history. A connector that only updated `status` would
  * silently corrupt the KPI numbers, so `update_task` maintains the same
  * bookkeeping.
+ *
+ * "QA Required?" is enforced here too, not only in the app: a task with it set
+ * can only be moved to completed by the admin or an account holding
+ * `team_kpi.view`, and only they can change the setting. (The database has a
+ * trigger with the same rules, so this is the friendly version of the refusal.)
  */
 
 import type { Caller } from '../session'
 import { canDo, requirePermission, ToolError } from '../session'
-import { type Args, dateOnly, limit, oneOf, str, uuid } from '../args'
+import { type Args, bool, dateOnly, limit, oneOf, str, uuid } from '../args'
 import { list, type ListResult, workerNames, clientNames } from '../format'
 import type { Tool } from './index'
 
 const STATUSES = ['todo', 'in_progress', 'waiting', 'for_review', 'rework', 'completed'] as const
 const PRIORITIES = ['low', 'medium', 'high'] as const
+
+/**
+ * The QA Required? rule. Mirrors src/lib/taskWorkflow.ts (duplicated rather
+ * than imported, like the permission list: the functions bundle stays
+ * independent of the app source).
+ */
+const QA_COMPLETION_BLOCKED =
+  'This task requires QA — only the admin or someone with KPI access (team_kpi.view) can move it to completed. Move it to for_review instead.'
+const QA_SETTING_LOCKED =
+  'Only the admin or someone with KPI access (team_kpi.view) can change whether a task requires QA.'
+
+/** True when the database has no `qa_required` column yet (migration not run). */
+function isMissingQaColumn(error: { message?: string } | null): boolean {
+  const message = error?.message ?? ''
+  return /qa_required/i.test(message) && /column/i.test(message)
+}
 
 /** The stage timestamps the app sets when a card enters each column. */
 const STAGE_FIELDS: Partial<Record<(typeof STATUSES)[number], string>> = {
@@ -109,6 +130,16 @@ async function createTask(caller: Caller, args: Args): Promise<unknown> {
   const status = oneOf(args, 'status', STATUSES) ?? 'todo'
   const now = new Date().toISOString()
 
+  // QA Required? defaults to Yes. Only the admin / KPI access may ask for No,
+  // and nobody else can create a QA-required task straight into completed.
+  const reviewer = canDo(caller, 'team_kpi.view')
+  if (args.qa_required !== undefined && bool(args, 'qa_required') === undefined) {
+    throw new ToolError('"qa_required" must be true or false.')
+  }
+  const qaRequired = bool(args, 'qa_required') ?? true
+  if (!qaRequired && !reviewer) throw new ToolError(QA_SETTING_LOCKED)
+  if (qaRequired && status === 'completed' && !reviewer) throw new ToolError(QA_COMPLETION_BLOCKED)
+
   const row: Record<string, unknown> = {
     worker_id: workerId,
     title,
@@ -118,6 +149,7 @@ async function createTask(caller: Caller, args: Args): Promise<unknown> {
     // Every task carries a date started (default: today).
     start_date: dateOnly(args, 'start_date') ?? now.slice(0, 10),
     due_date: dateOnly(args, 'due_date') ?? null,
+    qa_required: qaRequired,
     created_by_role: caller.role,
   }
 
@@ -131,7 +163,13 @@ async function createTask(caller: Caller, args: Args): Promise<unknown> {
   if (status === 'completed') row.completed_at = now
   row.stage_history = [{ from: null, to: status, at: now, by: caller.displayName }]
 
-  const { data, error } = await caller.sb.from('tasks').insert(row).select().single()
+  let { data, error } = await caller.sb.from('tasks').insert(row).select().single()
+  if (error && isMissingQaColumn(error)) {
+    // A database that has not run supabase/RUN-THIS-task-qa-required.sql: the
+    // task is still created, it just cannot carry the flag.
+    delete row.qa_required
+    ;({ data, error } = await caller.sb.from('tasks').insert(row).select().single())
+  }
   if (error) throw new Error(error.message)
 
   const created = data as Record<string, unknown>
@@ -142,7 +180,8 @@ async function createTask(caller: Caller, args: Args): Promise<unknown> {
     title: created.title,
     assignedTo: names.get(workerId) ?? 'Unknown worker',
     status: created.status,
-    message: `Task "${created.title}" created for ${names.get(workerId) ?? 'the worker'}.`,
+    qaRequired: created.qa_required === true,
+    message: `Task "${created.title}" created for ${names.get(workerId) ?? 'the worker'}${created.qa_required === true ? ' (QA required)' : ''}.`,
   }
 }
 
@@ -161,6 +200,19 @@ async function updateTask(caller: Caller, args: Args): Promise<unknown> {
   const row = current as Record<string, unknown>
   requireBoardAccess(caller, row.worker_id as string | null)
   const patch: Record<string, unknown> = { updated_at: new Date().toISOString() }
+
+  // QA Required?: rows without the value (older tasks, or a database that has
+  // not run the migration) count as No.
+  const reviewer = canDo(caller, 'team_kpi.view')
+  const qaRequiredNow = row.qa_required === true
+  if (args.qa_required !== undefined) {
+    const next = bool(args, 'qa_required')
+    if (next === undefined) throw new ToolError('"qa_required" must be true or false.')
+    if (next !== qaRequiredNow) {
+      if (!reviewer) throw new ToolError(QA_SETTING_LOCKED)
+      patch.qa_required = next
+    }
+  }
 
   if (args.title !== undefined) {
     const title = str(args, 'title')
@@ -192,6 +244,8 @@ async function updateTask(caller: Caller, args: Args): Promise<unknown> {
   // completed stamp, and an append-only history entry.
   const nextStatus = oneOf(args, 'status', STATUSES)
   if (nextStatus && nextStatus !== row.status) {
+    // A QA-required task only reaches completed through the admin / KPI access.
+    if (nextStatus === 'completed' && qaRequiredNow && !reviewer) throw new ToolError(QA_COMPLETION_BLOCKED)
     const now = new Date().toISOString()
     patch.status = nextStatus
 
@@ -213,7 +267,12 @@ async function updateTask(caller: Caller, args: Args): Promise<unknown> {
     return { ok: true, message: 'Nothing to change — no supported fields were supplied.' }
   }
 
-  const { data, error } = await caller.sb.from('tasks').update(patch).eq('id', taskId).select().single()
+  let { data, error } = await caller.sb.from('tasks').update(patch).eq('id', taskId).select().single()
+  if (error && 'qa_required' in patch && isMissingQaColumn(error)) {
+    // Database without supabase/RUN-THIS-task-qa-required.sql: save the rest.
+    delete patch.qa_required
+    ;({ data, error } = await caller.sb.from('tasks').update(patch).eq('id', taskId).select().single())
+  }
   if (error) throw new Error(error.message)
 
   const updated = data as Record<string, unknown>
@@ -224,6 +283,7 @@ async function updateTask(caller: Caller, args: Args): Promise<unknown> {
     status: updated.status,
     startDate: updated.start_date ?? null,
     dueDate: updated.due_date ?? null,
+    qaRequired: updated.qa_required === true,
     message: nextStatus && nextStatus !== row.status
       ? `Task moved from ${row.status} to ${nextStatus}.`
       : 'Task updated.',
@@ -274,7 +334,7 @@ export const taskTools: Tool[] = [
     name: 'create_task',
     title: 'Create a task',
     description:
-      'Add a card to a worker\'s board with a title, optional description, priority, start date, due date, client and estimate. Every member can add cards to their own board; creating one for somebody else needs the tasks.manage_all permission.',
+      'Add a card to a worker\'s board with a title, optional description, priority, start date, due date, client and estimate. Every member can add cards to their own board; creating one for somebody else needs the tasks.manage_all permission. New cards require QA by default (qa_required=true): a plain worker cannot move them to completed — only the admin or someone with the team_kpi.view permission can, and only they may create a card with qa_required=false.',
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     inputSchema: {
       type: 'object',
@@ -288,6 +348,11 @@ export const taskTools: Tool[] = [
         start_date: { type: 'string', description: 'YYYY-MM-DD. The date the task starts. Defaults to today.' },
         due_date: { type: 'string', description: 'YYYY-MM-DD.' },
         estimated_hours: { type: 'number' },
+        qa_required: {
+          type: 'boolean',
+          description:
+            'QA Required? Default true: the worker cannot complete the task themselves — the admin or someone with team_kpi.view does, after review. Passing false needs the admin or team_kpi.view.',
+        },
       },
       required: ['title'],
       additionalProperties: false,
@@ -298,7 +363,7 @@ export const taskTools: Tool[] = [
     name: 'update_task',
     title: 'Update or move a task',
     description:
-      'Change a task\'s title, description, priority, start date, due date, client, assignee or estimate — or move it between board columns (todo → in_progress → waiting → for_review → rework → completed). Stage moves are recorded in the task history so Team KPI stays accurate.',
+      'Change a task\'s title, description, priority, start date, due date, client, assignee or estimate — or move it between board columns (todo → in_progress → waiting → for_review → rework → completed). Stage moves are recorded in the task history so Team KPI stays accurate. A task with qa_required=true can only be moved to completed by the admin or someone with the team_kpi.view permission, and only they can change qa_required.',
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     inputSchema: {
       type: 'object',
@@ -313,6 +378,10 @@ export const taskTools: Tool[] = [
         worker_id: { type: 'string', description: 'Reassign to this worker.' },
         client_id: { type: 'string' },
         estimated_hours: { type: 'number' },
+        qa_required: {
+          type: 'boolean',
+          description: 'QA Required? Only the admin or someone with team_kpi.view can change it.',
+        },
       },
       required: ['task_id'],
       additionalProperties: false,

@@ -97,6 +97,17 @@ export const FAQ_SECTIONS: Record<FaqAudience, FaqSection[]> = {
       ],
     },
     {
+      title: 'Your tasks',
+      items: [
+        {
+          id: 'worker-task-qa',
+          question: 'Why can’t I move my task to Completed?',
+          answer:
+            'Cards with a “QA required” chip need a check before they count as done. Move the card to For Review instead — the Owner or a teammate with KPI access reviews it and completes it. Cards without the chip you can move to Completed yourself.',
+        },
+      ],
+    },
+    {
       title: 'Your account',
       items: [
         {
@@ -142,6 +153,12 @@ export const FAQ_SECTIONS: Record<FaqAudience, FaqSection[]> = {
           question: 'How do I give a worker access to the admin screens?',
           answer:
             'Workers → edit → Access. Granted screens appear in that worker’s nav under "Access Granted" on their next sync — no sign-out needed. The access is real, not just hidden buttons: both backends and the database policies check the same permissions.',
+        },
+        {
+          id: 'admin-task-qa',
+          question: 'What does “QA Required?” on a task do?',
+          answer:
+            'Yes (the default) means the worker can’t move that task to Completed: it goes to For Review, and only you — or a worker ticked for Team KPI under Workers → edit → Access — can complete it. No lets the worker finish it themselves. Only you and Team KPI holders see the tick; older tasks are No.',
         },
         {
           id: 'admin-it-support',

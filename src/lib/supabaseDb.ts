@@ -60,19 +60,24 @@ import {
 import type { BackendResult, DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, CreateFinanceItemInput, CreateMeetingInput, CreateNoteInput, CreateInvoiceInput, CreateMonthlyGoalInput, SaveBonusDecisionInput } from './backend'
 import { ACCOUNT_DEACTIVATED_MESSAGE } from './backend'
 import {
+  QA_COMPLETION_BLOCKED_MESSAGE,
+  QA_SETTING_LOCKED_MESSAGE,
   applyDueDateChange,
   applyStageTransition,
   hydrateTask,
   initialStageFields,
+  isQaCompletionBlocked,
   nextRecurringDueDate,
   normalizeEstimatedHours,
   normalizeOccurrence,
+  normalizeQaRequired,
   normalizeQaScore,
   normalizeRepeats,
   normalizeReworkType,
   normalizeStartDate,
   normalizeWaitingReason,
   patchTouchesQa,
+  resolveNewTaskQaRequired,
 } from './taskWorkflow'
 import {
   createClient,
@@ -98,6 +103,14 @@ const RECURRING_TASKS_MIGRATION_MESSAGE =
 
 /** The tasks-table columns added by supabase/recurring-tasks.sql. */
 const RECURRING_TASK_COLUMNS = ['repeats', 'repeat_until', 'series_id', 'occurrence'] as const
+
+/**
+ * Logged when tasks are saved on a database without
+ * supabase/RUN-THIS-task-qa-required.sql. The task itself is still saved, but
+ * without the column nothing can be enforced: every task reads as "No QA".
+ */
+const QA_COLUMN_MISSING_WARNING =
+  '[work-tracker] tasks.qa_required is missing on this database — run supabase/RUN-THIS-task-qa-required.sql to enable QA Required.'
 
 const WORKER_COLOR_MIGRATION_MESSAGE =
   'Worker colour tag was not saved: run supabase/RUN-THIS-worker-color.sql in the Supabase SQL editor to add the color column. Everything else was saved.'
@@ -3031,6 +3044,17 @@ export const supabaseBackend: DataBackend = {
       : me.data!.workerId
     if (!workerId) return fail('Choose who the task is for.')
     const status: TaskStatus = input.status ?? 'todo'
+    // "QA Required?" — defaults to Yes. Only the Owner / KPI access may ask for
+    // No (a repeating series just carries its own setting forward), and a
+    // QA-required task cannot be created straight into Completed by anyone
+    // else. The database enforces the same rules with a trigger, so a hand-made
+    // request cannot get around them.
+    const reviewer = canDo(me.data!, 'team_kpi.view')
+    const qa = resolveNewTaskQaRequired(input.qa_required, reviewer, Boolean(input.series_id))
+    if (qa.error) return fail(qa.error)
+    if (isQaCompletionBlocked({ qaRequired: qa.value, from: null, to: status }, reviewer)) {
+      return fail(QA_COMPLETION_BLOCKED_MESSAGE)
+    }
     const now = new Date().toISOString()
     const actor = await actorLabelFor(me.data!)
     const sb = client()
@@ -3051,7 +3075,7 @@ export const supabaseBackend: DataBackend = {
       ...(input.series_id ? { series_id: input.series_id } : {}),
       ...(input.occurrence ? { occurrence: normalizeOccurrence(input.occurrence) } : {}),
     }
-    const runInsert = (withClient: boolean, withStartDate: boolean) => {
+    const runInsert = (withClient: boolean, withStartDate: boolean, withQa: boolean) => {
       const payload: Record<string, unknown> = {
         worker_id: workerId,
         ...(withClient ? { client_id: input.client_id ?? null } : {}),
@@ -3071,6 +3095,9 @@ export const supabaseBackend: DataBackend = {
       // Every new task gets a date started (§4): the form sends it; anything
       // that omits it (e.g. an older connector) starts today.
       if (withStartDate) payload.start_date = normalizeStartDate(input.start_date) ?? now.slice(0, 10)
+      // Always sent explicitly (never left to the column default), so the
+      // stored value is exactly what was validated above.
+      if (withQa) payload.qa_required = qa.value
       return sb
         .from('tasks')
         .insert(payload)
@@ -3078,12 +3105,24 @@ export const supabaseBackend: DataBackend = {
         .single() as PromiseLike<{ data: Task | null; error: { code?: string; message?: string } | null }>
     }
     const { data, error } = await withClientColumn<Task>(async (withClient) => {
-      let res = await runInsert(withClient, true)
-      // Database without the start-date migration: save everything else —
-      // hydrateTask() back-fills the start date from created_at on read.
-      if (res.error && isMissingColumn(res.error, 'start_date')) {
-        console.warn('[work-tracker] tasks.start_date is missing on this database — run supabase/RUN-THIS-task-start-date.sql to enable it.')
-        res = await runInsert(withClient, false)
+      let withStartDate = true
+      let withQa = true
+      let res = await runInsert(withClient, withStartDate, withQa)
+      // A database that predates a column: save everything else, drop only
+      // that column and retry (each pass drops one, so several stale
+      // migrations degrade together). hydrateTask() back-fills the start date
+      // from created_at on read, and a row without qa_required reads as "No".
+      for (let pass = 0; res.error && pass < 2; pass++) {
+        if (withStartDate && isMissingColumn(res.error, 'start_date')) {
+          console.warn('[work-tracker] tasks.start_date is missing on this database — run supabase/RUN-THIS-task-start-date.sql to enable it.')
+          withStartDate = false
+        } else if (withQa && isMissingColumn(res.error, 'qa_required')) {
+          console.warn(QA_COLUMN_MISSING_WARNING)
+          withQa = false
+        } else {
+          break
+        }
+        res = await runInsert(withClient, withStartDate, withQa)
       }
       return res
     })
@@ -3123,10 +3162,21 @@ export const supabaseBackend: DataBackend = {
     if (readErr) return fail(readErr.message)
     if (!current) return fail('Task not found.')
     const task = hydrateTask(current as Task)
+    // "QA Required?": the Owner and people with KPI access decide it. Anyone
+    // else may send the value the task already has, never a different one, and
+    // cannot take a QA-required task into Completed. (The database enforces
+    // both with a trigger, so a hand-made request cannot get around them.)
+    const reviewer = canDo(me.data!, 'team_kpi.view')
+    const qaChange = patch.qa_required !== undefined && normalizeQaRequired(patch.qa_required) !== task.qa_required
+    if (qaChange && !reviewer) return fail(QA_SETTING_LOCKED_MESSAGE)
+    if (patch.status !== undefined && isQaCompletionBlocked({ qaRequired: task.qa_required, from: task.status, to: patch.status as TaskStatus }, reviewer)) {
+      return fail(QA_COMPLETION_BLOCKED_MESSAGE)
+    }
     const now = new Date().toISOString()
     const actor = await actorLabelFor(me.data!)
 
     const update: Record<string, unknown> = {}
+    if (qaChange) update.qa_required = normalizeQaRequired(patch.qa_required)
     if (patch.title !== undefined && patch.title.trim()) update.title = patch.title.trim()
     if (patch.description !== undefined) update.description = patch.description?.trim() || null
     if (patch.priority !== undefined) update.priority = patch.priority
@@ -3194,35 +3244,44 @@ export const supabaseBackend: DataBackend = {
         .filter((rowId) => rowId !== id)
     }
 
-    const runUpdate = async (withArchived: boolean, withClient: boolean, withRecurring: boolean, withStartDate: boolean) => {
+    const runUpdate = async (withArchived: boolean, withClient: boolean, withRecurring: boolean, withStartDate: boolean, withQa: boolean) => {
       const payload = { ...update }
       if (!withArchived) delete payload.archived_at
       if (!withClient) delete payload.client_id
       if (!withRecurring) for (const col of RECURRING_TASK_COLUMNS) delete payload[col]
       if (!withStartDate) delete payload.start_date
+      if (!withQa) delete payload.qa_required
       return sb.from('tasks').update(payload).eq('id', id).select().single() as PromiseLike<{ data: Task | null; error: { code?: string; message?: string } | null }>
     }
 
     const { data, error } = await withClientColumn<Task>(async (withClient) => {
       let withArchived = true
       let withStartDate = true
-      let res = await runUpdate(withArchived, withClient, true, withStartDate)
-      if (res.error && isMissingColumn(res.error, 'archived_at')) {
-        withArchived = false
-        res = await runUpdate(withArchived, withClient, true, withStartDate)
-      }
-      // Database without the start-date migration: save everything else —
-      // hydrateTask() back-fills the start date from created_at on read.
-      if (res.error && isMissingColumn(res.error, 'start_date')) {
-        console.warn('[work-tracker] tasks.start_date is missing on this database — run supabase/RUN-THIS-task-start-date.sql to enable it.')
-        withStartDate = false
-        res = await runUpdate(withArchived, withClient, true, withStartDate)
-      }
-      // Database without recurring-tasks.sql: save everything else, drop the
-      // repeat settings — the task itself must never be blocked by it.
-      if (res.error && RECURRING_TASK_COLUMNS.some((col) => isMissingColumn(res.error, col))) {
-        console.warn('[work-tracker] recurring-task columns are missing on this database — run supabase/recurring-tasks.sql to enable recurring tasks.')
-        res = await runUpdate(withArchived, withClient, false, withStartDate)
+      let withRecurring = true
+      let withQa = true
+      let res = await runUpdate(withArchived, withClient, withRecurring, withStartDate, withQa)
+      // A database that predates a column: save everything else, drop only
+      // that column and retry — the task itself must never be blocked by a
+      // stale migration. Each pass drops one, so several of them degrade
+      // together whichever order the database reports them in.
+      for (let pass = 0; res.error && pass < 4; pass++) {
+        if (withArchived && isMissingColumn(res.error, 'archived_at')) {
+          withArchived = false
+        } else if (withStartDate && isMissingColumn(res.error, 'start_date')) {
+          // hydrateTask() back-fills the start date from created_at on read.
+          console.warn('[work-tracker] tasks.start_date is missing on this database — run supabase/RUN-THIS-task-start-date.sql to enable it.')
+          withStartDate = false
+        } else if (withRecurring && RECURRING_TASK_COLUMNS.some((col) => isMissingColumn(res.error, col))) {
+          // Drop the repeat settings.
+          console.warn('[work-tracker] recurring-task columns are missing on this database — run supabase/recurring-tasks.sql to enable recurring tasks.')
+          withRecurring = false
+        } else if (withQa && isMissingColumn(res.error, 'qa_required')) {
+          console.warn(QA_COLUMN_MISSING_WARNING)
+          withQa = false
+        } else {
+          break
+        }
+        res = await runUpdate(withArchived, withClient, withRecurring, withStartDate, withQa)
       }
       return res
     })
@@ -3298,6 +3357,10 @@ export const supabaseBackend: DataBackend = {
     if (!current) return fail('Task not found.')
     const task = hydrateTask(current as Task)
     const target = normalizeTaskStage(status)
+    // A QA-required task only reaches Completed through the Owner / KPI access.
+    if (isQaCompletionBlocked({ qaRequired: task.qa_required, from: task.status, to: target }, canDo(me.data!, 'team_kpi.view'))) {
+      return fail(QA_COMPLETION_BLOCKED_MESSAGE)
+    }
     const now = new Date().toISOString()
     const actor = await actorLabelFor(me.data!)
 
@@ -3404,7 +3467,7 @@ export const supabaseBackend: DataBackend = {
       .eq('worker_id', task.worker_id)
       .eq('status', 'todo')
     const shiftIds = ((columnRows as Array<{ id: string }> | null) ?? []).map((r) => r.id)
-    const runInsert = (withClient: boolean, withStartDate: boolean) => {
+    const runInsert = (withClient: boolean, withStartDate: boolean, withQa: boolean) => {
       const payload: Record<string, unknown> = {
         worker_id: task.worker_id,
         ...(withClient ? { client_id: task.client_id ?? null } : {}),
@@ -3427,6 +3490,8 @@ export const supabaseBackend: DataBackend = {
       // The occurrence starts the day it is started (every task has a date
       // started); skipped on a database that has not run the migration yet.
       if (withStartDate) payload.start_date = now.slice(0, 10)
+      // It keeps the template's QA setting (see planRecreate).
+      if (withQa) payload.qa_required = task.qa_required
       return sb
         .from('tasks')
         .insert(payload)
@@ -3434,10 +3499,20 @@ export const supabaseBackend: DataBackend = {
         .single() as PromiseLike<{ data: Task | null; error: { code?: string; message?: string } | null }>
     }
     const { data: occurrence, error } = await withClientColumn<Task>(async (withClient) => {
-      let res = await runInsert(withClient, true)
-      if (res.error && isMissingColumn(res.error, 'start_date')) {
-        console.warn('[work-tracker] tasks.start_date is missing on this database — run supabase/RUN-THIS-task-start-date.sql to enable it.')
-        res = await runInsert(withClient, false)
+      let withStartDate = true
+      let withQa = true
+      let res = await runInsert(withClient, withStartDate, withQa)
+      for (let pass = 0; res.error && pass < 2; pass++) {
+        if (withStartDate && isMissingColumn(res.error, 'start_date')) {
+          console.warn('[work-tracker] tasks.start_date is missing on this database — run supabase/RUN-THIS-task-start-date.sql to enable it.')
+          withStartDate = false
+        } else if (withQa && isMissingColumn(res.error, 'qa_required')) {
+          console.warn(QA_COLUMN_MISSING_WARNING)
+          withQa = false
+        } else {
+          break
+        }
+        res = await runInsert(withClient, withStartDate, withQa)
       }
       return res
     })

@@ -17,6 +17,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { ClientSelect } from '@/components/ClientSelect'
 import { ManageClientsDialog } from '@/components/ManageClientsDialog'
+import { DEFAULT_QA_REQUIRED, isQaCompletionBlocked } from '@/lib/taskWorkflow'
 import { todayISO } from '@/lib/utils'
 import { toast } from 'sonner'
 
@@ -37,6 +38,8 @@ interface FormState {
   repeatUntil: string
   /** Why the work is blocked (only meaningful on the Waiting column). */
   waitingReason: WaitingReason | ''
+  /** "QA Required?" — only the Owner / KPI access ever see or change it. */
+  qaRequired: boolean
 }
 
 const emptyForm = (status: TaskStatus): FormState => ({
@@ -52,6 +55,7 @@ const emptyForm = (status: TaskStatus): FormState => ({
   repeats: 'none',
   repeatUntil: '',
   waitingReason: '',
+  qaRequired: DEFAULT_QA_REQUIRED,
 })
 
 /**
@@ -80,6 +84,18 @@ export function TaskFormDialog({
   // Only someone who runs the whole board can assign work to another person.
   const canAssign = can('tasks.manage_all')
   const canManageClients = can('clients.manage')
+  // "QA Required?" belongs to the Owner and people with KPI access — the same
+  // people who can complete a QA-required task. Everyone else never sees the
+  // box: what they add is created with QA required (the default), and what
+  // they edit keeps the setting it has.
+  const canSetQa = can('team_kpi.view')
+  // A plain worker cannot take a QA-required task into Completed: a new task
+  // is always QA-required for them, an existing one is whatever it is now.
+  const completionLocked =
+    !canSetQa &&
+    (task
+      ? isQaCompletionBlocked({ qaRequired: task.qa_required, from: task.status, to: 'completed' }, false)
+      : DEFAULT_QA_REQUIRED)
   const [form, setForm] = useState<FormState>(emptyForm(defaultStatus))
   const [saving, setSaving] = useState(false)
   const [clientsOpen, setClientsOpen] = useState(false)
@@ -106,6 +122,7 @@ export function TaskFormDialog({
         repeats: task.repeats,
         repeatUntil: task.repeat_until ?? '',
         waitingReason: task.waiting_reason ?? '',
+        qaRequired: task.qa_required,
       })
     } else {
       // Seed the assignee. Managers (anyone with tasks.manage_all) may put a
@@ -118,7 +135,7 @@ export function TaskFormDialog({
         ? defaultWorkerId || pickable[0]?.id || ownId
         : ownId
       setForm({
-        ...emptyForm(defaultStatus),
+        ...emptyForm(!canSetQa && DEFAULT_QA_REQUIRED && defaultStatus === 'completed' ? 'todo' : defaultStatus),
         workerId: seedAssignee,
         // One client on the list is not a choice — pre-pick it.
         clientId: defaultClientId || (activeClients.length === 1 ? activeClients[0].id : ''),
@@ -127,10 +144,20 @@ export function TaskFormDialog({
     // `pickable` is derived from workers; re-running on its identity would
     // reset the form on every background refresh.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, task, defaultStatus, defaultWorkerId, defaultClientId, canAssign, user?.workerId])
+  }, [open, task, defaultStatus, defaultWorkerId, defaultClientId, canAssign, canSetQa, user?.workerId])
 
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setForm((f) => ({ ...f, [key]: value }))
+
+  // A database that predates the QA migration accepts the task but has nowhere
+  // to keep the flag — say so instead of silently not enforcing it.
+  function warnIfQaNotStored(saved: Task) {
+    if (canSetQa && form.qaRequired && !saved.qa_required) {
+      toast.warning('QA Required could not be saved on this database.', {
+        description: 'Run supabase/RUN-THIS-task-qa-required.sql once so QA is enforced.',
+      })
+    }
+  }
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -204,9 +231,13 @@ export function TaskFormDialog({
             ? { waiting_reason: form.waitingReason }
             : {}),
           ...(canAssign ? { worker_id: form.workerId } : {}),
+          // Only sent by those who may change it, so a plain worker's edit can
+          // never touch the setting.
+          ...(canSetQa ? { qa_required: form.qaRequired } : {}),
         })
         if (!saved) return
         toast.success('Task updated.')
+        warnIfQaNotStored(saved)
       } else {
         const created = await createTask({
           worker_id: assignee,
@@ -223,9 +254,12 @@ export function TaskFormDialog({
           ...(form.status === 'waiting' && form.waitingReason
             ? { waiting_reason: form.waitingReason }
             : {}),
+          // Left out for everyone else, so the task gets the default (Yes).
+          ...(canSetQa ? { qa_required: form.qaRequired } : {}),
         })
         if (!created) return
         toast.success('Task added.')
+        warnIfQaNotStored(created)
       }
       onOpenChange(false)
     } finally {
@@ -321,14 +355,26 @@ export function TaskFormDialog({
                 <Select value={form.status} onValueChange={(v) => set('status', v as TaskStatus)}>
                   <SelectTrigger id="task-status"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {TASK_STATUSES.map((s) => (
-                      <SelectItem key={s} value={s}>{TaskStatusNames[s]}</SelectItem>
-                    ))}
+                    {TASK_STATUSES.map((s) => {
+                      const locked = s === 'completed' && completionLocked
+                      return (
+                        <SelectItem key={s} value={s} disabled={locked}>
+                          {TaskStatusNames[s]}{locked ? ' — needs QA' : ''}
+                        </SelectItem>
+                      )
+                    })}
                   </SelectContent>
                 </Select>
+                {completionLocked && (
+                  <p className="text-[11px] text-muted-foreground">
+                    QA is required: send it to For Review — the Owner or KPI reviewer completes it.
+                  </p>
+                )}
               </div>
 
-              <div className="grid gap-2">
+              {/* self-start: when the Stage column grows a QA hint below its select, the
+                  Priority select must stay level with it instead of stretching down. */}
+              <div className="grid gap-2 self-start">
                 <Label htmlFor="task-priority">Priority</Label>
                 <Select value={form.priority} onValueChange={(v) => set('priority', v as TaskPriority)}>
                   <SelectTrigger id="task-priority"><SelectValue /></SelectTrigger>
@@ -366,6 +412,32 @@ export function TaskFormDialog({
                 )}
               </div>
             </div>
+
+            {canSetQa && (
+              <div className="flex items-start gap-3 rounded-lg border bg-muted/30 p-3">
+                <input
+                  id="task-qa-required"
+                  type="checkbox"
+                  checked={form.qaRequired}
+                  onChange={(e) => set('qaRequired', e.target.checked)}
+                  /* accent-[#0868D9]: brand blue, kept constant on purpose —
+                     checkbox accents are tiny and don't need to re-skin with
+                     the seasonal theme (same as the sign-in page). */
+                  className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer rounded border-border accent-[#0868D9]"
+                />
+                <div className="grid gap-0.5">
+                  <Label htmlFor="task-qa-required" className="cursor-pointer">
+                    QA Required?{' '}
+                    <span className="font-semibold">{form.qaRequired ? 'Yes' : 'No'}</span>
+                  </Label>
+                  <p className="text-[11px] text-muted-foreground">
+                    {form.qaRequired
+                      ? 'The worker can’t move this task to Completed — only the Owner or someone with KPI access can, after review.'
+                      : 'The worker can move this task to Completed themselves.'}
+                  </p>
+                </div>
+              </div>
+            )}
 
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="grid gap-2">

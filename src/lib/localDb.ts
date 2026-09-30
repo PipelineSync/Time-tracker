@@ -62,19 +62,24 @@ import type { DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput
 import { ACCOUNT_DEACTIVATED_MESSAGE } from './backend'
 import { buildDemoSeed } from './demoSeed'
 import {
+  QA_COMPLETION_BLOCKED_MESSAGE,
+  QA_SETTING_LOCKED_MESSAGE,
   applyDueDateChange,
   applyStageTransition,
   initialStageFields,
+  isQaCompletionBlocked,
   nextRecurringDueDate,
   effectiveStartDate,
   normalizeEstimatedHours,
   normalizeOccurrence,
+  normalizeQaRequired,
   normalizeQaScore,
   normalizeRepeats,
   normalizeReworkType,
   normalizeStartDate,
   normalizeWaitingReason,
   patchTouchesQa,
+  resolveNewTaskQaRequired,
   stageActorName,
 } from './taskWorkflow'
 import {
@@ -244,6 +249,9 @@ function normalizeTask(t: Task): Task {
     // (legacy due dates keep their "Legacy / No Due Date" handling).
     original_due_date: t.original_due_date ?? null,
     estimated_hours: normalizeEstimatedHours(t.estimated_hours),
+    // Tasks stored before "QA Required?" existed load as No — nothing already
+    // on the board gets locked retroactively.
+    qa_required: normalizeQaRequired(t.qa_required),
     assigned_at: t.assigned_at ?? t.created_at ?? null,
     started_at: t.started_at ?? null,
     waiting_since: t.waiting_since ?? (status === 'waiting' ? (t.updated_at ?? null) : null),
@@ -2381,6 +2389,15 @@ export const localBackend: DataBackend = {
     if (!workerId) return { data: null, error: 'Choose who the task is for.' }
     if (!c.data.workers.some((w) => w.id === workerId)) return { data: null, error: 'Worker not found.' }
     const status = normalizeTaskStatus(input.status)
+    // "QA Required?" — defaults to Yes. Only the Owner / KPI access may ask for
+    // No (a repeating series just carries its own setting forward), and a
+    // QA-required task cannot be created straight into Completed by anyone else.
+    const reviewer = can(c, 'team_kpi.view')
+    const qa = resolveNewTaskQaRequired(input.qa_required, reviewer, Boolean(input.series_id))
+    if (qa.error) return { data: null, error: qa.error }
+    if (isQaCompletionBlocked({ qaRequired: qa.value, from: null, to: status }, reviewer)) {
+      return { data: null, error: QA_COMPLETION_BLOCKED_MESSAGE }
+    }
     const now = new Date().toISOString()
     const actor = stageActorName(c.user.role, c.data.workers.find((w) => w.id === c.user.workerId), c.user.email)
     const task: Task = {
@@ -2395,6 +2412,7 @@ export const localBackend: DataBackend = {
       due_date: input.due_date || null,
       // Stage timestamps + history for the brand-new card (§3).
       ...initialStageFields(status, now, actor),
+      qa_required: qa.value,
       estimated_hours: normalizeEstimatedHours(input.estimated_hours),
       // Recurrence (a "Recreate next" clone carries the series forward).
       repeats: normalizeRepeats(input.repeats),
@@ -2437,6 +2455,15 @@ export const localBackend: DataBackend = {
     if (patchTouchesQa(patch) && !can(c, 'team_kpi.view')) {
       return { data: null, error: 'Only the Owner or Project Manager can score QA.' }
     }
+    // Whether a task needs QA is the same people's call: a worker may send the
+    // value it already has, never a different one.
+    if (
+      patch.qa_required !== undefined &&
+      normalizeQaRequired(patch.qa_required) !== normalizeQaRequired(current.qa_required) &&
+      !can(c, 'team_kpi.view')
+    ) {
+      return { data: null, error: QA_SETTING_LOCKED_MESSAGE }
+    }
     // Only a task manager may hand a task to a different worker.
     const workerId = can(c, 'tasks.manage_all') && patch.worker_id ? patch.worker_id : current.worker_id
     const now = new Date().toISOString()
@@ -2449,6 +2476,10 @@ export const localBackend: DataBackend = {
         : { due_date: current.due_date, original_due_date: current.original_due_date, changed: false, missedDeadline: false }
 
     const status = patch.status ? normalizeTaskStatus(patch.status) : normalizeTaskStatus(current.status)
+    // A QA-required task only reaches Completed through the Owner / KPI access.
+    if (isQaCompletionBlocked({ qaRequired: normalizeQaRequired(current.qa_required), from: current.status, to: status }, can(c, 'team_kpi.view'))) {
+      return { data: null, error: QA_COMPLETION_BLOCKED_MESSAGE }
+    }
     const stageFields =
       patch.status && status !== normalizeTaskStatus(current.status)
         ? applyStageTransition(current, status, now, actor)
@@ -2465,6 +2496,8 @@ export const localBackend: DataBackend = {
       original_due_date: due.original_due_date,
       start_date: patch.start_date !== undefined ? normalizeStartDate(patch.start_date) : current.start_date,
       estimated_hours: patch.estimated_hours !== undefined ? normalizeEstimatedHours(patch.estimated_hours) : current.estimated_hours,
+      // Explicit, so a stray `qa_required: undefined` in a patch cannot wipe it.
+      qa_required: patch.qa_required !== undefined ? normalizeQaRequired(patch.qa_required) : normalizeQaRequired(current.qa_required),
       waiting_reason: patch.waiting_reason !== undefined ? normalizeWaitingReason(patch.waiting_reason) : current.waiting_reason,
       qa_score: patch.qa_score !== undefined ? normalizeQaScore(patch.qa_score) : current.qa_score,
       rework_type: patch.rework_type !== undefined ? normalizeReworkType(patch.rework_type) : current.rework_type,
@@ -2531,6 +2564,9 @@ export const localBackend: DataBackend = {
       return { data: null, error: 'You can only move your own tasks.' }
     }
     const target = normalizeTaskStatus(status)
+    if (isQaCompletionBlocked({ qaRequired: normalizeQaRequired(task.qa_required), from: task.status, to: target }, can(c, 'team_kpi.view'))) {
+      return { data: null, error: QA_COMPLETION_BLOCKED_MESSAGE }
+    }
     const now = new Date().toISOString()
     const actor = stageActorName(c.user.role, c.data.workers.find((w) => w.id === c.user.workerId), c.user.email)
     // Stage hop: stamps Waiting Since / Submitted for Review / Completed At
@@ -2590,6 +2626,8 @@ export const localBackend: DataBackend = {
       priority: task.priority,
       due_date: nextDue,
       estimated_hours: task.estimated_hours,
+      // The occurrence keeps the template's QA setting (see planRecreate).
+      qa_required: normalizeQaRequired(task.qa_required),
       repeats,
       repeat_until: task.repeat_until,
       series_id: task.series_id ?? task.id,

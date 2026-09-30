@@ -65,6 +65,8 @@ function seedTask(p: {
   due_date: string | null
   start_date?: string | null
   estimated_hours?: number | null
+  /** "QA Required?" — see Task.qa_required. */
+  qa_required?: boolean
   created_at: string
   updated_at: string
   completed_at?: string | null
@@ -109,6 +111,10 @@ function seedTask(p: {
     start_date: p.start_date ?? p.created_at.slice(0, 10),
     original_due_date: p.original_due_date ?? null,
     estimated_hours: p.estimated_hours ?? null,
+    // Sample cards that went through (or sit in) review obviously needed QA;
+    // the rest are plain cards that predate the rule (No) unless a sample
+    // below says otherwise.
+    qa_required: p.qa_required ?? (p.qa_score != null || status === 'for_review'),
     assigned_at: p.assigned_at ?? p.created_at,
     started_at: p.started_at ?? (status === 'in_progress' || status === 'completed' ? p.created_at : null),
     waiting_since: p.waiting_since ?? (status === 'waiting' ? p.updated_at : null),
@@ -248,6 +254,9 @@ export function buildDemoSeed() {
       priority: 'high',
       due_date: at(2, 9).toISOString().slice(0, 10),
       estimated_hours: 10,
+      // QA Required = Yes: John sends it to For Review; only the Owner (or
+      // someone with KPI access) can move it to Completed.
+      qa_required: true,
       created_at: daysAgo(3).toISOString(),
       updated_at: daysAgo(1).toISOString(),
     }),
@@ -261,6 +270,8 @@ export function buildDemoSeed() {
       priority: 'medium',
       due_date: at(6, 9).toISOString().slice(0, 10),
       estimated_hours: 5,
+      // QA Required = No: Sarah can move this one to Completed herself.
+      qa_required: false,
       created_by_role: 'worker',
       created_at: daysAgo(2).toISOString(),
       updated_at: daysAgo(2).toISOString(),

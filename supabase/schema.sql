@@ -234,6 +234,11 @@ create table if not exists public.tasks (
   original_due_date date,
   -- Estimated hours → schedule-aware workload on the Team KPI page.
   estimated_hours numeric check (estimated_hours is null or estimated_hours >= 0),
+  -- "QA Required?" Yes (true): a worker cannot move the task to Completed —
+  -- only the Owner and people with KPI access (team_kpi.view) can. No (false):
+  -- the worker completes it themselves. New tasks default to Yes; tasks that
+  -- existed before the column count as No (see the upgrade step below).
+  qa_required     boolean not null default true,
   -- Stage timestamps (auto-set by the app as cards move).
   assigned_at       timestamptz,
   started_at        timestamptz,
@@ -285,6 +290,11 @@ alter table public.tasks add column if not exists rework_required boolean;
 alter table public.tasks add column if not exists rework_type text;
 alter table public.tasks add column if not exists rework_notes text;
 alter table public.tasks add column if not exists stage_history jsonb not null default '[]'::jsonb;
+-- "QA Required?": on a database that already has tasks, stamp every existing
+-- row No first (nothing is locked retroactively), THEN make Yes the default for
+-- new ones. (A fresh install already has the column from CREATE TABLE above.)
+alter table public.tasks add column if not exists qa_required boolean not null default false;
+alter table public.tasks alter column qa_required set default true;
 -- Every task has a date started: back-fill rows written before the column
 -- existed from their creation date (UTC day, matching what the app reads).
 update public.tasks set start_date = (created_at at time zone 'utc')::date where start_date is null;
@@ -2481,3 +2491,86 @@ create trigger trg_kpi_audit_events_user before insert on public.kpi_audit_event
 grant select, insert, update, delete on public.monthly_goals to authenticated;
 grant select, insert, update, delete on public.bonus_decisions to authenticated;
 grant select, insert, update, delete on public.kpi_audit_events to authenticated;
+
+
+-- ============================================================================
+-- "QA Required?" guard (existing databases: supabase/RUN-THIS-task-qa-required.sql)
+-- ============================================================================
+-- tasks.qa_required = Yes means a worker cannot move the task to Completed —
+-- only the Owner and people with KPI access (team_kpi.view) can. The app, the
+-- Claude connector and this trigger all apply the rule, so a hand-made API
+-- request cannot get around it. For anyone without KPI access the trigger
+-- refuses: moving a QA-required task into Completed, changing the setting, and
+-- creating a task without QA (except the next occurrence of a repeating series
+-- that already has a no-QA card). The Owner, KPI holders and the service role
+-- / SQL editor (no signed-in user) are never blocked.
+
+create or replace function public.enforce_task_qa_required()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+declare
+  -- The three things this guard cares about:
+  v_changes_flag boolean := false;   -- an existing task's QA Required setting is being changed
+  v_creates_no_qa boolean := false;  -- a new task is being created WITHOUT QA
+  v_completes_qa boolean := false;   -- a QA-required task is arriving in Completed (new, or from another stage)
+  v_series text;
+begin
+  -- (OLD only exists on UPDATE, so it is only ever read inside this branch.)
+  if tg_op = 'UPDATE' then
+    v_changes_flag := new.qa_required is distinct from old.qa_required;
+    v_completes_qa := new.qa_required is true and new.status = 'completed' and old.status is distinct from 'completed';
+  else
+    v_creates_no_qa := new.qa_required is not true;
+    v_completes_qa := new.qa_required is true and new.status = 'completed';
+  end if;
+
+  -- Fast path: almost every write (re-ordering a column, moving a card between
+  -- other stages, editing a title) touches none of the above.
+  if not (v_changes_flag or v_creates_no_qa or v_completes_qa) then
+    return new;
+  end if;
+
+  -- The SQL editor, migrations and the service role have no signed-in user;
+  -- the Owner and anyone with KPI access decide QA (has_permission() is true
+  -- for the Owner).
+  if auth.uid() is null or public.has_permission('team_kpi.view') then
+    return new;
+  end if;
+
+  if v_changes_flag then
+    raise exception 'Only the Owner or someone with KPI access can change whether a task requires QA.'
+      using errcode = '42501';
+  end if;
+
+  if v_creates_no_qa then
+    -- A worker's own tasks are created with QA. The one exception is the next
+    -- occurrence of a repeating series that already has a no-QA card: it just
+    -- carries the series' setting forward. (to_jsonb() so this keeps working on
+    -- a database without the recurring-task columns.)
+    v_series := to_jsonb(new) ->> 'series_id';
+    if v_series is null or not exists (
+      select 1
+        from public.tasks s
+       where s.qa_required is false
+         and (s.id::text = v_series or to_jsonb(s) ->> 'series_id' = v_series)
+    ) then
+      raise exception 'Only the Owner or someone with KPI access can create a task without QA.'
+        using errcode = '42501';
+    end if;
+  end if;
+
+  if v_completes_qa then
+    raise exception 'This task requires QA — only the Owner or someone with KPI access can move it to Completed.'
+      using errcode = '42501';
+  end if;
+
+  return new;
+end
+$$;
+
+drop trigger if exists trg_tasks_qa_required on public.tasks;
+create trigger trg_tasks_qa_required
+  before insert or update on public.tasks
+  for each row execute function public.enforce_task_qa_required();

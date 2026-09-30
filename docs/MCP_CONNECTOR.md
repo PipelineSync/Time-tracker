@@ -79,6 +79,17 @@ One nuance worth knowing: **every account can add and move tasks on its own
 board**, matching the app's "Add task" button. Touching someone else's board
 needs `tasks.manage_all`, as it does in the UI.
 
+A second task rule is **QA Required?**. Every task has a `qa_required` flag
+(Yes by default) and `create_task` / `update_task` accept it as a boolean.
+Completing a QA-required task — `update_task` with `status: completed`, or
+`create_task` straight into `completed` — is reserved for the Owner and for
+accounts holding `team_kpi.view` (the people who can press **Review** in the
+app). Everyone else gets a refusal that points them to `for_review`, and
+nothing is saved. Only those same accounts may change the flag or create a
+task with `qa_required: false`. The database trigger added by
+`supabase/RUN-THIS-task-qa-required.sql` enforces the same rule, so it holds
+however a row is written.
+
 ### 3. Authorization codes and tokens are stored hashed
 
 `mcp_oauth_codes` and `mcp_oauth_tokens` never hold a usable credential. A

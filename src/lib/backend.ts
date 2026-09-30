@@ -92,6 +92,13 @@ export interface CreateTaskInput {
   due_date?: string | null
   /** Estimated hours — the primary workload input. */
   estimated_hours?: number | null
+  /**
+   * "QA Required?" (see Task.qa_required). Omit it to get the default — Yes.
+   * Only the Owner and people with KPI access may ask for No; everyone else's
+   * tasks are always created with QA required (a recreated / started
+   * occurrence of a repeating task just inherits its series' setting).
+   */
+  qa_required?: boolean
   /** Recurrence — 'none' by default. See Task.repeats. */
   repeats?: TaskRepeats
   /** Optional series end date; 'Recreate next' stops offering past it. */

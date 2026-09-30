@@ -35,6 +35,10 @@ export const state = {
   // setting this to the error message to surface.
   workersPermissionsColumnMissing: false,
   workersColorColumnMissing: false,
+  // Simulates a database that has not run supabase/RUN-THIS-task-qa-required.sql:
+  // a tasks insert/update that names `qa_required` fails the way PostgREST does
+  // (PGRST204, "Could not find the 'qa_required' column of 'tasks'…").
+  tasksQaColumnMissing: false,
 }
 
 export function resetState() {
@@ -56,6 +60,7 @@ export function resetState() {
   state.lastWorkersUpdatePayload = null
   state.workersPermissionsColumnMissing = false
   state.workersColorColumnMissing = false
+  state.tasksQaColumnMissing = false
 }
 
 function matches(row, filters) {
@@ -72,6 +77,12 @@ function legacyColorConstraintError() {
     code: '23514',
     message: 'new row for relation "clients" violates check constraint "clients_color_check"',
   }
+}
+
+/** The PostgREST error for a write that names a column the table lacks. */
+function tasksQaColumnError(payload) {
+  if (!state.tasksQaColumnMissing || !payload || !('qa_required' in payload)) return null
+  return { code: 'PGRST204', message: "Could not find the 'qa_required' column of 'tasks' in the schema cache" }
 }
 
 /** Non-null when this write would trip the legacy preset-only constraint. */
@@ -196,6 +207,8 @@ function from(table) {
           select: () => ({
             single: async () => {
               const row = inserted[0] || {}
+              const missing = tasksQaColumnError(row)
+              if (missing) return { data: null, error: missing }
               const full = {
                 id: row.id || `task-${state.tasks.length + 1}`,
                 position: 0,
@@ -252,6 +265,8 @@ function from(table) {
                 }
                 const violation = table === 'clients' ? clientColorViolation(payload) : null
                 if (violation) return { data: null, error: violation }
+                const missingQa = table === 'tasks' ? tasksQaColumnError(payload) : null
+                if (missingQa) return { data: null, error: missingQa }
                 const idx = state[table]?.findIndex?.((r) => matches(r, filters))
                 if (idx == null || idx < 0) return { data: null, error: { message: 'no rows matched' } }
                 state[table][idx] = { ...state[table][idx], ...payload, updated_at: new Date().toISOString() }
