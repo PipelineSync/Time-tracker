@@ -47,6 +47,7 @@ import { localBackend } from './localDb'
 import { supabaseBackend, isSupabaseConfigured, ACCOUNT_DEACTIVATED_MESSAGE } from './supabaseDb'
 import { toast } from 'sonner'
 import { notifySlack } from './slack'
+import { QA_COMPLETION_BLOCKED_MESSAGE, isQaCompletionBlocked } from './taskWorkflow'
 import { playCue, playCues, readTeamSoundsPref, writeTeamSoundsPref } from './sounds'
 import { diffTimerSnapshots, snapshotsEqual, timerSnapshots, type TimerSnapshot } from './teamSounds'
 import { formatMinutes } from './utils'
@@ -1540,6 +1541,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const moveTask = useCallback(async (id: string, status: TaskStatus, position: number) => {
     const previous = tasks.find((t) => t.id === id)
+    // A QA-required task only reaches Completed through the Owner / KPI
+    // access. Say so up front instead of flashing the card into the lane and
+    // snapping it back when the backend refuses (which it still would).
+    if (previous && isQaCompletionBlocked({ qaRequired: previous.qa_required, from: previous.status, to: status }, can('team_kpi.view'))) {
+      toast.error(QA_COMPLETION_BLOCKED_MESSAGE)
+      return null
+    }
     // Optimistic: re-rank the destination column around the dropped card so
     // the board shows the drop's exact result — a card dropped on top stays
     // on top — until the backend's authoritative numbering arrives.
@@ -1575,7 +1583,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
     }
     return res.data
-  }, [backend, refreshTasks, tasks, workers, clients, isAdmin, myWorker, user])
+  }, [backend, refreshTasks, tasks, workers, clients, isAdmin, myWorker, user, can])
 
   /** "Start an occurrence" on the Recurring shelf (see DataBackend). */
   const startRecurringOccurrence = useCallback(async (id: string) => {

@@ -149,7 +149,7 @@ export function EmployeePerformanceTable({
                       </span>,
                       'score',
                       emp.worker.id,
-                      emp.score === null ? 'No scored components yet' : `On-time ${fmtPct(emp.scoreParts.onTime)} · QA ${fmtPct(emp.scoreParts.qa)} · Goal ${fmtPct(emp.scoreParts.goal)} · Rework ${fmtPct(emp.scoreParts.rework)}`,
+                      emp.score === null ? 'No scored components yet' : `On-time ${fmtPct(emp.scoreParts.onTime)} · QA ${fmtPct(emp.scoreParts.qa)} · Goal ${fmtPct(emp.scoreParts.goal)}`,
                     )}
                   </td>
                   <td className="px-4 py-2">

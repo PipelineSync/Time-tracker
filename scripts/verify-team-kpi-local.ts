@@ -12,6 +12,27 @@
  *
  * Run: npx tsx scripts/verify-team-kpi-local.ts
  */
+
+// Run on a fixed calendar day, not on whatever day CI happens to fire. The
+// workload maths divide the open estimated hours by the workdays LEFT in the
+// month, and the demo seed sizes its cards against the clock too — so in the
+// last days of any month the fixtures overshot their target bands and the
+// workload assertions failed for reasons unrelated to the code under test.
+// "Now" is moved to midday on Wed 10 Jun 2026 and then keeps ticking (a
+// shifted clock, not a frozen one, so timestamps and ids stay distinct).
+// Everything below loads after this, so the app code sees the same clock.
+{
+  const RealDate = Date
+  const shiftMs = new RealDate(2026, 5, 10, 12, 0, 0).getTime() - RealDate.now()
+  const shiftedNow = () => RealDate.now() + shiftMs
+  globalThis.Date = new Proxy(RealDate, {
+    construct: (target, args, newTarget) =>
+      args.length === 0 ? new target(shiftedNow()) : Reflect.construct(target, args, newTarget),
+    apply: () => new RealDate(shiftedNow()).toString(),
+    get: (target, prop, receiver) => (prop === 'now' ? shiftedNow : Reflect.get(target, prop, receiver)),
+  })
+}
+
 // Minimal browser stub so storage.ts works in Node.
 const mem = new Map<string, string>()
 ;(globalThis as any).window = {
@@ -134,9 +155,12 @@ async function main() {
   assert(empKpi.onTimePct !== null, `Jasper's on-time % computes (${empKpi.onTimePct})`)
 
   const weights = kpi.KPI_WEIGHTS
-  const weightSum = weights.onTime + weights.qa + weights.goal + weights.rework
-  assert(Math.abs(weightSum - 1) < 1e-9, 'the KPI weights sum to 100% (30/30/25/15)')
-  assert(weights.onTime === 0.3 && weights.qa === 0.3 && weights.goal === 0.25 && weights.rework === 0.15, 'the weights match the spec')
+  const weightSum = weights.onTime + weights.qa + weights.goal
+  assert(Math.abs(weightSum - 1) < 1e-9, 'the KPI weights sum to 100% (40/40/20)')
+  assert(
+    weights.onTime === 0.4 && weights.qa === 0.4 && weights.goal === 0.2 && !('rework' in weights),
+    'the weights match the spec: 40% on-time + 40% QA + 20% monthly goal, no rework share',
+  )
 
   // ---- 9. schedule-aware workload lands on the seeded targets ----
   const band = (label: string, worker: typeof jasper, target: number) => {
@@ -260,7 +284,16 @@ async function main() {
     }),
   )
   const scoreAfterGrant = kpi.computeTeamKpi(rowsAfterGrant).score
-  assert(scoreAfterGrant !== null && scoreAfterGrant !== baseTeamScore, `team score recomputes without him (${scoreAfterGrant} vs ${baseTeamScore})`)
+  // The team score is the (rounded) mean of the members' own scores, so check
+  // exactly that over the members who are left. Comparing it with the old
+  // figure is not a safe test: dropping one person can move the mean by less
+  // than a point, and both round to the same whole number.
+  const remainingScores = rowsAfterGrant.filter((r) => r.score !== null).map((r) => r.score as number)
+  const expectedAfterGrant = Math.round(remainingScores.reduce((s, v) => s + v, 0) / remainingScores.length)
+  assert(
+    rowsAfterGrant.length === baseEmpRows.length - 1 && scoreAfterGrant === expectedAfterGrant,
+    `team score recomputes without him (${scoreAfterGrant} from ${rowsAfterGrant.length} of ${baseEmpRows.length} members; was ${baseTeamScore})`,
+  )
 
   // employee filter omits him
   const filterOptions = workersAfterGrant.filter((w) => w.status === 'active' && kpi.isKpiSubject(w))

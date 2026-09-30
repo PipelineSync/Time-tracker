@@ -65,6 +65,8 @@ function seedTask(p: {
   due_date: string | null
   start_date?: string | null
   estimated_hours?: number | null
+  /** "QA Required?" — see Task.qa_required. */
+  qa_required?: boolean
   created_at: string
   updated_at: string
   completed_at?: string | null
@@ -109,6 +111,10 @@ function seedTask(p: {
     start_date: p.start_date ?? p.created_at.slice(0, 10),
     original_due_date: p.original_due_date ?? null,
     estimated_hours: p.estimated_hours ?? null,
+    // Sample cards that went through (or sit in) review obviously needed QA;
+    // the rest are plain cards that predate the rule (No) unless a sample
+    // below says otherwise.
+    qa_required: p.qa_required ?? (p.qa_score != null || status === 'for_review'),
     assigned_at: p.assigned_at ?? p.created_at,
     started_at: p.started_at ?? (status === 'in_progress' || status === 'completed' ? p.created_at : null),
     waiting_since: p.waiting_since ?? (status === 'waiting' ? p.updated_at : null),
@@ -166,15 +172,18 @@ export function buildDemoSeed() {
   // Supervisor set, so signing in as her shows the team board and team time
   // without any of the money screens.
   const workers: Worker[] = [
-    { id: 'w-seed-1', name: 'John Smith', email: 'john@example.com', hourly_rate: 20, status: 'active', position: 'Team member', avatar_url: null, payment_methods: ['cash'], qr_code_url: null, permissions: [], workdays: [...MON_FRI], weekly_capacity_hours: DEFAULT_WEEKLY_CAPACITY_HOURS, color: null, created_at: daysAgo(40).toISOString(), updated_at: daysAgo(40).toISOString() },
-    { id: 'w-seed-2', name: 'Sarah Johnson', email: 'sarah@example.com', hourly_rate: 25, status: 'active', position: 'Team member', avatar_url: null, payment_methods: ['cash', 'qr'], qr_code_url: demoQrDataUrl('sarah@example.com'), permissions: [...PERMISSION_PRESETS.supervisor.permissions], workdays: [...MON_FRI], weekly_capacity_hours: DEFAULT_WEEKLY_CAPACITY_HOURS, color: 'emerald', created_at: daysAgo(30).toISOString(), updated_at: daysAgo(30).toISOString() },
-    { id: 'w-seed-3', name: 'Mike Brown', email: 'mike@example.com', hourly_rate: 18, status: 'inactive', position: 'Team member', avatar_url: null, payment_methods: ['qr'], qr_code_url: demoQrDataUrl('mike@example.com'), permissions: [], workdays: [...MON_FRI], weekly_capacity_hours: DEFAULT_WEEKLY_CAPACITY_HOURS, color: null, created_at: daysAgo(20).toISOString(), updated_at: daysAgo(20).toISOString() },
+    { id: 'w-seed-1', name: 'John Smith', email: 'john@example.com', hourly_rate: 20, status: 'active', position: 'Team member', avatar_url: null, payment_methods: ['cash'], qr_code_url: null, permissions: [], workdays: [...MON_FRI], weekly_capacity_hours: DEFAULT_WEEKLY_CAPACITY_HOURS, color: null, kpi_role: null, created_at: daysAgo(40).toISOString(), updated_at: daysAgo(40).toISOString() },
+    { id: 'w-seed-2', name: 'Sarah Johnson', email: 'sarah@example.com', hourly_rate: 25, status: 'active', position: 'Team member', avatar_url: null, payment_methods: ['cash', 'qr'], qr_code_url: demoQrDataUrl('sarah@example.com'), permissions: [...PERMISSION_PRESETS.supervisor.permissions], workdays: [...MON_FRI], weekly_capacity_hours: DEFAULT_WEEKLY_CAPACITY_HOURS, color: 'emerald', kpi_role: null, created_at: daysAgo(30).toISOString(), updated_at: daysAgo(30).toISOString() },
+    { id: 'w-seed-3', name: 'Mike Brown', email: 'mike@example.com', hourly_rate: 18, status: 'inactive', position: 'Team member', avatar_url: null, payment_methods: ['qr'], qr_code_url: demoQrDataUrl('mike@example.com'), permissions: [], workdays: [...MON_FRI], weekly_capacity_hours: DEFAULT_WEEKLY_CAPACITY_HOURS, color: null, kpi_role: null, created_at: daysAgo(20).toISOString(), updated_at: daysAgo(20).toISOString() },
     // ---- The PipelineSync team (roles & schedules per the KPI spec) ----
-    { id: 'w-jasper', name: 'Jasper Maristela', email: 'jasper@example.com', hourly_rate: 30, status: 'active', position: 'Senior HubSpot / Zapier / AI Specialist', avatar_url: null, payment_methods: ['cash'], qr_code_url: null, permissions: [], workdays: [...MON_FRI], weekly_capacity_hours: 40, color: 'blue', created_at: daysAgo(120).toISOString(), updated_at: daysAgo(120).toISOString() },
-    { id: 'w-matthew', name: 'Matthew Luzung', email: 'matthew@example.com', hourly_rate: 28, status: 'active', position: 'Senior HubSpot / Web Development', avatar_url: null, payment_methods: ['cash'], qr_code_url: null, permissions: [], workdays: [...TUE_SAT], weekly_capacity_hours: 40, color: 'violet', created_at: daysAgo(115).toISOString(), updated_at: daysAgo(115).toISOString() },
-    { id: 'w-jea', name: 'Jea Crizel Pineda', email: 'jea@example.com', hourly_rate: 18, status: 'active', position: 'Outreach Strategist / HubSpot Junior', avatar_url: null, payment_methods: ['cash'], qr_code_url: null, permissions: [], workdays: [...TUE_SAT], weekly_capacity_hours: 40, color: 'aqua', created_at: daysAgo(110).toISOString(), updated_at: daysAgo(110).toISOString() },
-    { id: 'w-april', name: 'April Joy Manabat', email: 'april@example.com', hourly_rate: 16, status: 'active', position: 'Outreach / HubSpot Junior', avatar_url: null, payment_methods: ['cash'], qr_code_url: null, permissions: [], workdays: [...TUE_SAT], weekly_capacity_hours: 40, color: 'amber', created_at: daysAgo(105).toISOString(), updated_at: daysAgo(105).toISOString() },
-    { id: 'w-mary', name: 'Mary Gracelyn', email: 'mary@example.com', hourly_rate: 22, status: 'active', position: 'Social Media Manager', avatar_url: null, payment_methods: ['cash', 'qr'], qr_code_url: demoQrDataUrl('mary@example.com'), permissions: [], workdays: [...MON_FRI], weekly_capacity_hours: 40, color: 'rose', created_at: daysAgo(130).toISOString(), updated_at: daysAgo(130).toISOString() },
+    // kpi_role picks each person's Monthly Goal formula: Jasper & Matthew =
+    // client & project work, Jea & April Joy = maintenance & outreach, Mary =
+    // social media & content.
+    { id: 'w-jasper', name: 'Jasper Maristela', email: 'jasper@example.com', hourly_rate: 30, status: 'active', position: 'Senior HubSpot / Zapier / AI Specialist', avatar_url: null, payment_methods: ['cash'], qr_code_url: null, permissions: [], workdays: [...MON_FRI], weekly_capacity_hours: 40, color: 'blue', kpi_role: 'project', created_at: daysAgo(120).toISOString(), updated_at: daysAgo(120).toISOString() },
+    { id: 'w-matthew', name: 'Matthew Luzung', email: 'matthew@example.com', hourly_rate: 28, status: 'active', position: 'Senior HubSpot / Web Development', avatar_url: null, payment_methods: ['cash'], qr_code_url: null, permissions: [], workdays: [...TUE_SAT], weekly_capacity_hours: 40, color: 'violet', kpi_role: 'project', created_at: daysAgo(115).toISOString(), updated_at: daysAgo(115).toISOString() },
+    { id: 'w-jea', name: 'Jea Crizel Pineda', email: 'jea@example.com', hourly_rate: 18, status: 'active', position: 'Outreach Strategist / HubSpot Junior', avatar_url: null, payment_methods: ['cash'], qr_code_url: null, permissions: [], workdays: [...TUE_SAT], weekly_capacity_hours: 40, color: 'aqua', kpi_role: 'maintenance_outreach', created_at: daysAgo(110).toISOString(), updated_at: daysAgo(110).toISOString() },
+    { id: 'w-april', name: 'April Joy Manabat', email: 'april@example.com', hourly_rate: 16, status: 'active', position: 'Outreach / HubSpot Junior', avatar_url: null, payment_methods: ['cash'], qr_code_url: null, permissions: [], workdays: [...TUE_SAT], weekly_capacity_hours: 40, color: 'amber', kpi_role: 'maintenance_outreach', created_at: daysAgo(105).toISOString(), updated_at: daysAgo(105).toISOString() },
+    { id: 'w-mary', name: 'Mary Gracelyn', email: 'mary@example.com', hourly_rate: 22, status: 'active', position: 'Social Media Manager', avatar_url: null, payment_methods: ['cash', 'qr'], qr_code_url: demoQrDataUrl('mary@example.com'), permissions: [], workdays: [...MON_FRI], weekly_capacity_hours: 40, color: 'rose', kpi_role: 'social_media', created_at: daysAgo(130).toISOString(), updated_at: daysAgo(130).toISOString() },
   ]
 
   // A small master list so the client dropdowns, filters and the "Hours by
@@ -248,6 +257,9 @@ export function buildDemoSeed() {
       priority: 'high',
       due_date: at(2, 9).toISOString().slice(0, 10),
       estimated_hours: 10,
+      // QA Required = Yes: John sends it to For Review; only the Owner (or
+      // someone with KPI access) can move it to Completed.
+      qa_required: true,
       created_at: daysAgo(3).toISOString(),
       updated_at: daysAgo(1).toISOString(),
     }),
@@ -261,6 +273,8 @@ export function buildDemoSeed() {
       priority: 'medium',
       due_date: at(6, 9).toISOString().slice(0, 10),
       estimated_hours: 5,
+      // QA Required = No: Sarah can move this one to Completed herself.
+      qa_required: false,
       created_by_role: 'worker',
       created_at: daysAgo(2).toISOString(),
       updated_at: daysAgo(2).toISOString(),

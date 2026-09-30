@@ -91,6 +91,12 @@ export const state = {
   failRefresh: false,
   /** Every request the server has served, for assertions. */
   requests: [],
+  /**
+   * Columns a table does NOT have, e.g. `{ tasks: ['qa_required'] }` — a
+   * database that has not run a migration yet. A write naming one fails the way
+   * PostgREST does (400, PGRST204); the harness clears it with resetState().
+   */
+  missingColumns: {},
 }
 
 export function resetState() {
@@ -99,6 +105,26 @@ export function resetState() {
   state.users.clear()
   state.failRefresh = false
   state.requests.length = 0
+  state.missingColumns = {}
+}
+
+/** The PostgREST error for a write that names a column the table lacks (or null). */
+function missingColumnError(tableName, body) {
+  const missing = state.missingColumns[tableName]
+  if (!missing || missing.length === 0) return null
+  for (const row of Array.isArray(body) ? body : [body]) {
+    for (const column of missing) {
+      if (row && Object.prototype.hasOwnProperty.call(row, column)) {
+        return {
+          code: 'PGRST204',
+          message: `Could not find the '${column}' column of '${tableName}' in the schema cache`,
+          details: null,
+          hint: null,
+        }
+      }
+    }
+  }
+  return null
 }
 
 /** Register an account that can sign in at /oauth/authorize. */
@@ -436,6 +462,8 @@ export async function startFakeSupabase() {
 
     if (request.method === 'POST') {
       const body = await readBody(request)
+      const missingColumn = missingColumnError(tableName, body)
+      if (missingColumn) return send(response, 400, missingColumn)
       const incoming = Array.isArray(body) ? body : [body]
       const inserted = incoming.map((row) => ({
         id: row.id ?? randomUUID(),
@@ -454,6 +482,8 @@ export async function startFakeSupabase() {
 
     if (request.method === 'PATCH') {
       const body = await readBody(request)
+      const missingColumn = missingColumnError(tableName, body)
+      if (missingColumn) return send(response, 400, missingColumn)
       let filtered = visibleRows(tableName, rows, actor)
       for (const filter of parseFilters(url.searchParams)) {
         filtered = filtered.filter((row) => matches(row, filter.column, filter))

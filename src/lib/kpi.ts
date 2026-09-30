@@ -4,10 +4,18 @@
  * network or React: pure functions so the verify script (and any click-through
  * drill-down) can trace each figure back to its source tasks.
  *
- * Formula (shared targets, §8):
- *   KPI = 30% On-Time + 30% QA + 25% Monthly Goal + 15% Rework Performance
+ * Formula:
+ *   KPI = 40% On-Time + 40% QA + 20% Monthly Goal
  * Components with no data in the month are excluded and the remaining weights
  * renormalised — an empty month shows "—", never a fake 0.
+ *
+ * Monthly Goal depends on the employee's KPI role (Worker.kpi_role):
+ *  - a role splits the month into two kinds of work — PLANNED (one-off
+ *    assigned tasks) and RECURRING (repeating tasks + anything for the Internal
+ *    client) — scores each on "completed ÷ due that month" and blends them
+ *    with the role's weights (KPI_ROLE_GOALS: 80/20, 70/30 or 60/40);
+ *  - no role: completions ÷ the Tasks plan the Owner typed in, as before.
+ * Rework is still measured (rate, Needs Attention) but no longer scored.
  *
  * Rules honoured here:
  *  - Legacy tasks (no due date) are excluded from on-time math.
@@ -22,6 +30,7 @@
 import type {
   BonusDecision,
   Client,
+  KpiRole,
   MonthlyGoal,
   QaScore,
   Task,
@@ -29,7 +38,7 @@ import type {
   TimeEntry,
   Worker,
 } from './types'
-import { isEmployeeCausedRework, normalizeTaskStage, TASK_STATUSES, UNASSIGNED_CLIENT_NAME } from './types'
+import { isEmployeeCausedRework, normalizeKpiRole, normalizeTaskStage, TASK_STATUSES, UNASSIGNED_CLIENT_NAME } from './types'
 import { isOverdueDate } from './utils'
 
 // ---- Month / date helpers ---------------------------------------------------
@@ -344,7 +353,188 @@ export const KPI_TARGETS = {
   goal: 90,
 } as const
 
-export const KPI_WEIGHTS = { onTime: 0.3, qa: 0.3, goal: 0.25, rework: 0.15 } as const
+/** The score's weights: 40% on-time + 40% QA + 20% Monthly Goal. */
+export const KPI_WEIGHTS = { onTime: 0.4, qa: 0.4, goal: 0.2 } as const
+
+/** "40 / 40 / 20" — the weights as the dashboard copy shows them. */
+export function kpiWeightsLabel(): string {
+  return [KPI_WEIGHTS.onTime, KPI_WEIGHTS.qa, KPI_WEIGHTS.goal].map((w) => Math.round(w * 100)).join(' / ')
+}
+
+// ---- Monthly Goal by KPI role -----------------------------------------------
+
+/**
+ * The two kinds of work a role's Monthly Goal is split into.
+ *  - 'recurring': a repeating task (or an occurrence started from one) and
+ *    anything done for the Internal client — the maintenance / recurring /
+ *    internal side of each role.
+ *  - 'planned': every other (one-off) task — new-client & project work,
+ *    outreach and other assigned work, planned content deliverables.
+ */
+export type GoalBucketKey = 'planned' | 'recurring'
+
+export interface GoalBucketSpec {
+  key: GoalBucketKey
+  /** What this bucket is called for this role. */
+  label: string
+  /** Its share of the Monthly Goal (the two shares of a role add up to 1). */
+  weight: number
+}
+
+/** The Monthly Goal formula of each KPI role. */
+export const KPI_ROLE_GOALS: Record<KpiRole, readonly [GoalBucketSpec, GoalBucketSpec]> = {
+  // Jasper & Matthew: 80% planned new-client/project work + 20% recurring/internal work.
+  project: [
+    { key: 'planned', label: 'Planned new-client / project work', weight: 0.8 },
+    { key: 'recurring', label: 'Recurring / internal work', weight: 0.2 },
+  ],
+  // Jea & Joy: 70% maintenance tasks + 30% outreach / other assigned work.
+  maintenance_outreach: [
+    { key: 'recurring', label: 'Maintenance tasks', weight: 0.7 },
+    { key: 'planned', label: 'Outreach / other assigned work', weight: 0.3 },
+  ],
+  // Mary: 60% recurring social media tasks + 40% planned content deliverables.
+  social_media: [
+    { key: 'recurring', label: 'Recurring social media tasks', weight: 0.6 },
+    { key: 'planned', label: 'Planned content deliverables', weight: 0.4 },
+  ],
+}
+
+/** "80% planned new-client / project work + 20% recurring / internal work". */
+export function describeKpiRole(role: KpiRole): string {
+  return KPI_ROLE_GOALS[role]
+    .map((b) => `${Math.round(b.weight * 100)}% ${b.label.charAt(0).toLowerCase()}${b.label.slice(1)}`)
+    .join(' + ')
+}
+
+/** The client name that marks a task as internal work (matched case-insensitively). */
+export const INTERNAL_CLIENT_NAME = 'Internal'
+
+/** The ids of the clients that are the team's own internal work. */
+export function internalClientIdsOf(clients: Pick<Client, 'id' | 'name'>[]): Set<string> {
+  const ids = new Set<string>()
+  for (const c of clients) {
+    if ((c.name ?? '').trim().toLowerCase() === INTERNAL_CLIENT_NAME.toLowerCase()) ids.add(c.id)
+  }
+  return ids
+}
+
+/** A repeating task, or an occurrence started from one (they share a series). */
+export function isRecurringWork(task: Task): boolean {
+  return (task.repeats != null && task.repeats !== 'none') || task.series_id != null
+}
+
+/** Which Monthly Goal bucket a task counts toward. */
+export function goalBucketOf(task: Task, internalClientIds: ReadonlySet<string>): GoalBucketKey {
+  if (isRecurringWork(task)) return 'recurring'
+  if (task.client_id != null && internalClientIds.has(task.client_id)) return 'recurring'
+  return 'planned'
+}
+
+/**
+ * Is the task part of `month`'s plan? It has to be real work (the Recurring
+ * shelf holds templates, not work) that was DUE in the month — judged on the
+ * original deadline, like on-time, so pushing a date never moves a task out of
+ * the month it was due. Legacy cards without a due date belong to no month.
+ */
+export function isPlannedInMonth(task: Task, month: string): boolean {
+  if (normalizeTaskStage(task.status) === 'recurring') return false
+  const due = effectiveDueDate(task)
+  return !!due && due.slice(0, 7) === month
+}
+
+/** Completed on or before the last day of `month`. */
+export function isDoneByMonthEnd(task: Task, month: string): boolean {
+  if (normalizeTaskStage(task.status) !== 'completed') return false
+  const done = (task.completed_at ?? '').slice(0, 10)
+  // A completed card with no stamp (very old rows) is taken as done.
+  return !done || done <= monthRange(month).to
+}
+
+/** One task behind a role's Monthly Goal — what the drill-down lists. */
+export interface GoalSourceTask {
+  task: Task
+  bucket: GoalBucketKey
+  /** Completed by the end of the month. */
+  done: boolean
+}
+
+/**
+ * The tasks a role-based Monthly Goal is made of: everything of this
+ * employee's that was due in `month`. Archived cards are INCLUDED — archiving
+ * only tidies a finished card off the board, and dropping it here would shrink
+ * the "done" side only and quietly lower the percentage.
+ */
+export function goalSourceTasks(
+  workerId: string,
+  tasks: Task[],
+  month: string,
+  internalClientIds: ReadonlySet<string>,
+): GoalSourceTask[] {
+  const out: GoalSourceTask[] = []
+  for (const task of tasks) {
+    if (task.worker_id !== workerId || !isPlannedInMonth(task, month)) continue
+    out.push({ task, bucket: goalBucketOf(task, internalClientIds), done: isDoneByMonthEnd(task, month) })
+  }
+  return out
+}
+
+export interface GoalBucketResult {
+  key: GoalBucketKey
+  label: string
+  /** The role's configured share (0–1). */
+  weight: number
+  /** Tasks in this bucket that were due in the month. */
+  planned: number
+  /** Of those, how many were completed by month end. */
+  done: number
+  /** done ÷ planned as a whole %, or null when nothing in the bucket was due. */
+  pct: number | null
+  /** The share actually used: the configured weights renormalised over the buckets that have tasks (0 for an empty one). */
+  effectiveWeight: number
+}
+
+/**
+ * A role's Monthly Goal: each bucket's completion % blended with the role's
+ * weights. A bucket with nothing due is left out and the other one carries the
+ * whole goal (an empty bucket is "no data", never a fake 0 or 100); with
+ * nothing due at all the goal is null.
+ */
+export function computeRoleGoal(
+  role: KpiRole,
+  workerId: string,
+  tasks: Task[],
+  month: string,
+  internalClientIds: ReadonlySet<string>,
+): { buckets: GoalBucketResult[]; pct: number | null; planned: number; done: number } {
+  const source = goalSourceTasks(workerId, tasks, month, internalClientIds)
+  const buckets: GoalBucketResult[] = KPI_ROLE_GOALS[role].map((spec) => {
+    const inBucket = source.filter((r) => r.bucket === spec.key)
+    const planned = inBucket.length
+    const done = inBucket.filter((r) => r.done).length
+    return {
+      key: spec.key,
+      label: spec.label,
+      weight: spec.weight,
+      planned,
+      done,
+      pct: planned > 0 ? Math.round((done / planned) * 100) : null,
+      effectiveWeight: 0,
+    }
+  })
+  const scored = buckets.filter((b) => b.pct !== null)
+  const weightSum = scored.reduce((sum, b) => sum + b.weight, 0)
+  for (const b of scored) b.effectiveWeight = b.weight / weightSum
+  const pct = scored.length > 0
+    ? Math.round(scored.reduce((sum, b) => sum + b.pct! * b.effectiveWeight, 0))
+    : null
+  return {
+    buckets,
+    pct,
+    planned: buckets.reduce((sum, b) => sum + b.planned, 0),
+    done: buckets.reduce((sum, b) => sum + b.done, 0),
+  }
+}
 
 export interface EmployeeKpi {
   worker: Worker
@@ -371,43 +561,43 @@ export interface EmployeeKpi {
   reworkRatePct: number | null
   reworkEmployeeCount: number
   workload: WorkloadResult
-  /** Monthly goal achievement 0–1+ (null when no target is set). */
+  /**
+   * Which Monthly Goal formula applied: 'role' (the employee has a KPI role —
+   * goalBuckets says how it was made up), 'target' (no role; completions ÷
+   * the Tasks plan) or 'none' (no role and no plan typed in yet).
+   */
+  goalMode: 'role' | 'target' | 'none'
+  /** Role goal only: the two buckets and how each scored. Empty otherwise. */
+  goalBuckets: GoalBucketResult[]
+  /** Monthly goal achievement 0–1 (null when there is nothing to judge). */
   goalAchievement: number | null
+  /** Role goal: tasks due this month. Otherwise the typed Tasks plan (null when unset). */
   goalTarget: number | null
+  /** Role goal: how many of those are done. Otherwise completions this month. */
   goalAchieved: number
   onTimeTarget: number
   qaTarget: number
   /** Weighted score 0–100 (null when no component has data). */
   score: number | null
   /** Which components fed the score (for the drill-down / tooltip). */
-  scoreParts: { onTime: number | null; qa: number | null; goal: number | null; rework: number | null }
+  scoreParts: { onTime: number | null; qa: number | null; goal: number | null }
 }
 
 /**
- * Rework performance (0–100): full marks while the rate is at/below the 5%
- * target; above it, 10 points off per point of rate.
- */
-export function reworkPerformance(ratePct: number): number {
-  if (ratePct <= KPI_TARGETS.rework) return 100
-  return Math.max(0, 100 - (ratePct - KPI_TARGETS.rework) * 10)
-}
-
-/**
- * Weighted KPI score from the four components. `null` components are dropped
- * and the remaining weights renormalised; all-null → null.
+ * Weighted KPI score from its three components (40% on-time, 40% QA, 20%
+ * Monthly Goal). `null` components are dropped and the remaining weights
+ * renormalised; all-null → null.
  */
 export function weightedKpiScore(parts: {
   onTime: number | null
   qa: number | null
   goal: number | null
-  rework: number | null
 }): number | null {
   let total = 0
   let weight = 0
   if (parts.onTime !== null) { total += parts.onTime * KPI_WEIGHTS.onTime; weight += KPI_WEIGHTS.onTime }
   if (parts.qa !== null) { total += parts.qa * KPI_WEIGHTS.qa; weight += KPI_WEIGHTS.qa }
   if (parts.goal !== null) { total += parts.goal * KPI_WEIGHTS.goal; weight += KPI_WEIGHTS.goal }
-  if (parts.rework !== null) { total += parts.rework * KPI_WEIGHTS.rework; weight += KPI_WEIGHTS.rework }
   if (weight === 0) return null
   return Math.round(total / weight)
 }
@@ -418,11 +608,15 @@ export interface EmployeeKpiInput {
   tasks: Task[]
   month: string
   goal: MonthlyGoal | null
+  /** Ids of the Internal client(s) — their tasks count on a role goal's recurring side. */
+  internalClientIds?: ReadonlySet<string>
   now?: Date
 }
 
+const NO_CLIENTS: ReadonlySet<string> = new Set<string>()
+
 /** Compute one employee's month. Filtering (client/status) happens outside. */
-export function computeEmployeeKpi({ worker, tasks, month, goal, now = new Date() }: EmployeeKpiInput): EmployeeKpi {
+export function computeEmployeeKpi({ worker, tasks, month, goal, internalClientIds = NO_CLIENTS, now = new Date() }: EmployeeKpiInput): EmployeeKpi {
   const mine = tasks.filter((t) => t.worker_id === worker.id && !t.archived_at)
   const activeCount = mine.filter(isOpen).length
   const completed = mine.filter((t) => normalizeTaskStage(t.status) === 'completed' && inMonth(t.completed_at, month))
@@ -457,17 +651,39 @@ export function computeEmployeeKpi({ worker, tasks, month, goal, now = new Date(
   const reworkRatePct = reviewed.length > 0
     ? Math.round((employeeRework.length / reviewed.length) * 1000) / 10
     : null
-  const reworkPerformancePct = reworkRatePct !== null ? reworkPerformance(reworkRatePct) : null
 
-  // Monthly goal: completions vs the configured target (role-specific units).
-  const goalTarget = goal?.target ?? null
-  const goalAchieved = goalTarget !== null ? completedCount : 0
-  const goalAchievement = goalTarget !== null && goalTarget > 0 ? goalAchieved / goalTarget : null
-  const goalPct = goalAchievement !== null ? Math.min(100, Math.round(goalAchievement * 100)) : null
+  // Monthly goal. With a KPI role: the completion % of what was due this month,
+  // split into the role's two kinds of work and blended (KPI_ROLE_GOALS).
+  // Without one: completions vs the Tasks plan the Owner typed in.
+  const role = normalizeKpiRole(worker.kpi_role)
+  let goalMode: EmployeeKpi['goalMode']
+  let goalBuckets: GoalBucketResult[] = []
+  let goalTarget: number | null
+  let goalAchieved: number
+  let goalPct: number | null
+  if (role) {
+    // Archived cards count here (see goalSourceTasks), so `tasks`, not `mine`.
+    const roleGoal = computeRoleGoal(role, worker.id, tasks, month, internalClientIds)
+    goalMode = 'role'
+    goalBuckets = roleGoal.buckets
+    goalTarget = roleGoal.planned
+    goalAchieved = roleGoal.done
+    goalPct = roleGoal.pct
+  } else {
+    goalTarget = goal?.target ?? null
+    goalMode = goalTarget !== null ? 'target' : 'none'
+    goalAchieved = goalTarget !== null ? completedCount : 0
+    goalPct = goalTarget !== null && goalTarget > 0 ? Math.min(100, Math.round((goalAchieved / goalTarget) * 100)) : null
+  }
+  // The fraction the pace check and progress bar use. A typed target can be
+  // beaten (120% of plan), so the plan-based fraction is kept uncapped.
+  const goalAchievement = role
+    ? (goalPct !== null ? goalPct / 100 : null)
+    : (goalTarget !== null && goalTarget > 0 ? goalAchieved / goalTarget : null)
 
   const workload = computeWorkload(worker, tasks, month, now)
 
-  const scoreParts = { onTime: onTimePct, qa: qaPct, goal: goalPct, rework: reworkPerformancePct }
+  const scoreParts = { onTime: onTimePct, qa: qaPct, goal: goalPct }
   const score = weightedKpiScore(scoreParts)
 
   return {
@@ -485,6 +701,8 @@ export function computeEmployeeKpi({ worker, tasks, month, goal, now = new Date(
     reworkRatePct,
     reworkEmployeeCount: employeeRework.length,
     workload,
+    goalMode,
+    goalBuckets,
     goalAchievement,
     goalTarget,
     goalAchieved,
@@ -646,7 +864,15 @@ export function buildAttention(
     }
 
     if (goalBehindPace(emp, month, now)) {
-      add('warning', `${w.name} is behind pace on the monthly goal (${Math.round((emp.goalAchievement ?? 0) * 100)}% of target).`, { kind: 'goal' }, 'goal')
+      const goalText = `${Math.round((emp.goalAchievement ?? 0) * 100)}%`
+      add(
+        'warning',
+        emp.goalMode === 'role'
+          ? `${w.name} is behind pace on the monthly goal (${goalText} of this month's tasks done).`
+          : `${w.name} is behind pace on the monthly goal (${goalText} of target).`,
+        { kind: 'goal' },
+        'goal',
+      )
     }
 
     if (emp.workload.pct !== null && emp.workload.pct < 60) {

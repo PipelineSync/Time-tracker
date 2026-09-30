@@ -192,6 +192,70 @@ export function patchTouchesQa(patch: Partial<Task>): boolean {
   return QA_PATCH_FIELDS.some((f) => patch[f] !== undefined)
 }
 
+// ---- "QA Required?" ---------------------------------------------------------
+//
+// Every task carries a Yes/No flag. Yes: a plain worker cannot move the task to
+// Completed — only the Owner and people with KPI access (`team_kpi.view`, the
+// same people who run the QA review) can. No: the worker completes it
+// themselves. The same people are the only ones who can see or change the flag;
+// a worker's own tasks (New task, Clock In, Switch Client) simply get the
+// default. Both backends, the MCP connector and the board UI call the helpers
+// below, so the rule is written once.
+
+/** New tasks require QA unless a reviewer unticks the box. */
+export const DEFAULT_QA_REQUIRED = true
+
+/** Why a plain worker's move into Completed was refused. */
+export const QA_COMPLETION_BLOCKED_MESSAGE =
+  'This task requires QA — only the Owner or someone with KPI access can move it to Completed. Send it to For Review instead.'
+
+/** Why a plain worker's attempt to change the flag was refused. */
+export const QA_SETTING_LOCKED_MESSAGE =
+  'Only the Owner or someone with KPI access can change whether a task requires QA.'
+
+/**
+ * A stored QA Required value. Rows written before the field existed (or read
+ * from a database that has no such column yet) have none and count as "No", so
+ * turning the feature on never locks a card that is already on the board.
+ */
+export function normalizeQaRequired(value: unknown): boolean {
+  return value === true
+}
+
+/**
+ * Would this stage move be refused because the task needs QA? True only when a
+ * non-reviewer takes a QA-required task INTO Completed from another stage
+ * (`from` is null for a task being created there). Reordering inside Completed,
+ * archiving and restoring are not moves into it, and For Review is always open.
+ */
+export function isQaCompletionBlocked(
+  move: { qaRequired: boolean; from: TaskStatus | null; to: TaskStatus },
+  actorIsReviewer: boolean,
+): boolean {
+  if (actorIsReviewer || !move.qaRequired) return false
+  if (normalizeTaskStage(move.to) !== 'completed') return false
+  return move.from === null || normalizeTaskStage(move.from) !== 'completed'
+}
+
+/**
+ * The QA Required value a NEW task is stored with — or why it is refused.
+ *
+ * Nothing asked for → the default (Yes). Yes is open to everyone. No is the
+ * reviewers' call: a plain worker who asks for it is refused, except when the
+ * new task merely continues a repeating series ("Recreate next" / starting an
+ * occurrence), which carries its series' setting forward rather than choosing
+ * one — otherwise a worker could never repeat a task the Owner marked "No".
+ */
+export function resolveNewTaskQaRequired(
+  requested: unknown,
+  actorIsReviewer: boolean,
+  continuesSeries: boolean,
+): { value: boolean; error: string | null } {
+  const value = typeof requested === 'boolean' ? requested : DEFAULT_QA_REQUIRED
+  if (!value && !actorIsReviewer && !continuesSeries) return { value, error: QA_SETTING_LOCKED_MESSAGE }
+  return { value, error: null }
+}
+
 /** Normalize & validate an incoming QA score (1–5 or null). */
 export function normalizeQaScore(value: unknown): QaScore | null {
   if (value === null || value === undefined || value === '') return null
@@ -251,6 +315,7 @@ export function hydrateTask(t: Task): Task {
     due_date: t.due_date ?? null,
     original_due_date: t.original_due_date ?? null,
     estimated_hours: normalizeEstimatedHours(t.estimated_hours),
+    qa_required: normalizeQaRequired(t.qa_required),
     assigned_at: t.assigned_at ?? t.created_at ?? null,
     started_at: t.started_at ?? null,
     waiting_since: t.waiting_since ?? (status === 'waiting' ? (t.updated_at ?? null) : null),
@@ -376,6 +441,9 @@ export function planRecreate(task: Task, workdays: number[]): RecreatePlan | nul
       priority: task.priority,
       due_date: nextDue,
       estimated_hours: task.estimated_hours,
+      // The next occurrence keeps the series' QA setting (a worker recreating
+      // a "No QA" task must not be asked to re-choose what they cannot change).
+      qa_required: task.qa_required,
       repeats,
       repeat_until: task.repeat_until,
       series_id: task.series_id ?? task.id,

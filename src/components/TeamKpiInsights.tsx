@@ -135,16 +135,20 @@ export function ReviewBacklogCard({ backlog, onDrill }: { backlog: ReviewBacklog
 }
 
 /**
- * Monthly Goal Progress (§6 lower row): completed vs the planned target, with
- * the role-specific on-time target beside it. Targets are edited in the
- * Monthly targets card — never re-typed as KPI data.
+ * Monthly Goal Progress (§6 lower row). A person with a KPI role shows the
+ * completion % of what was due this month, split into the role's two kinds of
+ * work and blended; anyone else shows tasks completed against the Tasks plan.
+ * Either way the row opens the tasks behind the number, and targets are
+ * edited in the Monthly targets card — never re-typed as KPI data.
  */
 export function GoalProgressCard({
   employees,
   monthLabel,
+  onDrill,
 }: {
   employees: EmployeeKpi[]
   monthLabel: string
+  onDrill?: (target: KpiDrillTarget) => void
 }) {
   return (
     <Card>
@@ -156,27 +160,51 @@ export function GoalProgressCard({
           <p className="py-6 text-center text-sm text-muted-foreground">No employees in scope.</p>
         )}
         {employees.map((emp) => {
-          const has = emp.goalTarget !== null
+          const byRole = emp.goalMode === 'role'
           const pct = emp.goalAchievement !== null ? Math.min(100, Math.round(emp.goalAchievement * 100)) : null
           const barColor = pct === null ? 'bg-muted' : pct >= 90 ? 'bg-emerald-500' : pct >= 60 ? 'bg-amber-500' : 'bg-rose-500'
+          const summary = byRole
+            ? pct === null ? 'nothing due this month' : `${pct}%`
+            : emp.goalMode === 'target'
+              ? `${emp.goalAchieved} / ${emp.goalTarget} tasks${pct !== null ? ` · ${pct}%` : ''}`
+              : 'no target set'
           return (
             <div key={emp.worker.id} className="space-y-1.5">
-              <div className="flex items-baseline justify-between gap-2 text-sm">
-                <div className="flex min-w-0 items-center gap-2">
-                  <AvatarBubble name={emp.worker.name} avatarUrl={emp.worker.avatar_url} color={emp.worker.color} className="h-5 w-5 text-[9px]" />
-                  <span className="truncate font-medium">{emp.worker.name}</span>
-                </div>
-                <span className="shrink-0 tabular-nums text-muted-foreground">
-                  {has ? `${emp.goalAchieved} / ${emp.goalTarget} tasks` : 'no target set'}
-                  {pct !== null ? ` · ${pct}%` : ''}
+              <button
+                type="button"
+                disabled={!onDrill || (!byRole && emp.goalMode === 'none')}
+                onClick={() => onDrill?.({ kind: 'goal', workerId: emp.worker.id })}
+                className="block w-full space-y-1.5 rounded-md text-left enabled:hover:bg-muted/40 disabled:cursor-default"
+                title={byRole ? 'See the tasks behind this goal' : undefined}
+              >
+                <span className="flex items-baseline justify-between gap-2 text-sm">
+                  <span className="flex min-w-0 items-center gap-2">
+                    <AvatarBubble name={emp.worker.name} avatarUrl={emp.worker.avatar_url} color={emp.worker.color} className="h-5 w-5 text-[9px]" />
+                    <span className="truncate font-medium">{emp.worker.name}</span>
+                  </span>
+                  <span className="shrink-0 tabular-nums text-muted-foreground">{summary}</span>
                 </span>
-              </div>
-              <div className="h-2.5 w-full overflow-hidden rounded-full bg-muted">
-                <div
-                  className={cn('h-full rounded-full transition-all', barColor)}
-                  style={{ width: `${pct ?? 0}%` }}
-                />
-              </div>
+                <span className="block h-2.5 w-full overflow-hidden rounded-full bg-muted">
+                  <span
+                    className={cn('block h-full rounded-full transition-all', barColor)}
+                    style={{ width: `${pct ?? 0}%` }}
+                  />
+                </span>
+              </button>
+              {byRole && (
+                <ul className="space-y-0.5 text-[11px] text-muted-foreground">
+                  {emp.goalBuckets.map((b) => (
+                    <li key={b.key} className="flex flex-wrap justify-between gap-x-3">
+                      <span>
+                        {b.label} · {Math.round(b.weight * 100)}%
+                      </span>
+                      <span className="tabular-nums">
+                        {b.pct === null ? 'none due' : `${b.done} / ${b.planned} done · ${b.pct}%`}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
               <div className="flex flex-wrap gap-2 text-[11px] text-muted-foreground">
                 <span>On-time target: {emp.onTimeTarget}%</span>
                 <span>· QA target: {emp.qaTarget}%</span>
@@ -186,8 +214,10 @@ export function GoalProgressCard({
           )
         })}
         <p className="text-[11px] text-muted-foreground">
-          Goal achievement counts tasks completed against the planned target for {monthLabel} — edit
-          targets in the card below. KPI weight: 25% (need 90%+ of plan).
+          The monthly goal is 20% of the KPI score (need 90%+). With a KPI role (Workers → edit) it is
+          the share of the tasks due in {monthLabel} that got done — recurring and Internal work
+          and planned work weighted by role. Without a role it counts tasks completed against the
+          Tasks plan in the card below.
         </p>
       </CardContent>
     </Card>

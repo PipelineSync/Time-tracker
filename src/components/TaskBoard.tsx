@@ -21,6 +21,7 @@ import {
   ArchiveRestore,
   RotateCcw,
   Repeat2,
+  ShieldCheck,
   Timer,
 } from 'lucide-react'
 import { useStore } from '@/lib/store'
@@ -42,7 +43,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { cn, formatDate, isOverdueDate } from '@/lib/utils'
 import { applyTaskFilters, isAnyBoardFilterActive, DEFAULT_BOARD_FILTERS, type BoardFilters } from '@/lib/taskFilters'
 import { taskHealthBadges } from '@/lib/kpi'
-import { planRecreate } from '@/lib/taskWorkflow'
+import { isQaCompletionBlocked, planRecreate } from '@/lib/taskWorkflow'
 import { toast } from 'sonner'
 
 /** Column accents — the board reads at a glance without a legend. */
@@ -393,6 +394,12 @@ export function TaskBoard({
     const overdue = isOverdue(task)
     const priority = priorityBadge[task.priority]
     const stageIndex = TASK_STATUSES.indexOf(task.status)
+    // QA Required = Yes: a plain worker's ➜ stops at For Review (the store
+    // refuses a drop into Completed the same way, with a toast).
+    const nextStage = TASK_STATUSES[stageIndex + 1]
+    const qaLocked =
+      nextStage !== undefined &&
+      isQaCompletionBlocked({ qaRequired: task.qa_required, from: task.status, to: nextStage }, canReview)
     const isExpanded = expandedIds.has(task.id)
     const isClipped = overflowIds.has(task.id)
     const client = clientOf(task.client_id)
@@ -509,6 +516,18 @@ export function TaskBoard({
                 {task.repeat_until ? ` · until ${formatDate(task.repeat_until)}` : ''}
               </Badge>
             )}
+            {/* QA Required = Yes: the worker sends it to For Review; only the
+                Owner or someone with KPI access can complete it. */}
+            {task.qa_required && task.status !== 'completed' && (
+              <Badge
+                variant="outline"
+                className="gap-1 border-sky-400/50 text-[10px] text-sky-700 dark:text-sky-300"
+                title="QA required — only the Owner or someone with KPI access can move this to Completed."
+              >
+                <ShieldCheck className="h-3 w-3" />
+                QA required
+              </Badge>
+            )}
             {/* On a team-wide board every card names its owner. */}
             {canViewAll && (
               <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
@@ -597,8 +616,9 @@ export function TaskBoard({
               variant="ghost"
               size="icon"
               className="h-7 w-7"
-              disabled={stageIndex === TASK_STATUSES.length - 1}
-              aria-label={`Move "${task.title}" to the next stage`}
+              disabled={stageIndex === TASK_STATUSES.length - 1 || qaLocked}
+              aria-label={qaLocked ? `"${task.title}" needs QA before it can be completed` : `Move "${task.title}" to the next stage`}
+              title={qaLocked ? 'QA required — only the Owner or someone with KPI access can complete this task' : undefined}
               onClick={() => void shiftTask(task, 1)}
             >
               <ChevronRight className="h-4 w-4" />

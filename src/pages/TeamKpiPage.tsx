@@ -11,11 +11,12 @@ import {
   currentMonthKey,
   fmtHours,
   hoursByClient,
+  internalClientIdsOf,
   isKpiSubject,
+  kpiWeightsLabel,
   lastNMonths,
   monthLabel,
   scopeEmployees,
-  KPI_TARGETS,
 } from '@/lib/kpi'
 import { TASK_STATUSES, TaskStatusNames, UNASSIGNED_CLIENT_NAME } from '@/lib/types'
 import { PageHeader } from '@/components/PageHeader'
@@ -109,6 +110,10 @@ export function TeamKpiPage() {
   const [filters, setFilters] = useState<KpiFilters>(DEFAULT_KPI_FILTERS)
   const [drill, setDrill] = useState<KpiDrillTarget | null>(null)
 
+  // Work for the Internal client counts on the recurring side of a KPI role's
+  // Monthly Goal, so the engine needs to know which client(s) those are.
+  const internalIds = useMemo(() => internalClientIdsOf(clients), [clients])
+
   const workerName = useMemo(
     () => (id: string) => workers.find((w) => w.id === id)?.name ?? 'Unknown',
     [workers],
@@ -137,9 +142,10 @@ export function TeamKpiPage() {
           tasks: scopedTasks,
           month: filters.month,
           goal: monthlyGoals.find((g) => g.worker_id === worker.id && g.month === filters.month) ?? null,
+          internalClientIds: internalIds,
         }),
       ),
-    [employees, scopedTasks, filters.month, monthlyGoals],
+    [employees, scopedTasks, filters.month, monthlyGoals, internalIds],
   )
 
   const team = useMemo(() => computeTeamKpi(employeeRows), [employeeRows])
@@ -182,12 +188,13 @@ export function TeamKpiPage() {
             tasks: scopedTasks,
             month: m,
             goal: monthlyGoals.find((g) => g.worker_id === worker.id && g.month === m) ?? null,
+            internalClientIds: internalIds,
           }),
         )
         const agg = computeTeamKpi(rows)
         return { month: m, score: agg.score, onTime: agg.onTimePct }
       }),
-    [trendMonths, employees, scopedTasks, monthlyGoals],
+    [trendMonths, employees, scopedTasks, monthlyGoals, internalIds],
   )
 
   const monthOptions = useMemo(() => {
@@ -205,7 +212,7 @@ export function TeamKpiPage() {
       <PageHeader
         title="Team KPI"
         leading={<FaqButton />}
-        description={`Task-derived performance for ${monthLabel(filters.month)} — on-time, QA, goals and rework, weighted ${KPI_TARGETS.onTime ? '30 / 30 / 25 / 15' : ''}.`}
+        description={`Task-derived performance for ${monthLabel(filters.month)} — on-time, QA and the monthly goal, weighted ${kpiWeightsLabel()}.`}
       >
         <div className="flex flex-wrap items-end gap-3">
           <div className="grid gap-1">
@@ -349,7 +356,11 @@ export function TeamKpiPage() {
       {/* ---- Lower row: trend + goal progress ---- */}
       <div className="grid gap-6 lg:grid-cols-2">
         <MonthlyKpiTrendChart points={trendPoints} />
-        <GoalProgressCard employees={employeeRows} monthLabel={monthLabel(filters.month)} />
+        <GoalProgressCard
+          employees={employeeRows}
+          monthLabel={monthLabel(filters.month)}
+          onDrill={(t) => setDrill(t)}
+        />
       </div>
 
       {/* ---- Needs Attention + review backlog ---- */}
@@ -388,6 +399,8 @@ export function TeamKpiPage() {
         tasks={scopedTasks}
         month={filters.month}
         workerName={workerName}
+        workers={workers}
+        internalClientIds={internalIds}
         clientName={(id) => (id ? clients.find((c) => c.id === id)?.name ?? 'Unknown' : UNASSIGNED_CLIENT_NAME)}
       />
     </div>
