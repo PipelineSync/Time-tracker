@@ -189,6 +189,12 @@ export interface CreateFinanceItemInput {
   status?: FinanceStatus
   payment_method?: PaymentMethod | null
   note?: string | null
+  /** Expense only: one of EXPENSE_CATEGORIES. */
+  expense_category?: string | null
+  /** Expense only: optional client tag (mutually exclusive with project_name). */
+  client_id?: string | null
+  /** Expense only: optional free-text project tag (mutually exclusive with client_id). */
+  project_name?: string | null
   /**
    * Subscriptions only: how many times it bills before pausing by itself
    * (a whole number of 1 or more). Omit or pass null for a subscription that
@@ -325,9 +331,9 @@ export interface DataBackend {
   // Payments / settlements
   listPayments(limit?: number): Promise<BackendResult<Payment[]>>
   /**
-   * The Finance ledger — subscriptions, worker payroll and one-off bills, all
-   * carrying a due date. Readable by the admin and by workers the admin
-   * granted `finance.view`; changeable only with `finance.manage`. Workers
+   * The Finance ledger — subscriptions, worker payroll, due-date bills and
+   * recorded one-time expenses. Readable by the admin and by workers granted
+   * `finance.view`; changeable only with `finance.manage`. Workers
    * without either get an empty list rather than an error, so background syncs
    * never toast.
    */

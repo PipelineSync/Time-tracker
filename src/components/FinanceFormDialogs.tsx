@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Building2, Folder } from 'lucide-react'
 import { useStore } from '@/lib/store'
+import { ClientSelect } from '@/components/ClientSelect'
 import type { BillingCycle, FinanceItem } from '@/lib/types'
-import { BillingCycleNames } from '@/lib/types'
+import { BillingCycleNames, EXPENSE_CATEGORIES } from '@/lib/types'
 import {
   Dialog,
   DialogContent,
@@ -16,8 +18,8 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from 'sonner'
-import { money } from '@/lib/utils'
-import { currentMonthKey, monthLabel, suggestedPayroll, earningsByWorkerAndMonth } from '@/lib/finance'
+import { cn, money } from '@/lib/utils'
+import { currentMonthKey, monthLabel, suggestedPayroll, earningsByWorkerAndMonth, todayISO } from '@/lib/finance'
 
 /** Shared helpers for the three finance dialogs. */
 function useAmountField(initial: number) {
@@ -442,6 +444,187 @@ export function BillFormDialog({
           <DialogFooter className="gap-2">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>Cancel</Button>
             <Button type="submit" disabled={saving}>{saving ? 'Saving…' : item ? 'Save changes' : 'Add bill'}</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/** A completed one-time business expense. */
+export function ExpenseFormDialog({
+  open,
+  onOpenChange,
+  item,
+}: {
+  open: boolean
+  onOpenChange: (v: boolean) => void
+  item: FinanceItem | null
+}) {
+  const { settings, createFinanceItem, updateFinanceItem } = useStore()
+  const currency = settings?.currency || 'USD'
+  const [name, setName] = useState('')
+  const [expenseDate, setExpenseDate] = useState(todayISO())
+  const [category, setCategory] = useState('')
+  const [tagType, setTagType] = useState<'none' | 'client' | 'project'>('none')
+  const [clientId, setClientId] = useState('')
+  const [projectName, setProjectName] = useState('')
+  const [note, setNote] = useState('')
+  const [saving, setSaving] = useState(false)
+  const amount = useAmountField(item?.amount ?? 0)
+
+  useEffect(() => {
+    if (!open) return
+    setName(item?.name ?? '')
+    setExpenseDate(item?.due_date ?? todayISO())
+    setCategory(item?.expense_category ?? '')
+    setTagType(item?.client_id ? 'client' : item?.project_name ? 'project' : 'none')
+    setClientId(item?.client_id ?? '')
+    setProjectName(item?.project_name ?? '')
+    setNote(item?.note ?? '')
+  }, [open, item])
+
+  function changeTagType(value: 'none' | 'client' | 'project') {
+    setTagType(value)
+    if (value !== 'client') setClientId('')
+    if (value !== 'project') setProjectName('')
+  }
+
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    const label = name.trim()
+    const project = projectName.trim()
+    if (!label) return toast.error('Give the expense a description.')
+    if (amount.value === null) return toast.error('Enter the expense amount.')
+    if (!expenseDate) return toast.error('Pick the expense date.')
+    if (!category) return toast.error('Choose an expense category.')
+    if (tagType === 'client' && !clientId) return toast.error('Choose a client for this expense.')
+    if (tagType === 'project' && !project) return toast.error('Name the project for this expense.')
+
+    setSaving(true)
+    try {
+      const fields = {
+        name: label,
+        amount: amount.value,
+        due_date: expenseDate,
+        status: 'paid' as const,
+        expense_category: category,
+        client_id: tagType === 'client' ? clientId : null,
+        project_name: tagType === 'project' ? project : null,
+        note: note.trim() || null,
+      }
+      const saved = item
+        ? await updateFinanceItem(item.id, fields)
+        : await createFinanceItem({ kind: 'expense', ...fields })
+      if (!saved) return
+      toast.success(item ? 'Expense updated.' : 'Expense added.')
+      onOpenChange(false)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        <form onSubmit={onSubmit}>
+          <DialogHeader>
+            <DialogTitle>{item ? 'Edit expense' : 'Add one-time expense'}</DialogTitle>
+            <DialogDescription>
+              Log a completed, non-recurring business purchase. Choose a category and optionally tag a client or project.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid gap-2">
+              <Label htmlFor="expense-name">Description</Label>
+              <Input
+                id="expense-name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="e.g. Conference ticket"
+                maxLength={80}
+                autoFocus
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <AmountField amount={amount.amount} setAmount={amount.setAmount} currency={currency} />
+              <div className="grid gap-2">
+                <Label htmlFor="expense-date">Date</Label>
+                <Input id="expense-date" type="date" value={expenseDate} onChange={(e) => setExpenseDate(e.target.value)} />
+              </div>
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="expense-category">Category</Label>
+              <Select value={category} onValueChange={setCategory}>
+                <SelectTrigger id="expense-category"><SelectValue placeholder="Choose a category" /></SelectTrigger>
+                <SelectContent>
+                  {category && !(EXPENSE_CATEGORIES as readonly string[]).includes(category) && (
+                    <SelectItem value={category}>{category}</SelectItem>
+                  )}
+                  {EXPENSE_CATEGORIES.map((option) => (
+                    <SelectItem key={option} value={option}>{option}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid gap-2">
+              <span className="text-sm font-medium leading-none">Client / project tag <span className="font-normal text-muted-foreground">(optional)</span></span>
+              <div className="grid gap-3 rounded-lg border bg-muted/30 p-2.5">
+                <div className="flex w-fit gap-1 rounded-md bg-muted p-1" role="group" aria-label="Expense tag type">
+                  {([
+                    { value: 'none', label: 'No tag' },
+                    { value: 'client', label: 'Client' },
+                    { value: 'project', label: 'Project' },
+                  ] as const).map((option) => (
+                    <Button
+                      key={option.value}
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      aria-pressed={tagType === option.value}
+                      onClick={() => changeTagType(option.value)}
+                      className={cn('px-3 text-muted-foreground', tagType === option.value && 'bg-background text-foreground shadow-sm')}
+                    >
+                      {option.value === 'client' && <Building2 className="mr-1.5 h-3.5 w-3.5" />}
+                      {option.value === 'project' && <Folder className="mr-1.5 h-3.5 w-3.5" />}
+                      {option.label}
+                    </Button>
+                  ))}
+                </div>
+                {tagType === 'client' && (
+                  <div className="grid gap-2">
+                    <Label htmlFor="expense-client" className="text-xs text-muted-foreground">Client</Label>
+                    <ClientSelect
+                      id="expense-client"
+                      value={clientId}
+                      onValueChange={setClientId}
+                      placeholder="Choose a client"
+                    />
+                  </div>
+                )}
+                {tagType === 'project' && (
+                  <div className="grid gap-2">
+                    <Label htmlFor="expense-project" className="text-xs text-muted-foreground">Project name</Label>
+                    <Input
+                      id="expense-project"
+                      value={projectName}
+                      onChange={(e) => setProjectName(e.target.value)}
+                      placeholder="e.g. Website redesign"
+                      maxLength={120}
+                    />
+                  </div>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">Tag an expense to a client, a named project, or leave it as general overhead.</p>
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="expense-note">Note (optional)</Label>
+              <Textarea id="expense-note" value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder="Vendor, receipt reference, or context…" />
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>Cancel</Button>
+            <Button type="submit" disabled={saving}>{saving ? 'Saving…' : item ? 'Save expense' : 'Add expense'}</Button>
           </DialogFooter>
         </form>
       </DialogContent>

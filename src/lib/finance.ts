@@ -147,7 +147,7 @@ export interface DueRow {
  */
 export function buildDueRows(items: FinanceItem[]): DueRow[] {
   return items
-    .filter((i) => (i.kind === 'subscription' ? i.status === 'active' : i.status !== 'paid'))
+    .filter((i) => i.kind !== 'expense' && (i.kind === 'subscription' ? i.status === 'active' : i.status !== 'paid'))
     .map((item) => ({ item, days: daysUntil(item.due_date) }))
     .sort((a, b) => a.item.due_date.localeCompare(b.item.due_date))
 }
@@ -232,12 +232,14 @@ export function summarizeFinance(items: FinanceItem[]): FinanceSummary {
  * - subscriptions are counted in the month their billing date falls in
  * - payroll in the month it covers (period_month)
  * - bills in the month they are due
+ * - completed one-time expenses in the month they were recorded
  */
 export interface FinancePeriodRow {
   month: string // 'YYYY-MM'
   subscriptions: number
   payroll: number
   bills: number
+  expenses: number
   total: number
   paid: number
   unpaid: number
@@ -250,11 +252,12 @@ export function financeByMonth(items: FinanceItem[], months: string[]): FinanceP
     subscriptions: 0,
     payroll: 0,
     bills: 0,
+    expenses: 0,
     total: 0,
     paid: 0,
     unpaid: 0,
   }))
-  const bump = (m: string, key: 'subscriptions' | 'payroll' | 'bills', amount: number, paid: boolean) => {
+  const bump = (m: string, key: 'subscriptions' | 'payroll' | 'bills' | 'expenses', amount: number, paid: boolean) => {
     const i = idx.get(m)
     if (i === undefined) return
     rows[i][key] += amount
@@ -271,8 +274,11 @@ export function financeByMonth(items: FinanceItem[], months: string[]): FinanceP
       bump(monthKeyOf(parseISODate(item.due_date)), 'subscriptions', item.cycle === 'yearly' ? item.amount / 12 : item.amount, false)
     } else if (item.kind === 'payroll') {
       bump(item.period_month || monthKeyOf(parseISODate(item.due_date)), 'payroll', item.amount, paid)
-    } else {
+    } else if (item.kind === 'bill') {
       bump(monthKeyOf(parseISODate(item.due_date)), 'bills', item.amount, paid)
+    } else {
+      // One-time expenses are completed transactions, bucketed by their record date.
+      bump(monthKeyOf(parseISODate(item.due_date)), 'expenses', item.amount, true)
     }
   }
   return rows.map((r) => ({
@@ -280,6 +286,7 @@ export function financeByMonth(items: FinanceItem[], months: string[]): FinanceP
     subscriptions: Math.round(r.subscriptions * 100) / 100,
     payroll: Math.round(r.payroll * 100) / 100,
     bills: Math.round(r.bills * 100) / 100,
+    expenses: Math.round(r.expenses * 100) / 100,
     total: Math.round(r.total * 100) / 100,
     paid: Math.round(r.paid * 100) / 100,
     unpaid: Math.round(r.unpaid * 100) / 100,

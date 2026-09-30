@@ -46,6 +46,7 @@ import {
   DEFAULT_CLIENT_COLOR,
   DEFAULT_NOTE_COLOR,
   DEFAULT_SLACK_SETTINGS,
+  EXPENSE_CATEGORIES,
   FINANCE_KINDS,
   NOTE_COLORS,
   PERMISSIONS,
@@ -139,7 +140,7 @@ interface UserData {
   notes: Note[]
   /** The client invoicing board's cards (see the Client Invoicing page). */
   invoices: Invoice[]
-  /** Finance ledger: subscriptions, payroll runs and bills (see the Finance page). */
+  /** Finance ledger: subscriptions, payroll runs, bills and one-time expenses. */
   financeItems: FinanceItem[]
   /** Monthly KPI goals per employee (Team KPI dashboard). */
   monthlyGoals: MonthlyGoal[]
@@ -525,8 +526,8 @@ function normalizeTicketReply(reply: TicketReply): TicketReply {
 }
 
 // ---- Finance ledger ---------------------------------------------------------
-// One list of due-dated lines (subscription / payroll / bill). Rows are owned
-// by the admin workspace like everything else; `finance.view` opens the read,
+// One business ledger for due-dated lines and recorded one-time expenses.
+// Rows are owned by the admin workspace like everything else; `finance.view` opens the read,
 // `finance.manage` the writes — both admin-only until the admin grants them.
 
 function normalizeFinanceKind(kind: unknown): FinanceKind | null {
@@ -540,6 +541,7 @@ function normalizeFinanceCycle(cycle: unknown): BillingCycle {
 /** A status that fits the row's kind; anything else falls back to the default. */
 function normalizeFinanceStatus(kind: FinanceKind, status: unknown): FinanceStatus {
   if (kind === 'subscription') return status === 'paused' ? 'paused' : 'active'
+  if (kind === 'expense') return 'paid'
   return status === 'paid' ? 'paid' : 'unpaid'
 }
 
@@ -574,6 +576,13 @@ function normalizeFinanceItem(f: FinanceItem): FinanceItem {
     // The paid stamp only describes a completed payment.
     paid_at: status === 'paid' ? (f.paid_at ?? f.updated_at ?? new Date().toISOString()) : null,
     note: typeof f.note === 'string' && f.note.trim() ? f.note.trim() : null,
+    expense_category: kind === 'expense' && typeof f.expense_category === 'string' && f.expense_category.trim()
+      ? f.expense_category.trim()
+      : null,
+    client_id: kind === 'expense' && typeof f.client_id === 'string' ? f.client_id : null,
+    project_name: kind === 'expense' && typeof f.project_name === 'string' && f.project_name.trim()
+      ? f.project_name.trim()
+      : null,
     max_occurrences: max !== null && max > 0 ? max : null,
     billed_count: Number.isFinite(f.billed_count) && f.billed_count > 0 ? Math.floor(f.billed_count) : 0,
   }
@@ -1891,7 +1900,7 @@ export const localBackend: DataBackend = {
     return { data: null, error: null }
   },
 
-  // ---- Finance (subscriptions, payroll, bills) ------------------------------
+  // ---- Finance (subscriptions, payroll, bills and expenses) -----------------
   // The ledger belongs to the whole workspace, so a worker without
   // `finance.view` simply gets an empty list (never an error — the store
   // fetches it on every sync). `finance.manage` gates the writes.
@@ -1916,9 +1925,25 @@ export const localBackend: DataBackend = {
     const name = input.name?.trim() || null
     const workerId = input.worker_id || null
     const periodMonth = normalizeFinanceMonth(input.period_month)
-    if (kind === 'subscription' || kind === 'bill') {
-      if (!name) return { data: null, error: kind === 'subscription' ? 'Give the subscription a name.' : 'Give the bill a label.' }
+    if (kind === 'subscription' || kind === 'bill' || kind === 'expense') {
+      if (!name) {
+        const label = kind === 'subscription' ? 'subscription' : kind === 'bill' ? 'bill' : 'expense'
+        return { data: null, error: `Give the ${label} a label.` }
+      }
       if (name.length > 80) return { data: null, error: 'Names are limited to 80 characters.' }
+    }
+    const expenseCategory = kind === 'expense' ? input.expense_category?.trim() || null : null
+    const expenseClientId = kind === 'expense' ? input.client_id || null : null
+    const projectName = kind === 'expense' ? input.project_name?.trim() || null : null
+    if (kind === 'expense') {
+      if (!expenseCategory || !(EXPENSE_CATEGORIES as readonly string[]).includes(expenseCategory)) {
+        return { data: null, error: 'Choose an expense category.' }
+      }
+      if (expenseClientId && !c.data.clients.some((client) => client.id === expenseClientId)) {
+        return { data: null, error: 'Client not found.' }
+      }
+      if (expenseClientId && projectName) return { data: null, error: 'Choose either a client or a project tag, not both.' }
+      if (projectName && projectName.length > 120) return { data: null, error: 'Project names are limited to 120 characters.' }
     }
     if (kind === 'payroll') {
       if (!workerId) return { data: null, error: 'Choose the worker being paid.' }
@@ -1931,7 +1956,7 @@ export const localBackend: DataBackend = {
       if (dupe) return { data: null, error: 'That worker already has a payroll line for this month — edit it instead.' }
     }
     const now = new Date().toISOString()
-    const status = normalizeFinanceStatus(kind, input.status)
+    const status = kind === 'expense' ? 'paid' : normalizeFinanceStatus(kind, input.status)
     if (input.max_occurrences != null && (kind !== 'subscription' || !Number.isFinite(input.max_occurrences) || input.max_occurrences < 1 || Math.floor(input.max_occurrences) !== input.max_occurrences)) {
       return { data: null, error: 'The number of times a subscription bills must be a whole number of 1 or more.' }
     }
@@ -1947,6 +1972,9 @@ export const localBackend: DataBackend = {
       status,
       paid_at: status === 'paid' ? now : null,
       note: input.note ?? null,
+      expense_category: expenseCategory,
+      client_id: expenseClientId,
+      project_name: projectName,
       max_occurrences: kind === 'subscription' ? (input.max_occurrences ?? null) : null,
       billed_count: 0,
       created_at: now,
@@ -1972,6 +2000,23 @@ export const localBackend: DataBackend = {
     }
     if (patch.amount !== undefined && (!Number.isFinite(Number(patch.amount)) || Number(patch.amount) < 0)) {
       return { data: null, error: 'Enter an amount of 0 or more.' }
+    }
+    if (current.kind === 'expense') {
+      const category = patch.expense_category !== undefined
+        ? patch.expense_category?.trim() || null
+        : current.expense_category ?? null
+      const clientId = patch.client_id !== undefined ? patch.client_id : current.client_id ?? null
+      const projectName = patch.project_name !== undefined
+        ? patch.project_name?.trim() || null
+        : current.project_name ?? null
+      if (!category || !(EXPENSE_CATEGORIES as readonly string[]).includes(category)) {
+        return { data: null, error: 'Choose an expense category.' }
+      }
+      if (clientId && !c.data.clients.some((client) => client.id === clientId)) {
+        return { data: null, error: 'Client not found.' }
+      }
+      if (clientId && projectName) return { data: null, error: 'Choose either a client or a project tag, not both.' }
+      if (projectName && projectName.length > 120) return { data: null, error: 'Project names are limited to 120 characters.' }
     }
     if (patch.period_month !== undefined && current.kind === 'payroll') {
       const pm = normalizeFinanceMonth(patch.period_month)
@@ -2085,6 +2130,13 @@ export const localBackend: DataBackend = {
       return { data: null, error: 'This client is used by existing tasks or time entries. Mark it inactive instead.' }
     }
     c.data.clients = c.data.clients.filter((x) => x.id !== id)
+    // A deleted client clears optional finance tags but never deletes the expense.
+    const now = new Date().toISOString()
+    c.data.financeItems = c.data.financeItems.map((item) =>
+      item.kind === 'expense' && item.client_id === id
+        ? { ...item, client_id: null, updated_at: now }
+        : item
+    )
     // The board is derived from the master list — a deleted client loses its place.
     c.data.clientPriorities = c.data.clientPriorities.filter((p) => p.client_id !== id)
     save(c.data)

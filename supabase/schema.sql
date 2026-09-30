@@ -1630,7 +1630,7 @@ create policy "comments_insert" on public.time_entry_comments
   );
 
 -- ============================================================
--- Finance (subscriptions, worker payroll, bill due dates)
+-- Finance (subscriptions, worker payroll, bill due dates and expenses)
 -- One ledger table for the Finance section; a worker only reaches it when
 -- the admin grants `finance.view` (read) / `finance.manage` (writes) —
 -- admin-only by default. See supabase/finance.sql for existing databases.
@@ -1640,8 +1640,8 @@ create table if not exists public.finance_items (
   id           uuid primary key default gen_random_uuid(),
   -- Workspace owner (the admin). Set automatically by trg_finance_items_user.
   user_id      uuid not null references auth.users (id) on delete cascade,
-  kind         text not null check (kind in ('subscription','payroll','bill')),
-  -- Label for subscriptions and bills; payroll rows are named by their worker.
+  kind         text not null check (kind in ('subscription','payroll','bill','expense')),
+  -- Label for subscriptions, bills and expenses; payroll rows are named by their worker.
   name         text check (name is null or length(btrim(name)) between 1 and 80),
   -- The worker being paid (payroll only). Deleting the worker removes the run.
   worker_id    uuid references public.workers (id) on delete cascade,
@@ -1650,14 +1650,18 @@ create table if not exists public.finance_items (
   cycle        text check (cycle is null or cycle in ('monthly','yearly')),
   -- The month a payroll run covers, 'YYYY-MM' (payroll only).
   period_month text check (period_month is null or period_month ~ '^[0-9]{4}-[0-9]{2}$'),
-  -- Next bill date / pay day / deadline. A plain calendar date, like tasks.
+  -- Next bill date / pay day / deadline; an expense's transaction date.
   due_date     date not null,
-  -- active/paused are subscription states; unpaid/paid the other two.
+  -- active/paused are subscription states; expenses are always completed/paid.
   status       text not null default 'active'
                check (status in ('active','paused','unpaid','paid')),
-  -- When a payroll run or bill was marked paid (subscriptions never use it).
+  -- When a payroll run, bill or expense was recorded as paid.
   paid_at      timestamptz,
   note         text,
+  -- Expense-only detail; projects are free text because there is no project master list.
+  expense_category text check (expense_category is null or length(btrim(expense_category)) between 1 and 80),
+  client_id    uuid references public.clients (id) on delete set null,
+  project_name text check (project_name is null or length(btrim(project_name)) between 1 and 120),
   -- Subscriptions only: how many times the subscription bills before it
   -- pauses by itself (null = until someone switches it off), and how many
   -- of those bills have happened. See supabase/finance-subscription-occurrences.sql.
@@ -1678,7 +1682,18 @@ create table if not exists public.finance_items (
   ),
   constraint finance_items_status_per_kind check (
     (kind = 'subscription' and status in ('active','paused'))
-    or (kind <> 'subscription' and status in ('unpaid','paid'))
+    or (kind = 'expense' and status = 'paid')
+    or (kind in ('payroll','bill') and status in ('unpaid','paid'))
+  ),
+  constraint finance_items_expense_fields check (
+    (kind = 'expense'
+      and expense_category is not null
+      and btrim(expense_category) <> ''
+      and (client_id is null or project_name is null))
+    or (kind <> 'expense'
+      and expense_category is null
+      and client_id is null
+      and project_name is null)
   ),
   constraint finance_items_paid_stamp check (
     (status = 'paid' and paid_at is not null) or (status <> 'paid' and paid_at is null)
@@ -1688,6 +1703,7 @@ create table if not exists public.finance_items (
 create index if not exists finance_items_user_idx on public.finance_items (user_id);
 -- The agenda query: one workspace's open lines, oldest due date first.
 create index if not exists finance_items_user_due_idx on public.finance_items (user_id, due_date);
+create index if not exists finance_items_client_idx on public.finance_items (client_id);
 -- One payroll run per worker per month.
 create unique index if not exists finance_items_payroll_unique
   on public.finance_items (user_id, worker_id, period_month)
