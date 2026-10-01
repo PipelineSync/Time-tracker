@@ -113,8 +113,14 @@ function seedTask(p: {
     estimated_hours: p.estimated_hours ?? null,
     // Sample cards that went through (or sit in) review obviously needed QA;
     // the rest are plain cards that predate the rule (No) unless a sample
-    // below says otherwise.
-    qa_required: p.qa_required ?? (p.qa_score != null || status === 'for_review'),
+    // below says otherwise. A REPEATING sample is QA-free either way — that is
+    // the default for repeating work (the worker completes each occurrence),
+    // and a QA score on one only records that it was reviewed.
+    qa_required:
+      p.qa_required ??
+      ((p.repeats ?? 'none') !== 'none' || p.series_id
+        ? false
+        : p.qa_score != null || status === 'for_review'),
     assigned_at: p.assigned_at ?? p.created_at,
     started_at: p.started_at ?? (status === 'in_progress' || status === 'completed' ? p.created_at : null),
     waiting_since: p.waiting_since ?? (status === 'waiting' ? p.updated_at : null),

@@ -5,62 +5,62 @@
 --
 --  What it does
 --  ------------
---    * adds the `qa_required` column to `tasks` — the "QA Required?  Yes / No"
---      tick box on a task:
---        Yes  a worker CANNOT move the task to Completed. Only the Owner and
---             people with KPI access (`team_kpi.view`) can — normally through
---             the QA review of a card in For Review.
---        No   the worker can move the task to Completed themselves.
---    * every task that already exists is set to No, so nothing on the board is
---      locked retroactively. New ONE-OFF tasks default to Yes; a REPEATING
---      task (the Recurring shelf's templates and their occurrences) defaults
---      to No, so routine work is completed by the worker — see
---      supabase/RUN-THIS-recurring-no-qa.sql to switch the repeating cards
---      that already exist.
---    * installs a guard trigger on `tasks`, so the rule holds for every way of
---      writing to the table (the app, the Claude connector, a hand-made API
---      request), not only the screens. For anyone WITHOUT KPI access it refuses
---        - moving a QA-required task into Completed,
---        - changing a task's QA Required setting,
---        - creating a one-off task without QA. Two exceptions, both about
---          repeating work: a repeating task is QA-free by default (the worker
---          completes each occurrence), and the next occurrence of a series
---          whose earlier cards already had no QA carries that setting forward.
---      The Owner, anyone with `team_kpi.view`, and the SQL editor / service
---      role (no signed-in user) are never blocked.
+--  Repeating tasks no longer require QA. A recurring card is routine work that
+--  the worker closes themselves — only a ONE-OFF task defaults to "QA
+--  Required? Yes". Two things change:
 --
---  Safe to re-run: every statement is idempotent, so running it twice changes
---  nothing and loses no data. Fresh installs get all of it from schema.sql.
---  Until this runs the app still works — tasks save as before, but nothing can
---  be enforced (every task reads as "No QA").
+--   1. Every task that already repeats is switched to qa_required = false:
+--        * a template sitting on the Recurring shelf (`repeats` set), and
+--        * every occurrence started / recreated from it (`series_id` set),
+--          including completed cards — a "Recreate next" clone carries its
+--          card's setting forward, so a Yes left behind would keep gating the
+--          whole series.
+--      The Owner (or anyone with `team_kpi.view`) can tick Yes back on a
+--      recurring card afterwards; this migration never runs twice, so that
+--      choice is not undone.
 --
---  Prerequisite: supabase/RUN-THIS-team-kpi.sql (the `team_kpi.view` access key,
---  which in turn needs supabase/worker-permissions.sql for has_permission()).
+--   2. The guard trigger is replaced with one that lets anyone create a
+--      REPEATING task without QA (it is the default for them) while keeping
+--      every other rule: completing a QA-required task, changing the setting
+--      and creating a one-off task without QA still need the Owner or KPI
+--      access. The "next occurrence of a series that already has a no-QA
+--      card" exemption is unchanged.
+--
+--  Requires: supabase/RUN-THIS-task-qa-required.sql (the column + trigger) and
+--  supabase/recurring-tasks.sql (the repeats / series_id columns). Fresh
+--  installs get all of this from schema.sql.
+--
+--  Run it once. The schema statements are idempotent, but the data flip is a
+--  plain UPDATE: running it again would re-switch any recurring card the Owner
+--  has deliberately ticked Yes on since.
 -- ============================================================================
 
 
 -- ---------- 0. prerequisite check ----------
--- The guard below asks has_permission() who holds KPI access. Without it the
--- trigger would fail on every task write, so stop here with a clear message
--- instead of installing it.
 do $$
 begin
   if to_regprocedure('public.has_permission(text)') is null then
     raise exception 'Run supabase/worker-permissions.sql and supabase/RUN-THIS-team-kpi.sql first — QA Required relies on their has_permission() helper and team_kpi.view access key.';
   end if;
+  if not exists (
+    select 1 from information_schema.columns
+     where table_schema = 'public' and table_name = 'tasks' and column_name = 'repeats'
+  ) then
+    raise exception 'Run supabase/recurring-tasks.sql first — this migration switches QA off for repeating tasks.';
+  end if;
 end
 $$;
 
 
--- ---------- 1. the column ----------
--- Two steps on purpose. Adding the column with `default false` stamps every
--- existing task "No QA" (legacy work is not locked retroactively); only then
--- does the default flip to true for tasks created from now on.
-alter table public.tasks add column if not exists qa_required boolean not null default false;
-alter table public.tasks alter column qa_required set default true;
+-- ---------- 1. existing repeating tasks become QA-free ----------
+-- One-off tasks are untouched: they keep whatever the Owner set.
+update public.tasks
+   set qa_required = false
+ where qa_required
+   and (repeats <> 'none' or series_id is not null);
 
 
--- ---------- 2. the guard ----------
+-- ---------- 2. the guard knows about repeating tasks ----------
 create or replace function public.enforce_task_qa_required()
 returns trigger
 language plpgsql
@@ -136,15 +136,15 @@ create trigger trg_tasks_qa_required
 
 
 -- ---------- 3. verify ----------
--- One row. Right after the first run: tasks_requiring_qa = 0 (everything that
--- existed is "No"), tasks_without_qa = your current task count, and
--- guard_installed = true.
+-- Right after the run: repeating_requiring_qa = 0, tasks_requiring_qa counts
+-- the one-off tasks that still ask for review, and the guard is installed.
 select
-  (select count(*) from public.tasks where qa_required)     as tasks_requiring_qa,
-  (select count(*) from public.tasks where not qa_required) as tasks_without_qa,
+  (select count(*) from public.tasks where qa_required and (repeats <> 'none' or series_id is not null))
+                                                                   as repeating_requiring_qa,
+  (select count(*) from public.tasks where qa_required)            as tasks_requiring_qa,
   exists (
     select 1 from pg_trigger
      where tgrelid = 'public.tasks'::regclass
        and tgname = 'trg_tasks_qa_required'
        and not tgisinternal
-  )                                                          as guard_installed;
+  )                                                                as guard_installed;

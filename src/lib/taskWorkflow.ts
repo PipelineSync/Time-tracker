@@ -201,9 +201,33 @@ export function patchTouchesQa(patch: Partial<Task>): boolean {
 // a worker's own tasks (New task, Clock In, Switch Client) simply get the
 // default. Both backends, the MCP connector and the board UI call the helpers
 // below, so the rule is written once.
+//
+// The default depends on the kind of card: a one-off task gets Yes, a
+// REPEATING task gets No — the same routine work coming back every day/week is
+// the worker's to close, so it goes straight to Completed instead of piling up
+// in For Review. The Owner / KPI access can still tick Yes on a recurring card
+// when that series does need review; the occurrence it creates then carries
+// Yes forward like any other setting (§ planRecreate).
 
 /** New tasks require QA unless a reviewer unticks the box. */
 export const DEFAULT_QA_REQUIRED = true
+
+/** Repeating tasks don't: QA Required starts switched off for them. */
+export const DEFAULT_RECURRING_QA_REQUIRED = false
+
+/**
+ * Is this card part of a repeating series? True for the templates sitting on
+ * the Recurring shelf (`repeats` set) and for every occurrence started from
+ * one (`series_id` set) — i.e. everything the app shows as recurring.
+ */
+export function isRecurringTask(t: Pick<Task, 'repeats' | 'series_id'>): boolean {
+  return normalizeRepeats(t.repeats) !== 'none' || Boolean(t.series_id)
+}
+
+/** The QA Required value a NEW task gets when nobody made a choice. */
+export function defaultQaRequired(t: Pick<Task, 'repeats' | 'series_id'>): boolean {
+  return isRecurringTask(t) ? DEFAULT_RECURRING_QA_REQUIRED : DEFAULT_QA_REQUIRED
+}
 
 /** Why a plain worker's move into Completed was refused. */
 export const QA_COMPLETION_BLOCKED_MESSAGE =
@@ -240,19 +264,25 @@ export function isQaCompletionBlocked(
 /**
  * The QA Required value a NEW task is stored with — or why it is refused.
  *
- * Nothing asked for → the default (Yes). Yes is open to everyone. No is the
- * reviewers' call: a plain worker who asks for it is refused, except when the
- * new task merely continues a repeating series ("Recreate next" / starting an
- * occurrence), which carries its series' setting forward rather than choosing
- * one — otherwise a worker could never repeat a task the Owner marked "No".
+ * Nothing asked for → the default for the kind of card: Yes for a one-off,
+ * No for a repeating task (`recurring`). Yes is open to everyone. No is the
+ * reviewers' call: a plain worker who asks for it on a one-off task is
+ * refused, except when the new task merely continues a repeating series
+ * ("Recreate next" / starting an occurrence), which carries its series'
+ * setting forward rather than choosing one — otherwise a worker could never
+ * repeat a task the Owner marked "No". A repeating card is QA-free by default,
+ * so a worker stating No there is stating the default, not unlocking anything.
  */
 export function resolveNewTaskQaRequired(
   requested: unknown,
   actorIsReviewer: boolean,
   continuesSeries: boolean,
+  recurring: boolean,
 ): { value: boolean; error: string | null } {
-  const value = typeof requested === 'boolean' ? requested : DEFAULT_QA_REQUIRED
-  if (!value && !actorIsReviewer && !continuesSeries) return { value, error: QA_SETTING_LOCKED_MESSAGE }
+  const value = typeof requested === 'boolean' ? requested : recurring ? DEFAULT_RECURRING_QA_REQUIRED : DEFAULT_QA_REQUIRED
+  if (!value && !actorIsReviewer && !continuesSeries && !recurring) {
+    return { value, error: QA_SETTING_LOCKED_MESSAGE }
+  }
   return { value, error: null }
 }
 

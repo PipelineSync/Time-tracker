@@ -82,6 +82,7 @@ import {
   normalizeStartDate,
   normalizeWaitingReason,
   patchTouchesQa,
+  isRecurringTask,
   resolveNewTaskQaRequired,
   stageActorName,
 } from './taskWorkflow'
@@ -148,6 +149,12 @@ interface UserData {
   bonusDecisions: BonusDecision[]
   /** Append-only QA / due-date / bonus audit trail for the KPI history. */
   kpiAudit: KpiAuditEvent[]
+  /**
+   * One-time marker: repeating tasks have had "QA Required?" switched off
+   * for them (see backfillRecurringQaRequired). Optional because workspaces
+   * saved before the rule existed don't have it yet.
+   */
+  recurringQaMigrated?: boolean
 }
 
 const USERS_KEY = 'wt_users'
@@ -665,6 +672,25 @@ function backfillClients(d: UserData): boolean {
   return true
 }
 
+/**
+ * One-time migration: a repeating task is the worker's to finish, so "QA
+ * Required?" is switched off on every card that already repeats — the Recurring
+ * shelf's templates and the occurrences started from them. Completed cards are
+ * flipped too: a "Recreate next" clone carries its card's setting forward, so a
+ * Yes left behind on an old occurrence would keep gating the whole series.
+ *
+ * The Owner / KPI access can tick Yes back on a series afterwards; the marker
+ * stops this from running twice and undoing that choice.
+ */
+function backfillRecurringQaRequired(d: UserData): boolean {
+  if (d.recurringQaMigrated) return false
+  d.recurringQaMigrated = true
+  for (const t of d.tasks) {
+    if (t.qa_required && isRecurringTask(t)) t.qa_required = false
+  }
+  return true
+}
+
 function readData(userId: string): UserData {
   const d = read<UserData>(dataKey(userId), emptyData())
   d.workers = (d.workers || []).map(normalizeWorker)
@@ -728,7 +754,10 @@ function readData(userId: string): UserData {
   d.entries = d.entries.map((e) => ({ ...e, client_id: e.client_id ?? null }))
   // Workspaces saved before clients existed get their work attached to the
   // "Unassigned" client the first time they are read.
-  if (backfillClients(d)) write(dataKey(userId), d)
+  // Repeating tasks no longer require QA: unset the flag on the ones already
+  // on the board (once — the marker is written back below).
+  const recurringQaMigrated = backfillRecurringQaRequired(d)
+  if (backfillClients(d) || recurringQaMigrated) write(dataKey(userId), d)
   return d
 }
 
@@ -2466,11 +2495,18 @@ export const localBackend: DataBackend = {
     if (!workerId) return { data: null, error: 'Choose who the task is for.' }
     if (!c.data.workers.some((w) => w.id === workerId)) return { data: null, error: 'Worker not found.' }
     const status = normalizeTaskStatus(input.status)
-    // "QA Required?" — defaults to Yes. Only the Owner / KPI access may ask for
-    // No (a repeating series just carries its own setting forward), and a
-    // QA-required task cannot be created straight into Completed by anyone else.
+    // "QA Required?" — a one-off task defaults to Yes; a repeating task
+    // defaults to No (the routine work is the worker's to close). Only the
+    // Owner / KPI access may ask for No on a one-off task (a repeating series
+    // just carries its own setting forward), and a QA-required task cannot be
+    // created straight into Completed by anyone else.
     const reviewer = can(c, 'team_kpi.view')
-    const qa = resolveNewTaskQaRequired(input.qa_required, reviewer, Boolean(input.series_id))
+    const qa = resolveNewTaskQaRequired(
+      input.qa_required,
+      reviewer,
+      Boolean(input.series_id),
+      isRecurringTask({ repeats: normalizeRepeats(input.repeats), series_id: input.series_id ?? null }),
+    )
     if (qa.error) return { data: null, error: qa.error }
     if (isQaCompletionBlocked({ qaRequired: qa.value, from: null, to: status }, reviewer)) {
       return { data: null, error: QA_COMPLETION_BLOCKED_MESSAGE }

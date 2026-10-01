@@ -17,7 +17,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { ClientSelect } from '@/components/ClientSelect'
 import { ManageClientsDialog } from '@/components/ManageClientsDialog'
-import { DEFAULT_QA_REQUIRED, isQaCompletionBlocked } from '@/lib/taskWorkflow'
+import { DEFAULT_QA_REQUIRED, DEFAULT_RECURRING_QA_REQUIRED, defaultQaRequired, isQaCompletionBlocked } from '@/lib/taskWorkflow'
 import { todayISO } from '@/lib/utils'
 import { toast } from 'sonner'
 
@@ -86,19 +86,27 @@ export function TaskFormDialog({
   const canManageClients = can('clients.manage')
   // "QA Required?" belongs to the Owner and people with KPI access — the same
   // people who can complete a QA-required task. Everyone else never sees the
-  // box: what they add is created with QA required (the default), and what
-  // they edit keeps the setting it has.
+  // box: what they add is created with the default for its kind (Yes for a
+  // one-off, No for a repeating task), and what they edit keeps the setting it
+  // has.
   const canSetQa = can('team_kpi.view')
+  const [form, setForm] = useState<FormState>(emptyForm(defaultStatus))
+  const [saving, setSaving] = useState(false)
+  const [clientsOpen, setClientsOpen] = useState(false)
+  // Whether the QA Required box was ticked by hand in this sitting. Until it
+  // is, the box follows the Repeats choice: a repeating task starts QA-free,
+  // a one-off starts QA-required.
+  const [qaTouched, setQaTouched] = useState(false)
   // A plain worker cannot take a QA-required task into Completed: a new task
-  // is always QA-required for them, an existing one is whatever it is now.
+  // gets the default for its kind (Yes one-off, No repeating), an existing one
+  // is whatever it is now.
   const completionLocked =
     !canSetQa &&
     (task
       ? isQaCompletionBlocked({ qaRequired: task.qa_required, from: task.status, to: 'completed' }, false)
-      : DEFAULT_QA_REQUIRED)
-  const [form, setForm] = useState<FormState>(emptyForm(defaultStatus))
-  const [saving, setSaving] = useState(false)
-  const [clientsOpen, setClientsOpen] = useState(false)
+      // A card added from this dialog starts its own series (or is a one-off),
+      // so only the Repeats choice decides the default.
+      : defaultQaRequired({ repeats: form.repeats, series_id: null }))
 
   const activeWorkers = workers.filter((w) => w.status === 'active')
   const pickable = activeWorkers.length > 0 ? activeWorkers : workers
@@ -108,6 +116,7 @@ export function TaskFormDialog({
 
   useEffect(() => {
     if (!open) return
+    setQaTouched(false)
     if (task) {
       setForm({
         workerId: task.worker_id,
@@ -419,7 +428,10 @@ export function TaskFormDialog({
                   id="task-qa-required"
                   type="checkbox"
                   checked={form.qaRequired}
-                  onChange={(e) => set('qaRequired', e.target.checked)}
+                  onChange={(e) => {
+                    setQaTouched(true)
+                    set('qaRequired', e.target.checked)
+                  }}
                   /* accent-[#0868D9]: brand blue, kept constant on purpose —
                      checkbox accents are tiny and don't need to re-skin with
                      the seasonal theme (same as the sign-in page). */
@@ -435,6 +447,12 @@ export function TaskFormDialog({
                       ? 'The worker can’t move this task to Completed — only the Owner or someone with KPI access can, after review.'
                       : 'The worker can move this task to Completed themselves.'}
                   </p>
+                  {form.repeats !== 'none' && (
+                    <p className="text-[11px] text-muted-foreground">
+                      Repeating tasks start without QA — the worker completes each occurrence. Tick Yes
+                      here only for a series that needs review.
+                    </p>
+                  )}
                 </div>
               </div>
             )}
@@ -466,13 +484,26 @@ export function TaskFormDialog({
                     // parks a To-Do card on the Recurring shelf (its template);
                     // un-picking it brings a shelved card back to To Do. Cards
                     // already further along the board are left where they are.
-                    setForm((f) => ({
-                      ...f,
-                      repeats: r,
-                      status: r !== 'none'
-                        ? (f.status === 'todo' || f.status === 'recurring' ? 'recurring' : f.status)
-                        : (f.status === 'recurring' ? 'todo' : f.status),
-                    }))
+                    setForm((f) => {
+                      const wasRecurring = f.repeats !== 'none'
+                      const nowRecurring = r !== 'none'
+                      return {
+                        ...f,
+                        repeats: r,
+                        status: nowRecurring
+                          ? (f.status === 'todo' || f.status === 'recurring' ? 'recurring' : f.status)
+                          : (f.status === 'recurring' ? 'todo' : f.status),
+                        // QA Required follows the kind of card — unless the box
+                        // was ticked by hand, or the interval merely changed
+                        // (a series the Owner opted into keeps its Yes).
+                        qaRequired:
+                          qaTouched || wasRecurring === nowRecurring
+                            ? f.qaRequired
+                            : nowRecurring
+                              ? DEFAULT_RECURRING_QA_REQUIRED
+                              : DEFAULT_QA_REQUIRED,
+                      }
+                    })
                   }}
                 >
                   <SelectTrigger id="task-repeats"><SelectValue /></SelectTrigger>
