@@ -96,10 +96,12 @@ export interface CreateTaskInput {
   /** Estimated hours — the primary workload input. */
   estimated_hours?: number | null
   /**
-   * "QA Required?" (see Task.qa_required). Omit it to get the default — Yes.
-   * Only the Owner and people with KPI access may ask for No; everyone else's
-   * tasks are always created with QA required (a recreated / started
-   * occurrence of a repeating task just inherits its series' setting).
+   * "QA Required?" (see Task.qa_required). Omit it to get the default for the
+   * kind of card: Yes for a one-off task, No for a repeating one (a card with
+   * `repeats` or a `series_id`). Only the Owner and people with KPI access may
+   * ask for No on a one-off task; everyone else's one-off tasks are always
+   * created with QA required (a recreated / started occurrence of a repeating
+   * task just inherits its series' setting).
    */
   qa_required?: boolean
   /** Recurrence — 'none' by default. See Task.repeats. */

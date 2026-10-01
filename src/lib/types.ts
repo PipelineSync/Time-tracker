@@ -1303,9 +1303,12 @@ export interface Task {
    * "QA Required?" — Yes (true): a plain worker cannot move the task to
    * Completed; only the Owner and people with KPI access (`team_kpi.view`)
    * can, normally via the QA review. No (false): the worker completes it
-   * themselves. New tasks default to Yes; rows that predate the field count as
-   * No, so nothing already on the board is locked retroactively. Only those
-   * same reviewers can see or change the flag — see taskWorkflow.ts.
+   * themselves. New ONE-OFF tasks default to Yes, new REPEATING tasks (a card
+   * with `repeats` set or a `series_id`) default to No — routine work is the
+   * worker's to close, and the Owner can still tick Yes on a series that needs
+   * review. Rows that predate the field count as No, so nothing already on the
+   * board is locked retroactively. Only those same reviewers can see or change
+   * the flag — see taskWorkflow.ts.
    */
   qa_required: boolean
   /**

@@ -230,6 +230,36 @@ async function main() {
   const startedYes = await supabaseBackend.startRecurringOccurrence(shelfYes.id)
   assert(!startedYes.error && row(startedYes.data!.id)?.qa_required === true, 'starting an occurrence of a Yes shelf card gives a Yes task')
 
+  // A WORKER's own repeating task: repeating work defaults to No QA, so the
+  // card is theirs to close.
+  await as(JOHN_USER)
+  const ownWeekly = (await supabaseBackend.createTask({
+    ...base, worker_id: JOHN, title: 'QA-S1 worker weekly', status: 'recurring', due_date: '2026-09-01', repeats: 'weekly',
+  })).data!
+  assert(ownWeekly.qa_required === false && row(ownWeekly.id)?.qa_required === false, 'a repeating task the worker creates defaults to No QA')
+  const ownStart = await supabaseBackend.startRecurringOccurrence(ownWeekly.id)
+  assert(!ownStart.error && row(ownStart.data!.id)?.qa_required === false, 'its occurrence carries No forward')
+  const ownFinished = await supabaseBackend.moveTask(ownStart.data!.id, 'completed', 0)
+  assert(!ownFinished.error && row(ownStart.data!.id)?.status === 'completed', 'and the worker moves it straight to Completed')
+  const ownWeeklyNo = await supabaseBackend.createTask({
+    ...base, worker_id: JOHN, title: 'QA-S2 worker weekly No', status: 'recurring', due_date: '2026-09-01', repeats: 'weekly', qa_required: false,
+  })
+  assert(!ownWeeklyNo.error && row(ownWeeklyNo.data!.id)?.qa_required === false, 'stating No on a repeating task is accepted (it is the default)')
+  // A one-off task from the same worker is unchanged: QA, gated.
+  const ownOneOff = await supabaseBackend.createTask({ ...base, worker_id: JOHN, title: 'QA-S3 worker one-off' })
+  assert(!ownOneOff.error && row(ownOneOff.data!.id)?.qa_required === true, 'a one-off task the worker creates still requires QA')
+  assert((await supabaseBackend.moveTask(ownOneOff.data!.id, 'completed', 0)).error === QA_COMPLETION_BLOCKED_MESSAGE, 'and the worker still cannot complete it')
+
+  // The Owner can still opt a series in — Yes carries to its occurrence.
+  await as(ADMIN)
+  const ownerWeekly = (await supabaseBackend.createTask({
+    ...base, worker_id: JOHN, title: 'QA-S4 owner weekly Yes', status: 'recurring', due_date: '2026-09-01', repeats: 'weekly', qa_required: true,
+  })).data!
+  const ownerStart = await supabaseBackend.startRecurringOccurrence(ownerWeekly.id)
+  assert(!ownerStart.error && row(ownerStart.data!.id)?.qa_required === true, 'an opted-in series hands the worker a QA task')
+  await as(JOHN_USER)
+  assert((await supabaseBackend.moveTask(ownerStart.data!.id, 'completed', 0)).error === QA_COMPLETION_BLOCKED_MESSAGE, 'which the worker cannot complete')
+
   // ---------------------------------------------------------------- 6. tasks that predate the field
   console.log('\n--- 6. tasks that predate the field ---')
   state.tasks.push({

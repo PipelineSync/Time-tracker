@@ -79,6 +79,7 @@ import {
   normalizeStartDate,
   normalizeWaitingReason,
   patchTouchesQa,
+  isRecurringTask,
   resolveNewTaskQaRequired,
 } from './taskWorkflow'
 import {
@@ -3158,13 +3159,19 @@ export const supabaseBackend: DataBackend = {
       : me.data!.workerId
     if (!workerId) return fail('Choose who the task is for.')
     const status: TaskStatus = input.status ?? 'todo'
-    // "QA Required?" — defaults to Yes. Only the Owner / KPI access may ask for
-    // No (a repeating series just carries its own setting forward), and a
-    // QA-required task cannot be created straight into Completed by anyone
-    // else. The database enforces the same rules with a trigger, so a hand-made
-    // request cannot get around them.
+    // "QA Required?" — a one-off task defaults to Yes; a repeating task
+    // defaults to No (the routine work is the worker's to close). Only the
+    // Owner / KPI access may ask for No on a one-off task (a repeating series
+    // just carries its own setting forward), and a QA-required task cannot be
+    // created straight into Completed by anyone else. The database enforces the
+    // same rules with a trigger, so a hand-made request cannot get around them.
     const reviewer = canDo(me.data!, 'team_kpi.view')
-    const qa = resolveNewTaskQaRequired(input.qa_required, reviewer, Boolean(input.series_id))
+    const qa = resolveNewTaskQaRequired(
+      input.qa_required,
+      reviewer,
+      Boolean(input.series_id),
+      isRecurringTask({ repeats: normalizeRepeats(input.repeats), series_id: input.series_id ?? null }),
+    )
     if (qa.error) return fail(qa.error)
     if (isQaCompletionBlocked({ qaRequired: qa.value, from: null, to: status }, reviewer)) {
       return fail(QA_COMPLETION_BLOCKED_MESSAGE)

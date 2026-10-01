@@ -158,7 +158,7 @@ export const FAQ_SECTIONS: Record<FaqAudience, FaqSection[]> = {
           id: 'admin-task-qa',
           question: 'What does “QA Required?” on a task do?',
           answer:
-            'Yes (the default) means the worker can’t move that task to Completed: it goes to For Review, and only you — or a worker ticked for Team KPI under Workers → edit → Access — can complete it. No lets the worker finish it themselves. Only you and Team KPI holders see the tick; older tasks are No.',
+            'Yes: the worker can’t move it to Completed — it goes to For Review, and only you or a worker ticked for Team KPI can complete it. No lets the worker finish it themselves. One-off tasks start Yes; repeating ones (the Recurring shelf and its occurrences) start No, so routine work is completed — tick Yes on a series that needs review. Only you and Team KPI holders see the tick; older tasks are No.',
         },
         {
           id: 'admin-team-kpi',

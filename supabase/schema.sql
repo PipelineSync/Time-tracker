@@ -2523,16 +2523,19 @@ grant select, insert, update, delete on public.kpi_audit_events to authenticated
 
 
 -- ============================================================================
--- "QA Required?" guard (existing databases: supabase/RUN-THIS-task-qa-required.sql)
+-- "QA Required?" guard (existing databases: supabase/RUN-THIS-task-qa-required.sql,
+-- plus supabase/RUN-THIS-recurring-no-qa.sql for databases created before
+-- repeating tasks stopped requiring QA)
 -- ============================================================================
 -- tasks.qa_required = Yes means a worker cannot move the task to Completed —
 -- only the Owner and people with KPI access (team_kpi.view) can. The app, the
 -- Claude connector and this trigger all apply the rule, so a hand-made API
 -- request cannot get around it. For anyone without KPI access the trigger
 -- refuses: moving a QA-required task into Completed, changing the setting, and
--- creating a task without QA (except the next occurrence of a repeating series
--- that already has a no-QA card). The Owner, KPI holders and the service role
--- / SQL editor (no signed-in user) are never blocked.
+-- creating a ONE-OFF task without QA. A repeating task is QA-free by default
+-- (as is the next occurrence of a series that already has a no-QA card), so
+-- routine work is completed by the worker. The Owner, KPI holders and the
+-- service role / SQL editor (no signed-in user) are never blocked.
 
 create or replace function public.enforce_task_qa_required()
 returns trigger
@@ -2545,6 +2548,7 @@ declare
   v_creates_no_qa boolean := false;  -- a new task is being created WITHOUT QA
   v_completes_qa boolean := false;   -- a QA-required task is arriving in Completed (new, or from another stage)
   v_series text;
+  v_repeats text;
 begin
   -- (OLD only exists on UPDATE, so it is only ever read inside this branch.)
   if tg_op = 'UPDATE' then
@@ -2574,17 +2578,19 @@ begin
   end if;
 
   if v_creates_no_qa then
-    -- A worker's own tasks are created with QA. The one exception is the next
-    -- occurrence of a repeating series that already has a no-QA card: it just
-    -- carries the series' setting forward. (to_jsonb() so this keeps working on
-    -- a database without the recurring-task columns.)
+    -- A worker's own tasks are created with QA, with two exemptions: a
+    -- REPEATING task is QA-free by default (its worker completes each
+    -- occurrence), and the next occurrence of a series that already has a
+    -- no-QA card just carries the series' setting forward. (to_jsonb() so this
+    -- keeps working on a database without the recurring-task columns.)
     v_series := to_jsonb(new) ->> 'series_id';
-    if v_series is null or not exists (
+    v_repeats := coalesce(to_jsonb(new) ->> 'repeats', 'none');
+    if v_repeats = 'none' and (v_series is null or not exists (
       select 1
         from public.tasks s
        where s.qa_required is false
          and (s.id::text = v_series or to_jsonb(s) ->> 'series_id' = v_series)
-    ) then
+    )) then
       raise exception 'Only the Owner or someone with KPI access can create a task without QA.'
         using errcode = '42501';
     end if;

@@ -27,8 +27,10 @@ import {
   DEFAULT_QA_REQUIRED,
   QA_COMPLETION_BLOCKED_MESSAGE,
   QA_SETTING_LOCKED_MESSAGE,
+  defaultQaRequired,
   hydrateTask,
   isQaCompletionBlocked,
+  isRecurringTask,
   normalizeQaRequired,
   planRecreate,
   resolveNewTaskQaRequired,
@@ -70,11 +72,19 @@ async function main() {
   assert(!block(false, null, 'completed', false), 'worker + QA No: can create straight into Completed')
   assert(!block(true, 'for_review', 'completed', true), 'reviewer + QA Yes: Completed is open')
 
-  assert(resolveNewTaskQaRequired(undefined, false, false).value === true, 'a new task with no choice made requires QA')
-  assert(resolveNewTaskQaRequired(true, false, false).error === null, 'a worker may (re)state Yes')
-  assert(resolveNewTaskQaRequired(false, false, false).error === QA_SETTING_LOCKED_MESSAGE, 'a worker asking for No is refused')
-  assert(resolveNewTaskQaRequired(false, true, false).error === null, 'a reviewer may choose No')
-  assert(resolveNewTaskQaRequired(false, false, true).error === null, 'the next occurrence of a series may carry its No forward')
+  assert(resolveNewTaskQaRequired(undefined, false, false, false).value === true, 'a new ONE-OFF task with no choice made requires QA')
+  assert(resolveNewTaskQaRequired(undefined, false, false, true).value === false, 'a new REPEATING task with no choice made is QA-free')
+  assert(resolveNewTaskQaRequired(true, false, false, false).error === null, 'a worker may (re)state Yes')
+  assert(resolveNewTaskQaRequired(false, false, false, false).error === QA_SETTING_LOCKED_MESSAGE, 'a worker asking for No on a one-off task is refused')
+  assert(resolveNewTaskQaRequired(false, false, false, true).error === null, 'a worker asking for No on a repeating task is stating its default')
+  assert(resolveNewTaskQaRequired(false, true, false, false).error === null, 'a reviewer may choose No')
+  assert(resolveNewTaskQaRequired(false, false, true, false).error === null, 'the next occurrence of a series may carry its No forward')
+
+  assert(isRecurringTask({ repeats: 'weekly', series_id: null }), 'a repeat interval marks a card as repeating')
+  assert(isRecurringTask({ repeats: 'none', series_id: 't-1' }), 'a series id marks an occurrence as repeating')
+  assert(!isRecurringTask({ repeats: 'none', series_id: null }), 'a plain card is not repeating')
+  assert(defaultQaRequired({ repeats: 'weekly', series_id: null }) === false, 'the default for a repeating card is No QA')
+  assert(defaultQaRequired({ repeats: 'none', series_id: null }) === true, 'the default for a one-off card is still Yes')
 
   const legacy = hydrateTask({ id: 'x', status: 'todo', created_at: '2026-01-01T00:00:00.000Z' } as unknown as Task)
   assert(legacy.qa_required === false, 'hydrateTask: a row without the field reads as No')
@@ -286,6 +296,39 @@ async function main() {
   const shelfMoveBlocked = await localBackend.moveTask(startedYes.data!.id, 'completed', 0)
   assert(shelfMoveBlocked.error === QA_COMPLETION_BLOCKED_MESSAGE, 'and that Yes occurrence is gated like any other')
 
+  // A WORKER's own repeating task: repeating work defaults to No QA, so the
+  // card is theirs to finish — the whole point of the rule.
+  await localBackend.signIn('john@example.com', 'worker123')
+  const ownWeekly = (await localBackend.createTask({
+    ...base, worker_id: john.id, title: 'QA-V worker weekly', status: 'recurring', due_date: '2026-09-01', repeats: 'weekly',
+  })).data!
+  assert(ownWeekly.qa_required === false, 'worker: a repeating task they create defaults to No QA')
+  const ownStart = await localBackend.startRecurringOccurrence(ownWeekly.id)
+  assert(!ownStart.error && ownStart.data!.qa_required === false, 'its occurrence carries No forward')
+  const ownDone = await localBackend.moveTask(ownStart.data!.id, 'completed', 0)
+  assert(!ownDone.error && ownDone.data!.status === 'completed', 'and the worker moves it straight to Completed')
+  const ownWeeklyNo = await localBackend.createTask({
+    ...base, worker_id: john.id, title: 'QA-W worker weekly No', status: 'recurring', due_date: '2026-09-01', repeats: 'weekly', qa_required: false,
+  })
+  assert(!ownWeeklyNo.error && ownWeeklyNo.data!.qa_required === false, 'worker: stating No on a repeating task is accepted (it is the default)')
+
+  // A new ONE-OFF task from the same worker is unchanged: QA, gated.
+  const ownOneOff = await localBackend.createTask({ ...base, worker_id: john.id, title: 'QA-X worker one-off' })
+  assert(!ownOneOff.error && ownOneOff.data!.qa_required === true, 'worker: a one-off task still requires QA')
+  const oneOffBlocked = await localBackend.moveTask(ownOneOff.data!.id, 'completed', 0)
+  assert(oneOffBlocked.error === QA_COMPLETION_BLOCKED_MESSAGE, 'and the worker still cannot complete it')
+
+  // The Owner can still opt a series in — Yes carries to its occurrence.
+  await localBackend.signIn('admin', 'admin.pipelinesync')
+  const ownerYes = (await localBackend.createTask({
+    ...base, worker_id: john.id, title: 'QA-Y owner weekly Yes', status: 'recurring', due_date: '2026-09-01', repeats: 'weekly', qa_required: true,
+  })).data!
+  const ownerStart = await localBackend.startRecurringOccurrence(ownerYes.id)
+  assert(!ownerStart.error && ownerStart.data!.qa_required === true, 'an opted-in series hands the worker a QA task')
+  await localBackend.signIn('john@example.com', 'worker123')
+  const ownerStartBlocked = await localBackend.moveTask(ownerStart.data!.id, 'completed', 0)
+  assert(ownerStartBlocked.error === QA_COMPLETION_BLOCKED_MESSAGE, 'which the worker cannot complete')
+
   // ---------------------------------------------------------------- 8. tasks that predate the feature
   console.log('\n--- 8. tasks that predate the field ---')
   // Strip the field from every stored task, as a workspace saved by an older
@@ -308,6 +351,54 @@ async function main() {
   await localBackend.signIn(reviewOwner.email, 'worker123')
   const legacyDone = await localBackend.moveTask(reviewCard.id, 'completed', 0)
   assert(!legacyDone.error && legacyDone.data!.status === 'completed', 'a worker completes a legacy task exactly as before')
+
+  // ---------------------------------------------------------------- 9. repeating tasks from before the rule
+  console.log('\n--- 9. repeating tasks from before the rule ---')
+  // A one-off card with QA switched on, to prove the migration leaves it alone.
+  await localBackend.signIn('admin', 'admin.pipelinesync')
+  const keepYes = (await localBackend.createTask({ ...base, worker_id: john.id, title: 'QA-Z one-off keeps Yes' })).data!
+  assert(keepYes.qa_required === true, 'a new one-off task still defaults to Yes')
+  // An older workspace: every repeating card carries QA Required = Yes (what
+  // this app used to store) and the one-time marker is missing. The next read
+  // should switch exactly those cards off.
+  let oldRecurring = 0
+  for (const [key, raw] of [...mem.entries()]) {
+    let parsed: any
+    try { parsed = JSON.parse(raw) } catch { continue }
+    if (parsed && Array.isArray(parsed.tasks) && parsed.tasks.length > 0) {
+      delete parsed.recurringQaMigrated
+      for (const task of parsed.tasks) {
+        if ((task.repeats && task.repeats !== 'none') || task.series_id) {
+          task.qa_required = true
+          oldRecurring += 1
+        }
+      }
+      mem.set(key, JSON.stringify(parsed))
+    }
+  }
+  assert(oldRecurring > 0, `an old workspace with ${oldRecurring} QA-required repeating tasks is loaded`)
+  await localBackend.signIn('admin', 'admin.pipelinesync')
+  const migrated = (await localBackend.listTasks()).data!
+  const migratedRecurring = migrated.filter((t) => isRecurringTask(t))
+  assert(
+    migratedRecurring.length > 0 && migratedRecurring.every((t) => t.qa_required === false),
+    'every repeating task in it loads as No QA (the one-time flip)',
+  )
+  assert(migrated.find((t) => t.id === keepYes.id)?.qa_required === true, 'and a one-off task keeps the QA setting it had')
+
+  const migratedShelf = migratedRecurring.find((t) => t.status === 'recurring' && t.worker_id === john.id)!
+  await localBackend.signIn('john@example.com', 'worker123')
+  const migratedStart = await localBackend.startRecurringOccurrence(migratedShelf.id)
+  assert(!migratedStart.error && migratedStart.data!.qa_required === false, 'an occurrence started from a migrated shelf card is No QA')
+  const migratedDone = await localBackend.moveTask(migratedStart.data!.id, 'completed', 0)
+  assert(!migratedDone.error && migratedDone.data!.status === 'completed', 'and the worker completes it')
+
+  // The Owner's later opt-in is not undone (the migration only runs once).
+  await localBackend.signIn('admin', 'admin.pipelinesync')
+  const optedIn = await localBackend.updateTask(migratedShelf.id, { qa_required: true })
+  assert(!optedIn.error && optedIn.data!.qa_required === true, 'the Owner can tick QA back on a repeating card')
+  const afterOptIn = (await localBackend.listTasks()).data!.find((t) => t.id === optedIn.data!.id)!
+  assert(afterOptIn.qa_required === true, 'and the one-time flip does not switch it off again')
 
   if (failures > 0) {
     console.error(`\n${failures} check(s) failed`)
