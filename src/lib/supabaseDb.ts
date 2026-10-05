@@ -62,13 +62,10 @@ import {
 import type { BackendResult, DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, CreateFinanceItemInput, CreateMeetingInput, CreateNoteInput, CreateInvoiceInput, CreateMonthlyGoalInput, SaveBonusDecisionInput } from './backend'
 import { ACCOUNT_DEACTIVATED_MESSAGE } from './backend'
 import {
-  QA_COMPLETION_BLOCKED_MESSAGE,
-  QA_SETTING_LOCKED_MESSAGE,
   applyDueDateChange,
   applyStageTransition,
   hydrateTask,
   initialStageFields,
-  isQaCompletionBlocked,
   nextRecurringDueDate,
   normalizeEstimatedHours,
   normalizeOccurrence,
@@ -110,10 +107,10 @@ const RECURRING_TASK_COLUMNS = ['repeats', 'repeat_until', 'series_id', 'occurre
 /**
  * Logged when tasks are saved on a database without
  * supabase/RUN-THIS-task-qa-required.sql. The task itself is still saved, but
- * without the column nothing can be enforced: every task reads as "No QA".
+ * the QA request cannot be stored: every task reads as "No QA".
  */
 const QA_COLUMN_MISSING_WARNING =
-  '[work-tracker] tasks.qa_required is missing on this database — run supabase/RUN-THIS-task-qa-required.sql to enable QA Required.'
+  '[work-tracker] tasks.qa_required is missing on this database — run supabase/RUN-THIS-task-qa-required.sql to store the QA Required flag.'
 
 const WORKER_COLOR_MIGRATION_MESSAGE =
   'Worker colour tag was not saved: run supabase/RUN-THIS-worker-color.sql in the Supabase SQL editor to add the color column. Everything else was saved.'
@@ -3159,23 +3156,13 @@ export const supabaseBackend: DataBackend = {
       : me.data!.workerId
     if (!workerId) return fail('Choose who the task is for.')
     const status: TaskStatus = input.status ?? 'todo'
-    // "QA Required?" — a one-off task defaults to Yes; a repeating task
-    // defaults to No (the routine work is the worker's to close). Only the
-    // Owner / KPI access may ask for No on a one-off task (a repeating series
-    // just carries its own setting forward), and a QA-required task cannot be
-    // created straight into Completed by anyone else. The database enforces the
-    // same rules with a trigger, so a hand-made request cannot get around them.
-    const reviewer = canDo(me.data!, 'team_kpi.view')
-    const qa = resolveNewTaskQaRequired(
+    // "QA Required?" — a one-off task defaults to Yes (flag it for review); a
+    // repeating task defaults to No (routine work). Anyone may state either
+    // value; the flag never blocks a stage move.
+    const qaValue = resolveNewTaskQaRequired(
       input.qa_required,
-      reviewer,
-      Boolean(input.series_id),
       isRecurringTask({ repeats: normalizeRepeats(input.repeats), series_id: input.series_id ?? null }),
     )
-    if (qa.error) return fail(qa.error)
-    if (isQaCompletionBlocked({ qaRequired: qa.value, from: null, to: status }, reviewer)) {
-      return fail(QA_COMPLETION_BLOCKED_MESSAGE)
-    }
     const now = new Date().toISOString()
     const actor = await actorLabelFor(me.data!)
     const sb = client()
@@ -3218,7 +3205,7 @@ export const supabaseBackend: DataBackend = {
       if (withStartDate) payload.start_date = normalizeStartDate(input.start_date) ?? now.slice(0, 10)
       // Always sent explicitly (never left to the column default), so the
       // stored value is exactly what was validated above.
-      if (withQa) payload.qa_required = qa.value
+      if (withQa) payload.qa_required = qaValue
       return sb
         .from('tasks')
         .insert(payload)
@@ -3283,16 +3270,10 @@ export const supabaseBackend: DataBackend = {
     if (readErr) return fail(readErr.message)
     if (!current) return fail('Task not found.')
     const task = hydrateTask(current as Task)
-    // "QA Required?": the Owner and people with KPI access decide it. Anyone
-    // else may send the value the task already has, never a different one, and
-    // cannot take a QA-required task into Completed. (The database enforces
-    // both with a trigger, so a hand-made request cannot get around them.)
-    const reviewer = canDo(me.data!, 'team_kpi.view')
+    // "QA Required?" is a plain editable field: anyone who may edit the task
+    // may switch it (RLS limits that to their own board, or the whole team with
+    // tasks.manage_all). It never blocks a stage move.
     const qaChange = patch.qa_required !== undefined && normalizeQaRequired(patch.qa_required) !== task.qa_required
-    if (qaChange && !reviewer) return fail(QA_SETTING_LOCKED_MESSAGE)
-    if (patch.status !== undefined && isQaCompletionBlocked({ qaRequired: task.qa_required, from: task.status, to: patch.status as TaskStatus }, reviewer)) {
-      return fail(QA_COMPLETION_BLOCKED_MESSAGE)
-    }
     const now = new Date().toISOString()
     const actor = await actorLabelFor(me.data!)
 
@@ -3478,10 +3459,6 @@ export const supabaseBackend: DataBackend = {
     if (!current) return fail('Task not found.')
     const task = hydrateTask(current as Task)
     const target = normalizeTaskStage(status)
-    // A QA-required task only reaches Completed through the Owner / KPI access.
-    if (isQaCompletionBlocked({ qaRequired: task.qa_required, from: task.status, to: target }, canDo(me.data!, 'team_kpi.view'))) {
-      return fail(QA_COMPLETION_BLOCKED_MESSAGE)
-    }
     const now = new Date().toISOString()
     const actor = await actorLabelFor(me.data!)
 

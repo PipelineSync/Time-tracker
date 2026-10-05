@@ -2,13 +2,18 @@
  * Verification of "QA Required?" against the Supabase backend (the REAL
  * src/lib/supabaseDb.ts, pointed at the in-memory mock client).
  *
- *   Yes → a plain worker cannot move the task to Completed, by any path. Only
- *         the Owner and people with KPI access (`team_kpi.view`) can.
- *   No  → the worker completes it as before.
+ * "QA Required?" is a REQUEST for review, not a lock:
  *
- * These are the app-side checks (the friendly refusals). The same rules are
- * enforced again inside the database by supabase/RUN-THIS-task-qa-required.sql,
- * which is exercised separately against a real Postgres.
+ *   Yes → the card carries a "QA required" chip and is scored by the Owner /
+ *         `team_kpi.view` holders once it reaches For Review. Anyone who may
+ *         edit the card can still complete it.
+ *   No  → nothing to review.
+ *
+ * Anyone who may edit a card can tick or untick it; no stage move is refused
+ * because of the flag. QA SCORING stays with the Owner / KPI access. The
+ * database has no guard trigger any more (supabase/RUN-THIS-open-qa-toggle.sql
+ * removes it from databases that installed one), so these app-side rules are
+ * the whole story.
  *
  * Run: npx tsx scripts/verify-qa-required-supabase.ts
  */
@@ -39,7 +44,7 @@ try {
   rmSync(tmpFile, { force: true })
 }
 const { supabaseBackend } = mod
-const { QA_COMPLETION_BLOCKED_MESSAGE, QA_SETTING_LOCKED_MESSAGE, planRecreate } = await import('../src/lib/taskWorkflow')
+const { planRecreate } = await import('../src/lib/taskWorkflow')
 
 globalThis.fetch = async (url) => {
   const entry = Object.entries(state.fetchHandlers).find(([k]) => String(url).includes(k))
@@ -96,7 +101,7 @@ async function main() {
   const owner = await as(ADMIN)
   assert(owner.role === 'admin', 'admin can sign in')
   const aDefault = await supabaseBackend.createTask({ ...base, worker_id: JOHN, title: 'QA-A default' })
-  assert(!aDefault.error && aDefault.data!.qa_required === true, 'a new task requires QA by default')
+  assert(!aDefault.error && aDefault.data!.qa_required === true, 'a new task asks for QA by default')
   assert(row(aDefault.data!.id)?.qa_required === true, 'the value is written explicitly to the row (not left to the column default)')
   const aNo = await supabaseBackend.createTask({ ...base, worker_id: JOHN, title: 'QA-B No', qa_required: false })
   assert(!aNo.error && aNo.data!.qa_required === false && row(aNo.data!.id)?.qa_required === false, 'the Owner can create a task with QA Required = No')
@@ -109,45 +114,58 @@ async function main() {
   assert(john.role === 'worker' && !(john.permissions ?? []).includes('team_kpi.view'), 'John signs in with no KPI access')
   const tasksBefore = state.tasks.length
   const own = await supabaseBackend.createTask({ ...base, worker_id: JOHN, title: 'QA-D John own', status: 'in_progress' })
-  assert(!own.error && own.data!.qa_required === true && row(own.data!.id)?.qa_required === true, 'a task the worker creates requires QA (the default)')
+  assert(!own.error && own.data!.qa_required === true && row(own.data!.id)?.qa_required === true, 'a task the worker creates asks for QA (the default)')
   const askNo = await supabaseBackend.createTask({ ...base, worker_id: JOHN, title: 'QA-E John asks No', qa_required: false })
-  assert(askNo.error === QA_SETTING_LOCKED_MESSAGE, 'the worker cannot create a task with QA Required = No')
+  assert(!askNo.error && row(askNo.data!.id)?.qa_required === false, 'the worker CAN create a task with QA Required = No (the tick is open to everyone)')
   const askDone = await supabaseBackend.createTask({ ...base, worker_id: JOHN, title: 'QA-F John completed', status: 'completed' })
-  assert(askDone.error === QA_COMPLETION_BLOCKED_MESSAGE, 'the worker cannot create a QA-required task straight into Completed')
-  assert(state.tasks.length === tasksBefore + 1, 'the refused creates inserted nothing')
+  assert(!askDone.error && askDone.data!.status === 'completed' && row(askDone.data!.id)?.qa_required === true, 'the worker CAN create a QA-required task straight into Completed')
+  assert(state.tasks.length === tasksBefore + 3, 'all three creates inserted a row')
   const review = await supabaseBackend.createTask({ ...base, worker_id: JOHN, title: 'QA-G John review', status: 'for_review' })
   assert(!review.error && review.data!.status === 'for_review', 'the worker can create one in For Review')
 
   const t = own.data!
   const drag = await supabaseBackend.moveTask(t.id, 'completed', 0)
-  assert(drag.error === QA_COMPLETION_BLOCKED_MESSAGE, 'moveTask into Completed is refused')
-  assert(row(t.id)?.status === 'in_progress' && row(t.id)?.completed_at == null, 'the refused move changed nothing')
+  assert(!drag.error && row(t.id)?.status === 'completed' && !!row(t.id)?.completed_at, 'moveTask into Completed works with QA Yes')
+  const back = await supabaseBackend.moveTask(t.id, 'in_progress', 0)
+  assert(!back.error && row(t.id)?.status === 'in_progress' && row(t.id)?.completed_at == null, 'and back out of Completed')
   const edit = await supabaseBackend.updateTask(t.id, { status: 'completed' })
-  assert(edit.error === QA_COMPLETION_BLOCKED_MESSAGE && row(t.id)?.status === 'in_progress', 'updateTask with status Completed is refused')
+  assert(!edit.error && row(t.id)?.status === 'completed', 'updateTask with status Completed works too')
   const toReview = await supabaseBackend.moveTask(t.id, 'for_review', 0)
   assert(!toReview.error && row(t.id)?.status === 'for_review', 'For Review stays open')
   const reviewDone = await supabaseBackend.moveTask(t.id, 'completed', 0)
-  assert(reviewDone.error === QA_COMPLETION_BLOCKED_MESSAGE, 'For Review → Completed is refused as well')
-  const untick = await supabaseBackend.updateTask(t.id, { qa_required: false })
-  assert(untick.error === QA_SETTING_LOCKED_MESSAGE && row(t.id)?.qa_required === true, 'the worker cannot untick QA Required')
-  const untickDone = await supabaseBackend.updateTask(t.id, { qa_required: false, status: 'completed' })
-  assert(untickDone.error && row(t.id)?.qa_required === true && row(t.id)?.status === 'for_review', 'nor untick and complete in one save')
-  const same = await supabaseBackend.updateTask(t.id, { qa_required: true, title: 'QA-D John own (renamed)' })
-  assert(!same.error && row(t.id)?.title === 'QA-D John own (renamed)' && row(t.id)?.qa_required === true, 're-sending the current value while editing is fine')
+  assert(!reviewDone.error && row(t.id)?.status === 'completed', 'For Review → Completed is the worker’s to make as well')
 
-  // No QA → the worker moves it themselves.
+  const untick = await supabaseBackend.updateTask(t.id, { qa_required: false })
+  assert(!untick.error && row(t.id)?.qa_required === false, 'the worker CAN untick QA Required on their own task')
+  const retick = await supabaseBackend.updateTask(t.id, { qa_required: true })
+  assert(!retick.error && row(t.id)?.qa_required === true, 'and tick it back on')
+  const untickDone = await supabaseBackend.updateTask(t.id, { qa_required: false, status: 'in_progress' })
+  assert(!untickDone.error && row(t.id)?.qa_required === false && row(t.id)?.status === 'in_progress', 'untick and change stage in one save')
+  const same = await supabaseBackend.updateTask(t.id, { qa_required: false, title: 'QA-D John own (renamed)' })
+  assert(!same.error && row(t.id)?.title === 'QA-D John own (renamed)' && row(t.id)?.qa_required === false, 're-sending the value while editing is fine')
+
+  // Scoring stays the reviewers' call.
+  const scoreByWorker = await supabaseBackend.updateTask(t.id, { qa_score: 5 })
+  assert(!!scoreByWorker.error && /score QA/.test(scoreByWorker.error), 'the worker still cannot SCORE QA')
+
+  // No QA → the worker moves it themselves, exactly as before.
   const noQa = { ...aNo.data! }
   const noQaDone = await supabaseBackend.moveTask(noQa.id, 'completed', 0)
   assert(!noQaDone.error && row(noQa.id)?.status === 'completed' && !!row(noQa.id)?.completed_at, 'QA No: the worker moves the task to Completed')
+
+  // "Any task they can edit" is decided by the database's RLS policies on
+  // `tasks` (own cards, or every card with tasks.manage_all) — supabaseDb does
+  // not re-check ownership, so there is nothing to assert here against the
+  // mock, which does not model RLS. See supabase/tasks.sql.
 
   // ---------------------------------------------------------------- 3. the Owner decides
   console.log('\n--- 3. the Owner decides ---')
   await as(ADMIN)
   const ownerDone = await supabaseBackend.moveTask(t.id, 'completed', 0)
-  assert(!ownerDone.error && row(t.id)?.status === 'completed', 'the Owner moves it from For Review to Completed')
+  assert(!ownerDone.error && row(t.id)?.status === 'completed', 'the Owner completes a QA-required task')
   await as(JOHN_USER)
   const reorder = await supabaseBackend.moveTask(t.id, 'completed', 0)
-  assert(!reorder.error, 'the worker can still re-order a reviewed card')
+  assert(!reorder.error, 'the worker can still re-order a completed card')
   const archive = await supabaseBackend.updateTask(t.id, { archived_at: new Date().toISOString() })
   assert(!archive.error && row(t.id)?.archived_at != null, 'and archive it')
   const restore = await supabaseBackend.updateTask(t.id, { archived_at: null })
@@ -157,45 +175,45 @@ async function main() {
   const flip = (await supabaseBackend.createTask({ ...base, worker_id: JOHN, title: 'QA-H flip', status: 'in_progress' })).data!
   const toNo = await supabaseBackend.updateTask(flip.id, { qa_required: false })
   assert(!toNo.error && row(flip.id)?.qa_required === false, 'the Owner can switch Yes → No')
+  const toYes = await supabaseBackend.updateTask(flip.id, { qa_required: true })
+  assert(!toYes.error && row(flip.id)?.qa_required === true, 'the Owner can switch No → Yes')
   await as(JOHN_USER)
-  const opened = await supabaseBackend.moveTask(flip.id, 'completed', 0)
-  assert(!opened.error && row(flip.id)?.status === 'completed', 'the worker completes it once it is No')
-  await as(ADMIN)
-  const flip2 = (await supabaseBackend.createTask({ ...base, worker_id: JOHN, title: 'QA-I flip back', status: 'in_progress', qa_required: false })).data!
-  const toYes = await supabaseBackend.updateTask(flip2.id, { qa_required: true })
-  assert(!toYes.error && row(flip2.id)?.qa_required === true, 'the Owner can switch No → Yes')
-  await as(JOHN_USER)
-  const locked = await supabaseBackend.moveTask(flip2.id, 'completed', 0)
-  assert(locked.error === QA_COMPLETION_BLOCKED_MESSAGE, 'and the worker is locked out again')
+  const stillCompletable = await supabaseBackend.moveTask(flip.id, 'completed', 0)
+  assert(!stillCompletable.error && row(flip.id)?.status === 'completed', 'and the worker completes it with the tick set (nothing is locked)')
 
-  // ---------------------------------------------------------------- 4. KPI access
-  console.log('\n--- 4. KPI access (team_kpi.view) ---')
+  // ---------------------------------------------------------------- 4. Supervisor and KPI access
+  console.log('\n--- 4. Supervisor / KPI access ---')
   await as(SARAH_USER)
-  const sarahMove = await supabaseBackend.moveTask(flip2.id, 'completed', 0)
-  assert(sarahMove.error === QA_COMPLETION_BLOCKED_MESSAGE, "a Supervisor (tasks.manage_all, no KPI) cannot complete someone else's QA task")
-  const sarahFlag = await supabaseBackend.updateTask(flip2.id, { qa_required: false })
-  assert(sarahFlag.error === QA_SETTING_LOCKED_MESSAGE, 'nor change the flag')
-  const sarahNo = await supabaseBackend.createTask({ ...base, worker_id: JOHN, title: 'QA-J supervisor No', qa_required: false })
-  assert(sarahNo.error === QA_SETTING_LOCKED_MESSAGE, 'nor create a No task')
+  assert((state.workers.find((w) => w.id === SARAH)?.permissions ?? []).includes('tasks.manage_all'), 'Sarah is a Supervisor (runs the board, no KPI access)')
+  const sarahFlip = (await supabaseBackend.createTask({ ...base, worker_id: JOHN, title: 'QA-J supervisor flip', status: 'in_progress' })).data!
+  assert(row(sarahFlip.id)?.qa_required === true, 'the Supervisor creates a task for John — QA on by default')
+  const sarahFlag = await supabaseBackend.updateTask(sarahFlip.id, { qa_required: false })
+  assert(!sarahFlag.error && row(sarahFlip.id)?.qa_required === false, "the Supervisor CAN switch the flag on someone else's card")
+  const sarahNo = await supabaseBackend.createTask({ ...base, worker_id: JOHN, title: 'QA-K supervisor No', qa_required: false })
+  assert(!sarahNo.error && row(sarahNo.data!.id)?.qa_required === false, 'nor is creating a No task refused')
+  const sarahDone = await supabaseBackend.moveTask(sarahFlip.id, 'completed', 0)
+  assert(!sarahDone.error && row(sarahFlip.id)?.status === 'completed', 'and completing it is allowed')
+  const sarahScore = await supabaseBackend.updateTask(sarahFlip.id, { qa_score: 4 })
+  assert(!!sarahScore.error && /score QA/.test(sarahScore.error), 'but the Supervisor still cannot SCORE QA')
 
   state.workers.find((w) => w.id === JOHN)!.permissions = ['team_kpi.view']
   const kpiJohn = await as(JOHN_USER)
   assert((kpiJohn.permissions ?? []).includes('team_kpi.view'), 'John is given KPI access')
-  const kpiMove = await supabaseBackend.moveTask(flip2.id, 'completed', 0)
-  assert(!kpiMove.error && row(flip2.id)?.status === 'completed', 'KPI access: can move a QA-required task to Completed')
-  const kpiFlag = await supabaseBackend.updateTask(flip2.id, { qa_required: false })
-  assert(!kpiFlag.error && row(flip2.id)?.qa_required === false, 'KPI access: can change the flag')
-  const kpiNo = await supabaseBackend.createTask({ ...base, worker_id: JOHN, title: 'QA-K kpi No', qa_required: false })
+  const kpiScore = await supabaseBackend.updateTask(sarahFlip.id, { qa_score: 5 })
+  assert(!kpiScore.error && row(sarahFlip.id)?.qa_score === 5, 'KPI access: can score QA')
+  const kpiFlag = await supabaseBackend.updateTask(sarahFlip.id, { qa_required: true })
+  assert(!kpiFlag.error && row(sarahFlip.id)?.qa_required === true, 'KPI access: can change the flag')
+  const kpiNo = await supabaseBackend.createTask({ ...base, worker_id: JOHN, title: 'QA-L kpi No', qa_required: false })
   assert(!kpiNo.error && row(kpiNo.data!.id)?.qa_required === false, 'KPI access: can create a No task')
-  const kpiDone = await supabaseBackend.createTask({ ...base, worker_id: JOHN, title: 'QA-L kpi done', status: 'completed', qa_required: true })
-  assert(!kpiDone.error && kpiDone.data!.status === 'completed', 'KPI access: can create a QA-required task straight into Completed')
 
   state.workers.find((w) => w.id === JOHN)!.permissions = []
   await as(ADMIN)
   const again = (await supabaseBackend.createTask({ ...base, worker_id: JOHN, title: 'QA-M after revoke', status: 'in_progress' })).data!
   await as(JOHN_USER)
   const revoked = await supabaseBackend.moveTask(again.id, 'completed', 0)
-  assert(revoked.error === QA_COMPLETION_BLOCKED_MESSAGE, 'revoking KPI access puts the gate back')
+  assert(!revoked.error && row(again.id)?.status === 'completed', 'revoking KPI access changes nothing: the card was never gated')
+  const revokedScore = await supabaseBackend.updateTask(again.id, { qa_score: 3 })
+  assert(!!revokedScore.error && /score QA/.test(revokedScore.error), 'but scoring is refused again without it')
 
   // ---------------------------------------------------------------- 5. repeating tasks
   console.log('\n--- 5. repeating tasks keep their setting ---')
@@ -211,15 +229,15 @@ async function main() {
   assert(!weeklyNoDone.error, 'the worker completes the No-QA weekly task')
   const nextNo = await supabaseBackend.createTask(planRecreate(weeklyNoDone.data!, [1, 2, 3, 4, 5])!.input)
   assert(!nextNo.error && row(nextNo.data!.id)?.qa_required === false && row(nextNo.data!.id)?.series_id === weeklyNo.id, '"Recreate next" keeps a No series at No')
-  await as(ADMIN)
   const yesDone = await supabaseBackend.moveTask(weeklyYes.id, 'completed', 0)
-  await as(JOHN_USER)
+  assert(!yesDone.error, 'the worker completes the Yes weekly task too — the tick does not gate anything')
   const nextYes = await supabaseBackend.createTask(planRecreate(yesDone.data!, [1, 2, 3, 4, 5])!.input)
   assert(!nextYes.error && row(nextYes.data!.id)?.qa_required === true, '"Recreate next" of a Yes task stays Yes')
-  assert((await supabaseBackend.moveTask(nextYes.data!.id, 'completed', 0)).error === QA_COMPLETION_BLOCKED_MESSAGE, 'and the worker still cannot complete it')
-  // A worker claiming "No" without being part of a series is refused.
-  const fakeSeries = await supabaseBackend.createTask({ ...base, worker_id: JOHN, title: 'QA-P no series', qa_required: false })
-  assert(fakeSeries.error === QA_SETTING_LOCKED_MESSAGE, 'a worker cannot claim No unless the task continues a series')
+  const nextYesDone = await supabaseBackend.moveTask(nextYes.data!.id, 'completed', 0)
+  assert(!nextYesDone.error && row(nextYes.data!.id)?.status === 'completed', 'and the worker completes that one as well')
+  // Anyone may ask for No, series or not.
+  const noSeries = await supabaseBackend.createTask({ ...base, worker_id: JOHN, title: 'QA-P no series', qa_required: false })
+  assert(!noSeries.error && row(noSeries.data!.id)?.qa_required === false, 'a worker may set No on a one-off task, series or not')
 
   await as(ADMIN)
   const shelfNo = (await supabaseBackend.createTask({ ...base, worker_id: JOHN, title: 'QA-Q shelf No', status: 'recurring', due_date: '2026-09-01', repeats: 'weekly', qa_required: false })).data!
@@ -229,9 +247,10 @@ async function main() {
   assert(!startedNo.error && row(startedNo.data!.id)?.qa_required === false, 'starting an occurrence of a No shelf card gives a No task')
   const startedYes = await supabaseBackend.startRecurringOccurrence(shelfYes.id)
   assert(!startedYes.error && row(startedYes.data!.id)?.qa_required === true, 'starting an occurrence of a Yes shelf card gives a Yes task')
+  const startedDone = await supabaseBackend.moveTask(startedYes.data!.id, 'completed', 0)
+  assert(!startedDone.error, 'and that Yes occurrence completes like any other')
 
-  // A WORKER's own repeating task: repeating work defaults to No QA, so the
-  // card is theirs to close.
+  // A WORKER's own repeating task defaults to No QA (routine work).
   await as(JOHN_USER)
   const ownWeekly = (await supabaseBackend.createTask({
     ...base, worker_id: JOHN, title: 'QA-S1 worker weekly', status: 'recurring', due_date: '2026-09-01', repeats: 'weekly',
@@ -241,14 +260,15 @@ async function main() {
   assert(!ownStart.error && row(ownStart.data!.id)?.qa_required === false, 'its occurrence carries No forward')
   const ownFinished = await supabaseBackend.moveTask(ownStart.data!.id, 'completed', 0)
   assert(!ownFinished.error && row(ownStart.data!.id)?.status === 'completed', 'and the worker moves it straight to Completed')
-  const ownWeeklyNo = await supabaseBackend.createTask({
-    ...base, worker_id: JOHN, title: 'QA-S2 worker weekly No', status: 'recurring', due_date: '2026-09-01', repeats: 'weekly', qa_required: false,
+  const ownWeeklyYes = await supabaseBackend.createTask({
+    ...base, worker_id: JOHN, title: 'QA-S2 worker weekly Yes', status: 'recurring', due_date: '2026-09-01', repeats: 'weekly', qa_required: true,
   })
-  assert(!ownWeeklyNo.error && row(ownWeeklyNo.data!.id)?.qa_required === false, 'stating No on a repeating task is accepted (it is the default)')
-  // A one-off task from the same worker is unchanged: QA, gated.
+  assert(!ownWeeklyYes.error && row(ownWeeklyYes.data!.id)?.qa_required === true, 'and can ask for QA on their own repeating card')
+  // A one-off task from the same worker asks for QA by default.
   const ownOneOff = await supabaseBackend.createTask({ ...base, worker_id: JOHN, title: 'QA-S3 worker one-off' })
-  assert(!ownOneOff.error && row(ownOneOff.data!.id)?.qa_required === true, 'a one-off task the worker creates still requires QA')
-  assert((await supabaseBackend.moveTask(ownOneOff.data!.id, 'completed', 0)).error === QA_COMPLETION_BLOCKED_MESSAGE, 'and the worker still cannot complete it')
+  assert(!ownOneOff.error && row(ownOneOff.data!.id)?.qa_required === true, 'a one-off task the worker creates still asks for QA')
+  const ownOneOffDone = await supabaseBackend.moveTask(ownOneOff.data!.id, 'completed', 0)
+  assert(!ownOneOffDone.error && row(ownOneOff.data!.id)?.status === 'completed', 'and the worker completes it with the chip still on')
 
   // The Owner can still opt a series in — Yes carries to its occurrence.
   await as(ADMIN)
@@ -257,8 +277,6 @@ async function main() {
   })).data!
   const ownerStart = await supabaseBackend.startRecurringOccurrence(ownerWeekly.id)
   assert(!ownerStart.error && row(ownerStart.data!.id)?.qa_required === true, 'an opted-in series hands the worker a QA task')
-  await as(JOHN_USER)
-  assert((await supabaseBackend.moveTask(ownerStart.data!.id, 'completed', 0)).error === QA_COMPLETION_BLOCKED_MESSAGE, 'which the worker cannot complete')
 
   // ---------------------------------------------------------------- 6. tasks that predate the field
   console.log('\n--- 6. tasks that predate the field ---')
@@ -267,7 +285,7 @@ async function main() {
     due_date: '2099-12-31', position: 0, completed_at: null, archived_at: null, created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z',
   })
   const legacy = await supabaseBackend.moveTask('legacy-1', 'completed', 0)
-  assert(!legacy.error && legacy.data!.status === 'completed' && legacy.data!.qa_required === false, 'a row with no qa_required reads as No and the worker completes it')
+  assert(!legacy.error && legacy.data!.status === 'completed' && legacy.data!.qa_required === false, 'a row with no qa_required reads as No and completes')
 
   // ---------------------------------------------------------------- 7. a database that has not run the migration
   console.log('\n--- 7. a database without supabase/RUN-THIS-task-qa-required.sql ---')
@@ -280,7 +298,7 @@ async function main() {
     const created = await supabaseBackend.createTask({ ...base, worker_id: JOHN, title: 'QA-T un-migrated create', status: 'in_progress' })
     assert(!created.error && created.data!.title === 'QA-T un-migrated create', 'creating a task still works')
     assert(row(created.data!.id) && !('qa_required' in row(created.data!.id)!), 'it is saved without the column')
-    assert(created.data!.qa_required === false, 'and reads as No (nothing can be enforced yet)')
+    assert(created.data!.qa_required === false, 'and reads as No (the flag cannot be stored yet)')
     assert(warnings.some((w) => /RUN-THIS-task-qa-required\.sql/.test(w)), 'the operator is told which file to run')
 
     warnings.length = 0
@@ -290,9 +308,11 @@ async function main() {
 
     await as(JOHN_USER)
     const moved = await supabaseBackend.moveTask(created.data!.id, 'completed', 0)
-    assert(!moved.error && row(created.data!.id)?.status === 'completed', 'the worker can complete it (there is no flag to enforce)')
+    assert(!moved.error && row(created.data!.id)?.status === 'completed', 'the worker can complete it')
     const workerCreate = await supabaseBackend.createTask({ ...base, worker_id: JOHN, title: 'QA-U worker un-migrated', status: 'in_progress' })
     assert(!workerCreate.error, "a worker's own create also works")
+    const workerNo = await supabaseBackend.createTask({ ...base, worker_id: JOHN, title: 'QA-U2 worker un-migrated No', qa_required: false })
+    assert(!workerNo.error, 'and a worker asking for No is accepted as well')
     const started = await supabaseBackend.startRecurringOccurrence(shelfYes.id)
     assert(!started.error, 'starting an occurrence works')
   } finally {

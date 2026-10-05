@@ -111,11 +111,11 @@ function seedTask(p: {
     start_date: p.start_date ?? p.created_at.slice(0, 10),
     original_due_date: p.original_due_date ?? null,
     estimated_hours: p.estimated_hours ?? null,
-    // Sample cards that went through (or sit in) review obviously needed QA;
-    // the rest are plain cards that predate the rule (No) unless a sample
+    // Sample cards that went through (or sit in) review obviously asked for
+    // QA; the rest are plain cards that predate the rule (No) unless a sample
     // below says otherwise. A REPEATING sample is QA-free either way — that is
-    // the default for repeating work (the worker completes each occurrence),
-    // and a QA score on one only records that it was reviewed.
+    // the default for repeating work — and a QA score on one only records that
+    // it was reviewed.
     qa_required:
       p.qa_required ??
       ((p.repeats ?? 'none') !== 'none' || p.series_id

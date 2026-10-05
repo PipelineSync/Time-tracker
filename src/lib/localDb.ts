@@ -65,12 +65,9 @@ import type { DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput
 import { ACCOUNT_DEACTIVATED_MESSAGE } from './backend'
 import { buildDemoSeed } from './demoSeed'
 import {
-  QA_COMPLETION_BLOCKED_MESSAGE,
-  QA_SETTING_LOCKED_MESSAGE,
   applyDueDateChange,
   applyStageTransition,
   initialStageFields,
-  isQaCompletionBlocked,
   nextRecurringDueDate,
   effectiveStartDate,
   normalizeEstimatedHours,
@@ -2495,22 +2492,13 @@ export const localBackend: DataBackend = {
     if (!workerId) return { data: null, error: 'Choose who the task is for.' }
     if (!c.data.workers.some((w) => w.id === workerId)) return { data: null, error: 'Worker not found.' }
     const status = normalizeTaskStatus(input.status)
-    // "QA Required?" — a one-off task defaults to Yes; a repeating task
-    // defaults to No (the routine work is the worker's to close). Only the
-    // Owner / KPI access may ask for No on a one-off task (a repeating series
-    // just carries its own setting forward), and a QA-required task cannot be
-    // created straight into Completed by anyone else.
-    const reviewer = can(c, 'team_kpi.view')
-    const qa = resolveNewTaskQaRequired(
+    // "QA Required?" — a one-off task defaults to Yes (flag it for review); a
+    // repeating task defaults to No (routine work). Anyone may state either
+    // value; the flag never blocks a stage move.
+    const qaValue = resolveNewTaskQaRequired(
       input.qa_required,
-      reviewer,
-      Boolean(input.series_id),
       isRecurringTask({ repeats: normalizeRepeats(input.repeats), series_id: input.series_id ?? null }),
     )
-    if (qa.error) return { data: null, error: qa.error }
-    if (isQaCompletionBlocked({ qaRequired: qa.value, from: null, to: status }, reviewer)) {
-      return { data: null, error: QA_COMPLETION_BLOCKED_MESSAGE }
-    }
     const now = new Date().toISOString()
     const actor = stageActorName(c.user.role, c.data.workers.find((w) => w.id === c.user.workerId), c.user.email)
     const task: Task = {
@@ -2525,7 +2513,7 @@ export const localBackend: DataBackend = {
       due_date: input.due_date || null,
       // Stage timestamps + history for the brand-new card (§3).
       ...initialStageFields(status, now, actor),
-      qa_required: qa.value,
+      qa_required: qaValue,
       estimated_hours: normalizeEstimatedHours(input.estimated_hours),
       // Recurrence (a "Recreate next" clone carries the series forward).
       repeats: normalizeRepeats(input.repeats),
@@ -2564,18 +2552,12 @@ export const localBackend: DataBackend = {
     if (!can(c, 'tasks.manage_all') && current.worker_id !== c.user.workerId) {
       return { data: null, error: 'You can only change your own tasks.' }
     }
-    // QA/rework decisions belong to the Owner and the Project Manager (§10).
+    // QA/rework *scores* belong to the Owner and the Project Manager (§10).
+    // The QA Required? tick is not a score: anyone who may edit the task may
+    // switch it (the ownership check above already limits that to their own
+    // board, or the whole team with tasks.manage_all).
     if (patchTouchesQa(patch) && !can(c, 'team_kpi.view')) {
       return { data: null, error: 'Only the Owner or Project Manager can score QA.' }
-    }
-    // Whether a task needs QA is the same people's call: a worker may send the
-    // value it already has, never a different one.
-    if (
-      patch.qa_required !== undefined &&
-      normalizeQaRequired(patch.qa_required) !== normalizeQaRequired(current.qa_required) &&
-      !can(c, 'team_kpi.view')
-    ) {
-      return { data: null, error: QA_SETTING_LOCKED_MESSAGE }
     }
     // Only a task manager may hand a task to a different worker.
     const workerId = can(c, 'tasks.manage_all') && patch.worker_id ? patch.worker_id : current.worker_id
@@ -2589,10 +2571,6 @@ export const localBackend: DataBackend = {
         : { due_date: current.due_date, original_due_date: current.original_due_date, changed: false, missedDeadline: false }
 
     const status = patch.status ? normalizeTaskStatus(patch.status) : normalizeTaskStatus(current.status)
-    // A QA-required task only reaches Completed through the Owner / KPI access.
-    if (isQaCompletionBlocked({ qaRequired: normalizeQaRequired(current.qa_required), from: current.status, to: status }, can(c, 'team_kpi.view'))) {
-      return { data: null, error: QA_COMPLETION_BLOCKED_MESSAGE }
-    }
     const stageFields =
       patch.status && status !== normalizeTaskStatus(current.status)
         ? applyStageTransition(current, status, now, actor)
@@ -2677,9 +2655,6 @@ export const localBackend: DataBackend = {
       return { data: null, error: 'You can only move your own tasks.' }
     }
     const target = normalizeTaskStatus(status)
-    if (isQaCompletionBlocked({ qaRequired: normalizeQaRequired(task.qa_required), from: task.status, to: target }, can(c, 'team_kpi.view'))) {
-      return { data: null, error: QA_COMPLETION_BLOCKED_MESSAGE }
-    }
     const now = new Date().toISOString()
     const actor = stageActorName(c.user.role, c.data.workers.find((w) => w.id === c.user.workerId), c.user.email)
     // Stage hop: stamps Waiting Since / Submitted for Review / Completed At

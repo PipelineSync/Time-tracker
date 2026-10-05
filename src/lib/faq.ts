@@ -101,9 +101,9 @@ export const FAQ_SECTIONS: Record<FaqAudience, FaqSection[]> = {
       items: [
         {
           id: 'worker-task-qa',
-          question: 'Why can’t I move my task to Completed?',
+          question: 'What is the “QA required” chip on my task?',
           answer:
-            'Cards with a “QA required” chip need a check before they count as done. Move the card to For Review instead — the Owner or a teammate with KPI access reviews it and completes it. Cards without the chip you can move to Completed yourself.',
+            'It means the card has been asked for a check before it counts as done. Move it to For Review when the work is ready — the Owner or a teammate with KPI access scores it there. The chip never blocks you: you can still move the card to Completed yourself, and you can switch the tick on or off on any card you can edit (New task / Edit task → “QA Required?”).',
         },
       ],
     },
@@ -158,7 +158,7 @@ export const FAQ_SECTIONS: Record<FaqAudience, FaqSection[]> = {
           id: 'admin-task-qa',
           question: 'What does “QA Required?” on a task do?',
           answer:
-            'Yes: the worker can’t move it to Completed — it goes to For Review, and only you or a worker ticked for Team KPI can complete it. No lets the worker finish it themselves. One-off tasks start Yes; repeating ones (the Recurring shelf and its occurrences) start No, so routine work is completed — tick Yes on a series that needs review. Only you and Team KPI holders see the tick; older tasks are No.',
+            'It asks for a review: the card carries a “QA required” chip, and you or a teammate ticked for Team KPI scores it (1–5 + rework) once it reaches For Review. It is a request, not a lock — anyone who can edit the card can switch the tick, and whoever finishes the work can move it to Completed. One-off tasks start Yes; repeating ones start No. Tick Yes on a series that needs review.',
         },
         {
           id: 'admin-team-kpi',

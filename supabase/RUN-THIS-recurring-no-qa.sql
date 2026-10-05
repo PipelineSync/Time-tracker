@@ -30,6 +30,11 @@
 --  supabase/recurring-tasks.sql (the repeats / series_id columns). Fresh
 --  installs get all of this from schema.sql.
 --
+--  NOTE — this file re-installs the guard trigger. "QA Required?" is now a
+--  request for review that anyone may tick and that never blocks completing a
+--  card, so run supabase/RUN-THIS-open-qa-toggle.sql after it (or again, if
+--  you re-run this one) to remove the guard.
+--
 --  Run it once. The schema statements are idempotent, but the data flip is a
 --  plain UPDATE: running it again would re-switch any recurring card the Owner
 --  has deliberately ticked Yes on since.
