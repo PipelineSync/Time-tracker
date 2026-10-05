@@ -480,9 +480,10 @@ function normalizeInvoice(inv: Invoice): Invoice {
   const basis = normalizeInvoiceBasis(inv.basis)
   return {
     ...inv,
-    // A project-based invoice bills the project, not a client — it carries
-    // no client at all. Client-based ones keep theirs.
-    client_id: basis === 'project' ? null : String(inv.client_id ?? ''),
+    // Both billing targets may carry a client: a client-based invoice always
+    // does, a project-based one may name the client its project belongs to.
+    // A dangling link is dropped when the data is read (see readData).
+    client_id: inv.client_id ? String(inv.client_id) : null,
     basis,
     project_name: normalizeInvoiceProjectName(basis, inv.project_name),
     amount: Number.isFinite(amount) ? Math.max(0, amount) : 0,
@@ -742,10 +743,13 @@ function readData(userId: string): UserData {
   const beforePrune = d.clientPriorities.length
   d.clientPriorities = d.clientPriorities.filter((p) => clientIds.has(p.client_id))
   if (d.clientPriorities.length !== beforePrune) d.clientPriorities = d.clientPriorities.map((p) => ({ ...p }))
-  // Same for invoices — a client-based invoice for a deleted client has
-  // nobody to bill. Project-based ones bill a named project, not a client,
-  // so they stay on the board.
-  d.invoices = d.invoices.filter((i) => (i.client_id ? clientIds.has(i.client_id) : i.basis === 'project'))
+  // Same for invoices, but the two billing targets part ways: a client-based
+  // invoice for a deleted client has nobody to bill, so it leaves the board.
+  // A project-based one bills its named project — the client is only the
+  // project's home — so it stays and simply loses the link.
+  d.invoices = d.invoices
+    .filter((i) => (i.basis === 'project' ? true : !!i.client_id && clientIds.has(i.client_id)))
+    .map((i) => (i.basis === 'project' && i.client_id && !clientIds.has(i.client_id) ? { ...i, client_id: null } : i))
   // Workspaces saved before the Finance section simply load an empty ledger.
   d.financeItems = (d.financeItems || []).map(normalizeFinanceItem)
   d.entries = d.entries.map((e) => ({ ...e, client_id: e.client_id ?? null }))
@@ -2165,6 +2169,12 @@ export const localBackend: DataBackend = {
     )
     // The board is derived from the master list — a deleted client loses its place.
     c.data.clientPriorities = c.data.clientPriorities.filter((p) => p.client_id !== id)
+    // Invoices follow their billing target: a client-based one for this
+    // client has nobody left to bill and comes off the board, a project-based
+    // one keeps billing its named project and only loses the link.
+    c.data.invoices = c.data.invoices
+      .filter((i) => (i.basis === 'project' ? true : i.client_id !== id))
+      .map((i) => (i.basis === 'project' && i.client_id === id ? { ...i, client_id: null, updated_at: now } : i))
     save(c.data)
     return { data: null, error: null }
   },
@@ -2373,13 +2383,13 @@ export const localBackend: DataBackend = {
     if (!can(c, 'invoices.view')) return denied('use the invoicing board')
     // Client and project are different billing targets: a client-based
     // invoice bills a client from the master list, a project-based one bills
-    // a named project and carries no client at all.
+    // a named project — and may name the client that project belongs to.
     const basis = normalizeInvoiceBasis(input.basis)
-    let client_id: string | null = null
-    if (basis === 'client') {
-      client_id = input.client_id
-      if (!client_id || !c.data.clients.some((cl) => cl.id === client_id)) return { data: null, error: 'Pick a client to bill.' }
+    const client_id = input.client_id || null
+    if (client_id && !c.data.clients.some((cl) => cl.id === client_id)) {
+      return { data: null, error: 'That client is no longer on the list.' }
     }
+    if (basis === 'client' && !client_id) return { data: null, error: 'Pick a client to bill.' }
     const project_name = normalizeInvoiceProjectName(basis, input.project_name)
     if (basis === 'project' && !project_name) return { data: null, error: 'Name the project this invoice bills.' }
     const amount = Number(input.amount)
@@ -2413,14 +2423,15 @@ export const localBackend: DataBackend = {
     if (idx === -1) return { data: null, error: 'Invoice not found.' }
     const current = c.data.invoices[idx]
     const basis = patch.basis !== undefined ? normalizeInvoiceBasis(patch.basis) : current.basis
-    // Switching basis re-targets the billing: project based drops the client,
-    // client based must end up with one from the master list.
-    let client_id = patch.client_id !== undefined ? patch.client_id : current.client_id
-    if (basis === 'project') {
-      client_id = null
-    } else if (!client_id || !c.data.clients.some((cl) => cl.id === client_id)) {
-      return { data: null, error: 'Pick a client to bill.' }
+    // Switching basis re-targets the billing: client based must end up with a
+    // client from the master list, project based keeps the one it has (the
+    // project may belong to it) unless the patch clears it — a drag never
+    // touches either, because it only patches the stage.
+    const client_id = patch.client_id !== undefined ? patch.client_id || null : current.client_id
+    if (client_id && !c.data.clients.some((cl) => cl.id === client_id)) {
+      return { data: null, error: 'That client is no longer on the list.' }
     }
+    if (basis === 'client' && !client_id) return { data: null, error: 'Pick a client to bill.' }
     const project_name = patch.project_name !== undefined
       ? normalizeInvoiceProjectName(basis, patch.project_name)
       : normalizeInvoiceProjectName(basis, current.project_name)

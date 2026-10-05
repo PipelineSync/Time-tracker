@@ -10,7 +10,10 @@ import { cn } from '@/lib/utils'
  * which stays in the list so opening an old task cannot silently re-tag it.
  *
  * With `includeAll` it doubles as the filter control on the Tasks and Entries
- * pages, where the extra "All clients" option maps to the value `all`.
+ * pages, where the extra "All clients" option maps to the value `all`. With
+ * `includeNone` it picks an *optional* client — the extra "No client" option
+ * maps to the value `none`, which the caller turns into a null field (the
+ * invoicing form uses it for the client a billed project belongs to).
  */
 export function ClientSelect({
   value,
@@ -20,7 +23,11 @@ export function ClientSelect({
   ariaLabel,
   includeAll = false,
   allLabel = 'All clients',
+  includeNone = false,
+  noneLabel = 'No client',
   placeholder = 'Choose a client',
+  /** The value an unpicked optional client reports — never a real client id. */
+  noneValue = 'none',
   disabled = false,
   /** A client to hide from the options (e.g. the one already in use). */
   excludeId,
@@ -32,6 +39,9 @@ export function ClientSelect({
   ariaLabel?: string
   includeAll?: boolean
   allLabel?: string
+  includeNone?: boolean
+  noneLabel?: string
+  noneValue?: string
   placeholder?: string
   disabled?: boolean
   excludeId?: string
@@ -55,6 +65,7 @@ export function ClientSelect({
       </SelectTrigger>
       <SelectContent>
         {includeAll && <SelectItem value="all">{allLabel}</SelectItem>}
+        {includeNone && <SelectItem value={noneValue}>{noneLabel}</SelectItem>}
         {options.map((c) => {
           const dot = clientColorStyles(c.color)
           return (

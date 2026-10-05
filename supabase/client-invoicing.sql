@@ -8,10 +8,11 @@
 -- What it does
 --   1. adds 'invoices.view' to the allowed permission keys, so the admin can
 --      tick "Use the client invoicing board" on a worker
---   2. creates public.invoices — the workspace's invoice board: a client,
---      whether it bills the whole client or one named project, an amount
---      (zero while the figure is still unknown), when payment is due, which
---      board column it sits in (pending / awaiting / paid) and optional notes
+--   2. creates public.invoices — the workspace's invoice board: what it bills
+--      (the whole client, or one named project — which may in turn name the
+--      client the project belongs to), an amount (zero while the figure is
+--      still unknown), when payment is due, which board column it sits in
+--      (pending / awaiting / paid) and optional notes
 --
 -- Access model (mirrors the rest of the app):
 --   * the admin (workspace owner) always sees and runs the board
@@ -57,13 +58,15 @@ create table if not exists public.invoices (
   id        uuid primary key default gen_random_uuid(),
   -- Workspace owner (the admin). Set automatically by trg_invoices_user.
   user_id   uuid not null references auth.users (id) on delete cascade,
-  -- The client billed — set on a client-based invoice, null on a
-  -- project-based one (client and project are different billing targets,
-  -- never both). Cascade: a deleted client's client-based invoices go with
-  -- it — an invoice has nobody left to bill.
-  client_id uuid references public.clients (id) on delete cascade,
-  -- What the invoice bills: a client, or a named project on its own. 'client'
-  -- is the default so pre-basis rows keep their shape.
+  -- The client billed. A client-based invoice bills the client as a whole and
+  -- always has one; a project-based one bills its named project and *may*
+  -- name the client the project belongs to. Deleting a client clears the link
+  -- rather than the row: the app takes the client-based invoices off the
+  -- board (nobody left to bill) and leaves the project-based ones in place.
+  client_id uuid references public.clients (id) on delete set null,
+  -- What the invoice bills: a client as a whole, or a named project (which
+  -- may in turn name the client the project belongs to). 'client' is the
+  -- default so pre-basis rows keep their shape.
   basis     text not null default 'client' check (basis in ('client', 'project')),
   -- The project billed — set when basis is 'project' (and required then,
   -- enforced by the app), null for client-based invoices.
@@ -91,9 +94,31 @@ alter table public.invoices add column if not exists project_name text;
 update public.invoices set basis = 'client' where basis is null;
 alter table public.invoices alter column basis set default 'client';
 alter table public.invoices alter column basis set not null;
--- A project-based invoice bills a named project, not a client — its
--- client_id is null.
+-- A project-based invoice bills a named project on its own — its client_id is
+-- null unless it also names the client the project belongs to.
 alter table public.invoices alter column client_id drop not null;
+
+-- Older databases: deleting a client used to cascade its invoices away. Now
+-- the link is cleared instead, so a project-based invoice keeps billing its
+-- named project while the app removes the client-based ones (nobody left to
+-- bill) before deleting the client. Re-point the foreign key either way.
+do $$
+declare
+  fk record;
+begin
+  for fk in
+    select conname
+      from pg_constraint
+     where conrelid = 'public.invoices'::regclass
+       and confrelid = 'public.clients'::regclass
+       and contype = 'f'
+  loop
+    execute format('alter table public.invoices drop constraint %I', fk.conname);
+  end loop;
+end $$;
+alter table public.invoices
+  add constraint invoices_client_id_fkey foreign key (client_id)
+  references public.clients (id) on delete set null;
 do $$
 begin
   if not exists (

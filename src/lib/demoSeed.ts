@@ -839,13 +839,19 @@ export function buildDemoSeed() {
   ]
 
   // A partly-filled invoicing board so the Client Invoicing page shows all
-  // three columns: one overdue (due date already past), one due soon, two
-  // chasing payment and two already paid.
+  // three columns — and both billing targets: three invoices bill a client
+  // (client based), three bill a named project (project based, one of them
+  // against the client the project belongs to). One is overdue (due date
+  // already past), one is due soon, two are chasing payment and two are
+  // already paid.
   const invoices: Invoice[] = [
     { id: 'inv-seed-1', client_id: null, basis: 'project', project_name: 'Landing page', amount: 1200, due_date: dateOffset(-2), stage: 'awaiting', notes: 'Phase 1 — landing page, billed per project. Payment overdue, chase on Monday.', created_at: daysAgo(20).toISOString(), updated_at: daysAgo(9).toISOString() },
     { id: 'inv-seed-2', client_id: 'c-seed-2', basis: 'client', project_name: null, amount: 850, due_date: dateOffset(3), stage: 'awaiting', notes: 'Monthly retainer — sent, awaiting their accounts payable.', created_at: daysAgo(12).toISOString(), updated_at: daysAgo(12).toISOString() },
     { id: 'inv-seed-3', client_id: 'c-seed-3', basis: 'client', project_name: null, amount: 640, due_date: dateOffset(10), stage: 'pending', notes: 'Draft — waiting for the scope change to be confirmed.', created_at: daysAgo(2).toISOString(), updated_at: daysAgo(2).toISOString() },
-    { id: 'inv-seed-4', client_id: null, basis: 'project', project_name: 'Components build', amount: 2200, due_date: dateOffset(18), stage: 'pending', notes: 'Phase 2 — components build, billed per project at the end of the sprint.', created_at: daysAgo(1).toISOString(), updated_at: daysAgo(1).toISOString() },
+    // A project-based invoice may name the client the project belongs to
+    // (Components build is Acme's) — or bill the project on its own, like
+    // "Landing page" above.
+    { id: 'inv-seed-4', client_id: 'c-seed-1', basis: 'project', project_name: 'Components build', amount: 2200, due_date: dateOffset(18), stage: 'pending', notes: 'Phase 2 — components build, billed per project at the end of the sprint. Acme’s project, invoiced per project rather than per client.', created_at: daysAgo(1).toISOString(), updated_at: daysAgo(1).toISOString() },
     { id: 'inv-seed-5', client_id: 'c-seed-2', basis: 'client', project_name: null, amount: 150, due_date: dateOffset(-14), stage: 'paid', notes: 'Extra report export — settled in full.', created_at: daysAgo(30).toISOString(), updated_at: daysAgo(16).toISOString() },
     { id: 'inv-seed-6', client_id: 'c-seed-1', basis: 'client', project_name: null, amount: 980, due_date: dateOffset(-28), stage: 'paid', notes: null, created_at: daysAgo(45).toISOString(), updated_at: daysAgo(29).toISOString() },
   ]

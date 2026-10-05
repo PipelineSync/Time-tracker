@@ -990,9 +990,10 @@ export const InvoiceStageStyles: Record<InvoiceStage, { dot: string; accent: str
 export interface Invoice {
   id: string
   /**
-   * The client billed — the whole of a client-based invoice. A project-based
-   * invoice bills a named project instead and has no client here (null):
-   * client and project are different billing targets, never both.
+   * The client billed. A client-based invoice bills the client as a whole and
+   * always carries one; a project-based invoice bills its named project and
+   * *may* name the client the project belongs to — the link is optional there,
+   * so a project can also be billed on its own (null).
    */
   client_id: string | null
   /** Whether the invoice bills a client ('client') or a named project ('project'). */
