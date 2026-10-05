@@ -1300,15 +1300,14 @@ export interface Task {
   /** Estimated hours — the primary workload input (see Team KPI). */
   estimated_hours: number | null
   /**
-   * "QA Required?" — Yes (true): a plain worker cannot move the task to
-   * Completed; only the Owner and people with KPI access (`team_kpi.view`)
-   * can, normally via the QA review. No (false): the worker completes it
-   * themselves. New ONE-OFF tasks default to Yes, new REPEATING tasks (a card
-   * with `repeats` set or a `series_id`) default to No — routine work is the
-   * worker's to close, and the Owner can still tick Yes on a series that needs
-   * review. Rows that predate the field count as No, so nothing already on the
-   * board is locked retroactively. Only those same reviewers can see or change
-   * the flag — see taskWorkflow.ts.
+   * "QA Required?" — a REQUEST for review, not a lock. Yes (true): the card
+   * carries a "QA required" chip and is scored (1–5 + rework) by the Owner /
+   * `team_kpi.view` holders once it reaches For Review. No (false): nothing to
+   * review. Anyone who may edit the card can tick or untick it, and it never
+   * blocks a stage move. New ONE-OFF tasks default to Yes, new REPEATING tasks
+   * (a card with `repeats` set or a `series_id`) default to No — routine work
+   * is not queued for review. Rows that predate the field count as No.
+   * See taskWorkflow.ts.
    */
   qa_required: boolean
   /**

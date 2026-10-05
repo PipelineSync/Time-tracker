@@ -36,6 +36,13 @@
 --
 --  Prerequisite: supabase/RUN-THIS-team-kpi.sql (the `team_kpi.view` access key,
 --  which in turn needs supabase/worker-permissions.sql for has_permission()).
+--
+--  NOTE — the guard trigger is no longer wanted. "QA Required?" is now a
+--  request for review that anyone may tick and that never blocks completing a
+--  card, so after this file (which still installs the trigger for older
+--  setups) run supabase/RUN-THIS-open-qa-toggle.sql to remove it. Re-running
+--  this file later re-installs the trigger; run the open-qa-toggle file again
+--  to take it back off.
 -- ============================================================================
 
 

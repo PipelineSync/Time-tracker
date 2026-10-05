@@ -247,10 +247,12 @@ create table if not exists public.tasks (
   original_due_date date,
   -- Estimated hours → schedule-aware workload on the Team KPI page.
   estimated_hours numeric check (estimated_hours is null or estimated_hours >= 0),
-  -- "QA Required?" Yes (true): a worker cannot move the task to Completed —
-  -- only the Owner and people with KPI access (team_kpi.view) can. No (false):
-  -- the worker completes it themselves. New tasks default to Yes; tasks that
-  -- existed before the column count as No (see the upgrade step below).
+  -- "QA Required?" Yes (true): the card asks for a review — a "QA required"
+  -- chip, scored by the Owner / team_kpi.view holders once it is in For
+  -- Review. No (false): nothing to review. Anyone who may edit the card can
+  -- switch it, and it never blocks a move to Completed. New tasks default to
+  -- Yes; tasks that existed before the column count as No (see the upgrade
+  -- step below).
   qa_required     boolean not null default true,
   -- Stage timestamps (auto-set by the app as cards move).
   assigned_at       timestamptz,
@@ -2523,89 +2525,17 @@ grant select, insert, update, delete on public.kpi_audit_events to authenticated
 
 
 -- ============================================================================
--- "QA Required?" guard (existing databases: supabase/RUN-THIS-task-qa-required.sql,
--- plus supabase/RUN-THIS-recurring-no-qa.sql for databases created before
--- repeating tasks stopped requiring QA)
+-- "QA Required?" (existing databases: supabase/RUN-THIS-task-qa-required.sql
+-- adds the column; supabase/RUN-THIS-open-qa-toggle.sql removes the old guard
+-- trigger from databases that installed one)
 -- ============================================================================
--- tasks.qa_required = Yes means a worker cannot move the task to Completed —
--- only the Owner and people with KPI access (team_kpi.view) can. The app, the
--- Claude connector and this trigger all apply the rule, so a hand-made API
--- request cannot get around it. For anyone without KPI access the trigger
--- refuses: moving a QA-required task into Completed, changing the setting, and
--- creating a ONE-OFF task without QA. A repeating task is QA-free by default
--- (as is the next occurrence of a series that already has a no-QA card), so
--- routine work is completed by the worker. The Owner, KPI holders and the
--- service role / SQL editor (no signed-in user) are never blocked.
-
-create or replace function public.enforce_task_qa_required()
-returns trigger
-language plpgsql
-set search_path = public
-as $$
-declare
-  -- The three things this guard cares about:
-  v_changes_flag boolean := false;   -- an existing task's QA Required setting is being changed
-  v_creates_no_qa boolean := false;  -- a new task is being created WITHOUT QA
-  v_completes_qa boolean := false;   -- a QA-required task is arriving in Completed (new, or from another stage)
-  v_series text;
-  v_repeats text;
-begin
-  -- (OLD only exists on UPDATE, so it is only ever read inside this branch.)
-  if tg_op = 'UPDATE' then
-    v_changes_flag := new.qa_required is distinct from old.qa_required;
-    v_completes_qa := new.qa_required is true and new.status = 'completed' and old.status is distinct from 'completed';
-  else
-    v_creates_no_qa := new.qa_required is not true;
-    v_completes_qa := new.qa_required is true and new.status = 'completed';
-  end if;
-
-  -- Fast path: almost every write (re-ordering a column, moving a card between
-  -- other stages, editing a title) touches none of the above.
-  if not (v_changes_flag or v_creates_no_qa or v_completes_qa) then
-    return new;
-  end if;
-
-  -- The SQL editor, migrations and the service role have no signed-in user;
-  -- the Owner and anyone with KPI access decide QA (has_permission() is true
-  -- for the Owner).
-  if auth.uid() is null or public.has_permission('team_kpi.view') then
-    return new;
-  end if;
-
-  if v_changes_flag then
-    raise exception 'Only the Owner or someone with KPI access can change whether a task requires QA.'
-      using errcode = '42501';
-  end if;
-
-  if v_creates_no_qa then
-    -- A worker's own tasks are created with QA, with two exemptions: a
-    -- REPEATING task is QA-free by default (its worker completes each
-    -- occurrence), and the next occurrence of a series that already has a
-    -- no-QA card just carries the series' setting forward. (to_jsonb() so this
-    -- keeps working on a database without the recurring-task columns.)
-    v_series := to_jsonb(new) ->> 'series_id';
-    v_repeats := coalesce(to_jsonb(new) ->> 'repeats', 'none');
-    if v_repeats = 'none' and (v_series is null or not exists (
-      select 1
-        from public.tasks s
-       where s.qa_required is false
-         and (s.id::text = v_series or to_jsonb(s) ->> 'series_id' = v_series)
-    )) then
-      raise exception 'Only the Owner or someone with KPI access can create a task without QA.'
-        using errcode = '42501';
-    end if;
-  end if;
-
-  if v_completes_qa then
-    raise exception 'This task requires QA — only the Owner or someone with KPI access can move it to Completed.'
-      using errcode = '42501';
-  end if;
-
-  return new;
-end
-$$;
-
-drop trigger if exists trg_tasks_qa_required on public.tasks;
-create trigger trg_tasks_qa_required
-  before insert or update on public.tasks
-  for each row execute function public.enforce_task_qa_required();
+-- tasks.qa_required = Yes is a REQUEST for review, not a lock. The card carries
+-- a "QA required" chip, and when it reaches For Review the Owner / people with
+-- KPI access (team_kpi.view) score it (1-5 + rework classification). Anyone who
+-- may edit the card can tick or untick it, and it never blocks a stage move —
+-- whoever finishes the work can close it.
+--
+-- The default depends on the kind of card: a new ONE-OFF task gets Yes, a
+-- REPEATING task gets No (routine work needs no review). The app, the Claude
+-- connector and the local demo backend all apply that default; there is no
+-- trigger, because the tick is not a permission.

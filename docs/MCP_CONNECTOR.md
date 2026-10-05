@@ -81,16 +81,14 @@ needs `tasks.manage_all`, as it does in the UI.
 
 A second task rule is **QA Required?**. Every task has a `qa_required` flag —
 Yes by default for a one-off task, No for a repeating one (the Recurring
-shelf's templates and their occurrences), so routine work is completed
-instead of queued for review — and `create_task` / `update_task` accept it as
-a boolean. Completing a QA-required task — `update_task` with
-`status: completed`, or `create_task` straight into `completed` — is reserved
-for the Owner and for accounts holding `team_kpi.view` (the people who can
-press **Review** in the app). Everyone else gets a refusal that points them to
-`for_review`, and nothing is saved. Only those same accounts may change the
-flag or create a one-off task with `qa_required: false`. The database trigger
-added by `supabase/RUN-THIS-task-qa-required.sql` enforces the same rule, so
-it holds however a row is written.
+shelf's templates and their occurrences), so routine work is not queued for
+review — and `create_task` / `update_task` accept it as a boolean. It is a
+**request for review, not a lock**: anyone who may edit the card (its own
+board, or the whole team's with `tasks.manage_all`) can tick or untick it, and
+a ticked card can still be moved to `completed` — by `update_task` or by
+`create_task` straight into `completed`. The Owner and accounts holding
+`team_kpi.view` remain the ones who **score** the work (1–5 + rework
+classification, in the app's Review dialog on a `for_review` card).
 
 ### 3. Authorization codes and tokens are stored hashed
 

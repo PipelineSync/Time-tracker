@@ -645,7 +645,7 @@ const overdue = await callTool('list_tasks', { overdue: true }, ADMIN_TOKEN)
 assert(!overdue.isError, 'the overdue filter runs')
 
 // ---------------------------------------------------------------------------
-// QA Required?  Yes → only the admin / team_kpi.view can complete the task.
+// QA Required?  A request for review: anyone may set it, nothing is blocked.
 // ---------------------------------------------------------------------------
 
 console.log('\n--- Tasks: QA Required? ---')
@@ -661,67 +661,61 @@ for (const name of ['create_task', 'update_task']) {
   assert(tool?.inputSchema.properties.qa_required?.type === 'boolean', `${name} advertises a boolean qa_required argument`)
 }
 
-// The admin: new tasks require QA unless told otherwise.
+// The admin: new tasks ask for QA unless told otherwise.
 const adminYes = await callTool('create_task', { title: 'QA default task', worker_id: BEN_WORKER }, ADMIN_TOKEN)
-assert(!adminYes.isError && created(adminYes).qaRequired === true, 'admin: a new task requires QA by default')
+assert(!adminYes.isError && created(adminYes).qaRequired === true, 'admin: a new task asks for QA by default')
 assert(taskRow(created(adminYes).taskId)?.qa_required === true, 'the flag is stored on the row')
 const adminNo = await callTool('create_task', { title: 'QA free task', worker_id: BEN_WORKER, qa_required: false, status: 'in_progress' }, ADMIN_TOKEN)
 assert(!adminNo.isError && created(adminNo).qaRequired === false && taskRow(created(adminNo).taskId)?.qa_required === false, 'admin: can create a task with qa_required=false')
 
-// A plain worker (Ben).
+// A plain worker (Ben): the tick is theirs to set, on their own board.
 const tasksBefore = table('tasks').length
 const benDefault = await callTool('create_task', { title: 'QA Ben own', status: 'in_progress' }, BEN_TOKEN)
-assert(!benDefault.isError && created(benDefault).qaRequired === true, "worker: a task on their own board requires QA by default")
+assert(!benDefault.isError && created(benDefault).qaRequired === true, "worker: a task on their own board asks for QA by default")
 const benNo = await callTool('create_task', { title: 'QA Ben asks no', qa_required: false }, BEN_TOKEN)
-assert(benNo.isError && String(benNo.data).includes('KPI access'), 'worker: cannot create a task with qa_required=false')
+assert(!benNo.isError && created(benNo).qaRequired === false, 'worker: CAN create a task with qa_required=false')
 const benDoneCreate = await callTool('create_task', { title: 'QA Ben done', status: 'completed' }, BEN_TOKEN)
-assert(benDoneCreate.isError && String(benDoneCreate.data).includes('requires QA'), 'worker: cannot create a QA-required task straight into completed')
+assert(!benDoneCreate.isError && taskRow(created(benDoneCreate).taskId)?.status === 'completed', 'worker: CAN create a QA-required task straight into completed')
 const benBadFlag = await callTool('create_task', { title: 'QA Ben typo', qa_required: 'maybe' }, BEN_TOKEN)
-assert(benBadFlag.isError && String(benBadFlag.data).includes('true or false'), 'a non-boolean qa_required is rejected')
-assert(table('tasks').length === tasksBefore + 1, 'the refused creates stored nothing')
+assert(benBadFlag.isError && String(benBadFlag.data).includes('true or false'), 'a non-boolean qa_required is still rejected')
+assert(table('tasks').length === tasksBefore + 3, 'every accepted create stored a row')
 
 const benTask = created(benDefault).taskId
 const benComplete = await callTool('update_task', { task_id: benTask, status: 'completed' }, BEN_TOKEN)
-assert(benComplete.isError && String(benComplete.data).includes('for_review'), 'worker: cannot move a QA-required task to completed (and is pointed at for_review)')
-assert(taskRow(benTask)?.status === 'in_progress' && !taskRow(benTask)?.completed_at, 'the refused move changed nothing')
+assert(!benComplete.isError && taskRow(benTask)?.status === 'completed' && Boolean(taskRow(benTask)?.completed_at), 'worker: can move a QA-required task to completed')
+assert(taskRow(benTask)?.stage_history?.at(-1)?.to === 'completed', 'and the move is recorded in the stage history')
 const benReview = await callTool('update_task', { task_id: benTask, status: 'for_review' }, BEN_TOKEN)
-assert(!benReview.isError && taskRow(benTask)?.status === 'for_review', 'worker: can move it to for_review')
+assert(!benReview.isError && taskRow(benTask)?.status === 'for_review', 'worker: can move it to for_review (where it gets scored)')
 const benUntick = await callTool('update_task', { task_id: benTask, qa_required: false }, BEN_TOKEN)
-assert(benUntick.isError && taskRow(benTask)?.qa_required === true, 'worker: cannot change qa_required')
+assert(!benUntick.isError && taskRow(benTask)?.qa_required === false, 'worker: can change qa_required')
+const benRetick = await callTool('update_task', { task_id: benTask, qa_required: true, title: 'QA Ben own (renamed)' }, BEN_TOKEN)
+assert(!benRetick.isError && taskRow(benTask)?.qa_required === true && taskRow(benTask)?.title === 'QA Ben own (renamed)', 'worker: can tick it back on while editing')
 const benUntickDone = await callTool('update_task', { task_id: benTask, qa_required: false, status: 'completed' }, BEN_TOKEN)
-assert(benUntickDone.isError && taskRow(benTask)?.qa_required === true && taskRow(benTask)?.status === 'for_review', 'worker: cannot untick and complete in one call')
-const benSame = await callTool('update_task', { task_id: benTask, qa_required: true, title: 'QA Ben own (renamed)' }, BEN_TOKEN)
-assert(!benSame.isError && taskRow(benTask)?.title === 'QA Ben own (renamed)', 'worker: sending the current value while editing is fine')
+assert(!benUntickDone.isError && taskRow(benTask)?.qa_required === false && taskRow(benTask)?.status === 'completed', 'worker: can untick and complete in one call')
 
-// QA No → the worker moves it themselves.
+// QA No → the worker moves it themselves, exactly as before.
 const freeTask = created(adminNo).taskId
 const benFree = await callTool('update_task', { task_id: freeTask, status: 'completed' }, BEN_TOKEN)
-assert(!benFree.isError && taskRow(freeTask)?.status === 'completed' && Boolean(taskRow(freeTask)?.completed_at), 'worker: can complete a task that does not require QA')
-assert(taskRow(freeTask)?.stage_history?.at(-1)?.to === 'completed', 'and the move is in the stage history')
+assert(!benFree.isError && taskRow(freeTask)?.status === 'completed' && Boolean(taskRow(freeTask)?.completed_at), 'worker: can complete a task that does not ask for QA')
 
-// The admin decides.
-const adminDone = await callTool('update_task', { task_id: benTask, status: 'completed' }, ADMIN_TOKEN)
-assert(!adminDone.isError && taskRow(benTask)?.status === 'completed', 'admin: completes the QA-required task')
+// The admin can still flip the flag either way; the worker completes regardless.
 const adminFlip = await callTool('update_task', { task_id: created(adminYes).taskId, qa_required: false }, ADMIN_TOKEN)
 assert(!adminFlip.isError && taskRow(created(adminYes).taskId)?.qa_required === false, 'admin: can switch a task to qa_required=false')
-const nowFree = await callTool('update_task', { task_id: created(adminYes).taskId, status: 'completed' }, BEN_TOKEN)
-assert(!nowFree.isError, 'worker: completes it once it no longer requires QA')
+const adminFlipBack = await callTool('update_task', { task_id: created(adminYes).taskId, qa_required: true }, ADMIN_TOKEN)
+assert(!adminFlipBack.isError && taskRow(created(adminYes).taskId)?.qa_required === true, 'admin: and back to true')
+const nowDone = await callTool('update_task', { task_id: created(adminYes).taskId, status: 'completed' }, BEN_TOKEN)
+assert(!nowDone.isError && taskRow(created(adminYes).taskId)?.status === 'completed', 'worker: completes it with the tick set (nothing is locked)')
 
-// KPI access: Ben is granted team_kpi.view (permissions are read on every call).
-const lockedAgain = await callTool('create_task', { title: 'QA Ben locked again', worker_id: BEN_WORKER, status: 'in_progress' }, ADMIN_TOKEN)
+// KPI access is about SCORING, not the tick: granting/revoking it must not
+// change what the connector allows.
 benRow().permissions = ['team_kpi.view']
-const kpiComplete = await callTool('update_task', { task_id: created(lockedAgain).taskId, status: 'completed' }, BEN_TOKEN)
-assert(!kpiComplete.isError && taskRow(created(lockedAgain).taskId)?.status === 'completed', 'KPI access: can move a QA-required task to completed')
-const kpiFlag = await callTool('update_task', { task_id: created(lockedAgain).taskId, qa_required: false }, BEN_TOKEN)
-assert(!kpiFlag.isError && taskRow(created(lockedAgain).taskId)?.qa_required === false, 'KPI access: can change qa_required')
-const kpiNo = await callTool('create_task', { title: 'QA Ben kpi no', qa_required: false }, BEN_TOKEN)
-assert(!kpiNo.isError && created(kpiNo).qaRequired === false, 'KPI access: can create a task with qa_required=false')
-const kpiDone = await callTool('create_task', { title: 'QA Ben kpi done', status: 'completed', qa_required: true }, BEN_TOKEN)
-assert(!kpiDone.isError && taskRow(created(kpiDone).taskId)?.status === 'completed', 'KPI access: can create a QA-required task straight into completed')
+const kpiTask = await callTool('create_task', { title: 'QA Ben with KPI access', worker_id: BEN_WORKER, status: 'in_progress' }, BEN_TOKEN)
+const kpiComplete = await callTool('update_task', { task_id: created(kpiTask).taskId, status: 'completed' }, BEN_TOKEN)
+assert(!kpiComplete.isError && taskRow(created(kpiTask).taskId)?.status === 'completed', 'KPI access: completing a QA-required task still works')
 benRow().permissions = []
 const revokedTask = await callTool('create_task', { title: 'QA Ben after revoke', status: 'in_progress' }, BEN_TOKEN)
 const revoked = await callTool('update_task', { task_id: created(revokedTask).taskId, status: 'completed' }, BEN_TOKEN)
-assert(revoked.isError, 'revoking KPI access puts the gate back')
+assert(!revoked.isError && taskRow(created(revokedTask).taskId)?.status === 'completed', 'revoking KPI access changes nothing — the tick was never a gate')
 
 // Tasks that predate the column count as "No".
 table('tasks').push({

@@ -194,22 +194,26 @@ export function patchTouchesQa(patch: Partial<Task>): boolean {
 
 // ---- "QA Required?" ---------------------------------------------------------
 //
-// Every task carries a Yes/No flag. Yes: a plain worker cannot move the task to
-// Completed — only the Owner and people with KPI access (`team_kpi.view`, the
-// same people who run the QA review) can. No: the worker completes it
-// themselves. The same people are the only ones who can see or change the flag;
-// a worker's own tasks (New task, Clock In, Switch Client) simply get the
-// default. Both backends, the MCP connector and the board UI call the helpers
-// below, so the rule is written once.
+// Every task carries a Yes/No flag. It is a REQUEST for review, not a lock:
+//
+//   Yes  the card is flagged for QA — the board shows a "QA required" chip, and
+//        when the card reaches For Review the reviewers score it (Owner +
+//        `team_kpi.view`, see QA_PATCH_FIELDS above).
+//   No   routine work with nothing to review — the card carries no chip.
+//
+// Anyone can see and switch the tick on a task they are allowed to edit: their
+// own board, or the whole team's with `tasks.manage_all`. It never blocks a
+// stage move — whoever finishes the work can close the card, and the QA score
+// stays the reviewers' call. Both backends, the MCP connector and the board UI
+// call the helpers below, so the rule is written once.
 //
 // The default depends on the kind of card: a one-off task gets Yes, a
-// REPEATING task gets No — the same routine work coming back every day/week is
-// the worker's to close, so it goes straight to Completed instead of piling up
-// in For Review. The Owner / KPI access can still tick Yes on a recurring card
-// when that series does need review; the occurrence it creates then carries
-// Yes forward like any other setting (§ planRecreate).
+// REPEATING task gets No — the same routine work coming back every day/week
+// needs no review. Anyone can still tick Yes on a recurring card when that
+// series does need review; the occurrence it creates then carries Yes forward
+// like any other setting (§ planRecreate).
 
-/** New tasks require QA unless a reviewer unticks the box. */
+/** New one-off tasks ask for QA review unless the box is unticked. */
 export const DEFAULT_QA_REQUIRED = true
 
 /** Repeating tasks don't: QA Required starts switched off for them. */
@@ -229,14 +233,6 @@ export function defaultQaRequired(t: Pick<Task, 'repeats' | 'series_id'>): boole
   return isRecurringTask(t) ? DEFAULT_RECURRING_QA_REQUIRED : DEFAULT_QA_REQUIRED
 }
 
-/** Why a plain worker's move into Completed was refused. */
-export const QA_COMPLETION_BLOCKED_MESSAGE =
-  'This task requires QA — only the Owner or someone with KPI access can move it to Completed. Send it to For Review instead.'
-
-/** Why a plain worker's attempt to change the flag was refused. */
-export const QA_SETTING_LOCKED_MESSAGE =
-  'Only the Owner or someone with KPI access can change whether a task requires QA.'
-
 /**
  * A stored QA Required value. Rows written before the field existed (or read
  * from a database that has no such column yet) have none and count as "No", so
@@ -247,43 +243,15 @@ export function normalizeQaRequired(value: unknown): boolean {
 }
 
 /**
- * Would this stage move be refused because the task needs QA? True only when a
- * non-reviewer takes a QA-required task INTO Completed from another stage
- * (`from` is null for a task being created there). Reordering inside Completed,
- * archiving and restoring are not moves into it, and For Review is always open.
- */
-export function isQaCompletionBlocked(
-  move: { qaRequired: boolean; from: TaskStatus | null; to: TaskStatus },
-  actorIsReviewer: boolean,
-): boolean {
-  if (actorIsReviewer || !move.qaRequired) return false
-  if (normalizeTaskStage(move.to) !== 'completed') return false
-  return move.from === null || normalizeTaskStage(move.from) !== 'completed'
-}
-
-/**
- * The QA Required value a NEW task is stored with — or why it is refused.
+ * The QA Required value a NEW task is stored with.
  *
  * Nothing asked for → the default for the kind of card: Yes for a one-off,
- * No for a repeating task (`recurring`). Yes is open to everyone. No is the
- * reviewers' call: a plain worker who asks for it on a one-off task is
- * refused, except when the new task merely continues a repeating series
- * ("Recreate next" / starting an occurrence), which carries its series'
- * setting forward rather than choosing one — otherwise a worker could never
- * repeat a task the Owner marked "No". A repeating card is QA-free by default,
- * so a worker stating No there is stating the default, not unlocking anything.
+ * No for a repeating task (`recurring`). Anyone may state either value: the
+ * tick is a request for review, not a permission, so the backends simply
+ * normalize and store it.
  */
-export function resolveNewTaskQaRequired(
-  requested: unknown,
-  actorIsReviewer: boolean,
-  continuesSeries: boolean,
-  recurring: boolean,
-): { value: boolean; error: string | null } {
-  const value = typeof requested === 'boolean' ? requested : recurring ? DEFAULT_RECURRING_QA_REQUIRED : DEFAULT_QA_REQUIRED
-  if (!value && !actorIsReviewer && !continuesSeries && !recurring) {
-    return { value, error: QA_SETTING_LOCKED_MESSAGE }
-  }
-  return { value, error: null }
+export function resolveNewTaskQaRequired(requested: unknown, recurring: boolean): boolean {
+  return typeof requested === 'boolean' ? requested : recurring ? DEFAULT_RECURRING_QA_REQUIRED : DEFAULT_QA_REQUIRED
 }
 
 /** Normalize & validate an incoming QA score (1–5 or null). */

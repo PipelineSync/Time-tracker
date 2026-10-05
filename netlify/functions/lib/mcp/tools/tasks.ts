@@ -7,10 +7,11 @@
  * silently corrupt the KPI numbers, so `update_task` maintains the same
  * bookkeeping.
  *
- * "QA Required?" is enforced here too, not only in the app: a task with it set
- * can only be moved to completed by the admin or an account holding
- * `team_kpi.view`, and only they can change the setting. (The database has a
- * trigger with the same rules, so this is the friendly version of the refusal.)
+ * "QA Required?" is a request for review, not a lock: anyone may switch the
+ * flag on a card they may edit (their own board, or the whole team's with
+ * `tasks.manage_all`), and it never blocks a move to completed. The Owner and
+ * accounts holding `team_kpi.view` remain the ones who SCORE the work (score,
+ * rework classification) — see the app's QA review.
  */
 
 import type { Caller } from '../session'
@@ -21,16 +22,6 @@ import type { Tool } from './index'
 
 const STATUSES = ['todo', 'in_progress', 'waiting', 'for_review', 'rework', 'completed'] as const
 const PRIORITIES = ['low', 'medium', 'high'] as const
-
-/**
- * The QA Required? rule. Mirrors src/lib/taskWorkflow.ts (duplicated rather
- * than imported, like the permission list: the functions bundle stays
- * independent of the app source).
- */
-const QA_COMPLETION_BLOCKED =
-  'This task requires QA — only the admin or someone with KPI access (team_kpi.view) can move it to completed. Move it to for_review instead.'
-const QA_SETTING_LOCKED =
-  'Only the admin or someone with KPI access (team_kpi.view) can change whether a task requires QA.'
 
 /** True when the database has no `qa_required` column yet (migration not run). */
 function isMissingQaColumn(error: { message?: string } | null): boolean {
@@ -130,15 +121,12 @@ async function createTask(caller: Caller, args: Args): Promise<unknown> {
   const status = oneOf(args, 'status', STATUSES) ?? 'todo'
   const now = new Date().toISOString()
 
-  // QA Required? defaults to Yes. Only the admin / KPI access may ask for No,
-  // and nobody else can create a QA-required task straight into completed.
-  const reviewer = canDo(caller, 'team_kpi.view')
+  // QA Required? defaults to Yes (a request for review). Anyone may state
+  // either value — it is a flag, not a permission.
   if (args.qa_required !== undefined && bool(args, 'qa_required') === undefined) {
     throw new ToolError('"qa_required" must be true or false.')
   }
   const qaRequired = bool(args, 'qa_required') ?? true
-  if (!qaRequired && !reviewer) throw new ToolError(QA_SETTING_LOCKED)
-  if (qaRequired && status === 'completed' && !reviewer) throw new ToolError(QA_COMPLETION_BLOCKED)
 
   const row: Record<string, unknown> = {
     worker_id: workerId,
@@ -202,16 +190,13 @@ async function updateTask(caller: Caller, args: Args): Promise<unknown> {
   const patch: Record<string, unknown> = { updated_at: new Date().toISOString() }
 
   // QA Required?: rows without the value (older tasks, or a database that has
-  // not run the migration) count as No.
-  const reviewer = canDo(caller, 'team_kpi.view')
+  // not run the migration) count as No. Anyone who may edit the card may
+  // switch it.
   const qaRequiredNow = row.qa_required === true
   if (args.qa_required !== undefined) {
     const next = bool(args, 'qa_required')
     if (next === undefined) throw new ToolError('"qa_required" must be true or false.')
-    if (next !== qaRequiredNow) {
-      if (!reviewer) throw new ToolError(QA_SETTING_LOCKED)
-      patch.qa_required = next
-    }
+    if (next !== qaRequiredNow) patch.qa_required = next
   }
 
   if (args.title !== undefined) {
@@ -244,8 +229,6 @@ async function updateTask(caller: Caller, args: Args): Promise<unknown> {
   // completed stamp, and an append-only history entry.
   const nextStatus = oneOf(args, 'status', STATUSES)
   if (nextStatus && nextStatus !== row.status) {
-    // A QA-required task only reaches completed through the admin / KPI access.
-    if (nextStatus === 'completed' && qaRequiredNow && !reviewer) throw new ToolError(QA_COMPLETION_BLOCKED)
     const now = new Date().toISOString()
     patch.status = nextStatus
 
@@ -334,7 +317,7 @@ export const taskTools: Tool[] = [
     name: 'create_task',
     title: 'Create a task',
     description:
-      'Add a card to a worker\'s board with a title, optional description, priority, start date, due date, client and estimate. Every member can add cards to their own board; creating one for somebody else needs the tasks.manage_all permission. New cards require QA by default (qa_required=true): a plain worker cannot move them to completed — only the admin or someone with the team_kpi.view permission can, and only they may create a card with qa_required=false.',
+      'Add a card to a worker\'s board with a title, optional description, priority, start date, due date, client and estimate. Every member can add cards to their own board; creating one for somebody else needs the tasks.manage_all permission. New one-off cards ask for QA by default (qa_required=true) — a request for review, shown as a chip and scored by the Owner or someone with team_kpi.view once the card reaches for_review. Pass qa_required=false for routine work that needs no review; anyone may set either value, and neither blocks completing the card.',
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     inputSchema: {
       type: 'object',
@@ -351,7 +334,7 @@ export const taskTools: Tool[] = [
         qa_required: {
           type: 'boolean',
           description:
-            'QA Required? Default true: the worker cannot complete the task themselves — the admin or someone with team_kpi.view does, after review. Passing false needs the admin or team_kpi.view.',
+            'QA Required? Default true: ask for a review — the Owner or someone with team_kpi.view scores the card once it reaches for_review. false = routine work, no review. Anyone may set it; it never blocks completing the task.',
         },
       },
       required: ['title'],
@@ -363,7 +346,7 @@ export const taskTools: Tool[] = [
     name: 'update_task',
     title: 'Update or move a task',
     description:
-      'Change a task\'s title, description, priority, start date, due date, client, assignee or estimate — or move it between board columns (todo → in_progress → waiting → for_review → rework → completed). Stage moves are recorded in the task history so Team KPI stays accurate. A task with qa_required=true can only be moved to completed by the admin or someone with the team_kpi.view permission, and only they can change qa_required.',
+      'Change a task\'s title, description, priority, start date, due date, client, assignee, estimate or QA request — or move it between board columns (todo → in_progress → waiting → for_review → rework → completed). Stage moves are recorded in the task history so Team KPI stays accurate. qa_required is a request for review (scored by the Owner or team_kpi.view holders once the card is in for_review); anyone who may edit the card can switch it, and it never blocks a move to completed.',
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     inputSchema: {
       type: 'object',
@@ -380,7 +363,8 @@ export const taskTools: Tool[] = [
         estimated_hours: { type: 'number' },
         qa_required: {
           type: 'boolean',
-          description: 'QA Required? Only the admin or someone with team_kpi.view can change it.',
+          description:
+            'QA Required? true = ask for a review (a “QA required” chip, scored in for_review); false = routine work, no review. Anyone who may edit the card can change it.',
         },
       },
       required: ['task_id'],
