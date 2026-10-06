@@ -38,18 +38,20 @@ function localDate(d: Date): string {
 
 /**
  * Raise / edit an invoice: what is being billed (the whole client, or one
- * named project of it), an optional amount — an invoice can go on the board
- * before its figure is known and the amount filled in later — when payment
- * is due and optional notes. The stage picker doubles as the "record it
- * straight into another column" affordance, so logging an invoice that was
- * already paid needs no drag afterwards; a new invoice defaults to Pending
- * and the board is still where invoices move day to day.
+ * named project — which may in turn name the client the project belongs to),
+ * an optional amount — an invoice can go on the board before its figure is
+ * known and the amount filled in later — when payment is due and optional
+ * notes. The stage picker doubles as the "record it straight into another
+ * column" affordance, so logging an invoice that was already paid needs no
+ * drag afterwards; a new invoice defaults to Pending and the board is still
+ * where invoices move day to day.
  */
 export function InvoiceFormDialog({
   open,
   onOpenChange,
   invoice,
   defaultStage,
+  defaultBasis,
 }: {
   open: boolean
   onOpenChange: (v: boolean) => void
@@ -57,6 +59,11 @@ export function InvoiceFormDialog({
   invoice: Invoice | null
   /** Column a new invoice starts in (the "＋" button of the lane it was raised from). */
   defaultStage?: InvoiceStage
+  /**
+   * What a new invoice bills, when the board is already narrowed to one
+   * billing target — raising from a filtered board keeps the same basis.
+   */
+  defaultBasis?: InvoiceBasis
 }) {
   const { createInvoice, updateInvoice, settings } = useStore()
   const [form, setForm] = useState<FormState>({ clientId: '', basis: 'client', projectName: '', amount: '', dueDate: '', stage: 'pending', notes: '' })
@@ -79,9 +86,9 @@ export function InvoiceFormDialog({
       // enough that nobody accidentally bills two months out.
       const due = new Date()
       due.setDate(due.getDate() + 14)
-      setForm({ clientId: '', basis: 'client', projectName: '', amount: '', dueDate: localDate(due), stage: defaultStage ?? 'pending', notes: '' })
+      setForm({ clientId: '', basis: defaultBasis ?? 'client', projectName: '', amount: '', dueDate: localDate(due), stage: defaultStage ?? 'pending', notes: '' })
     }
-  }, [open, invoice, defaultStage])
+  }, [open, invoice, defaultStage, defaultBasis])
 
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setForm((f) => ({ ...f, [key]: value }))
@@ -90,9 +97,10 @@ export function InvoiceFormDialog({
     e.preventDefault()
     // Client and project are different billing targets: a client-based
     // invoice must pick a client, a project-based one must name the project
-    // — and carries no client at all.
+    // and may also name the client that project belongs to.
     const projectName = form.basis === 'project' ? form.projectName.trim() : ''
-    if (form.basis === 'client' && !form.clientId) {
+    const clientId = form.clientId || null
+    if (form.basis === 'client' && !clientId) {
       toast.error('Pick a client to bill.')
       return
     }
@@ -114,7 +122,7 @@ export function InvoiceFormDialog({
     setSaving(true)
     try {
       const payload = {
-        client_id: form.basis === 'client' ? form.clientId : null,
+        client_id: clientId,
         basis: form.basis,
         project_name: projectName || null,
         amount: Math.round(amount * 100) / 100,
@@ -151,10 +159,10 @@ export function InvoiceFormDialog({
           </DialogHeader>
 
           <div className="grid gap-4 py-4">
-            {/* One field, one choice: what the invoice bills. Client and
-                project are different billing targets — client based shows
-                the client dropdown, project based replaces it with the
-                project name. Exactly one of the two is billed. */}
+            {/* One choice, what the invoice bills: a client as a whole, or
+                one named project. The project keeps the client field too —
+                as the (optional) home of the project — so a project can be
+                billed on its own or against its client. */}
             <div className="grid gap-2">
               <span className="text-sm font-medium leading-none">Bill to</span>
               <div className="grid gap-3 rounded-lg border bg-muted/30 p-2.5">
@@ -183,7 +191,7 @@ export function InvoiceFormDialog({
                   </Button>
                 </div>
 
-                {form.basis === 'project' ? (
+                {form.basis === 'project' && (
                   <div className="grid gap-2">
                     <Label htmlFor="invoice-project" className="text-xs text-muted-foreground">
                       Project name
@@ -196,24 +204,29 @@ export function InvoiceFormDialog({
                       required
                     />
                   </div>
-                ) : (
-                  <div className="grid gap-2">
-                    <Label htmlFor="invoice-client" className="text-xs text-muted-foreground">
-                      Client
-                    </Label>
-                    <ClientSelect
-                      id="invoice-client"
-                      value={form.clientId}
-                      onValueChange={(v) => set('clientId', v)}
-                      placeholder="Choose a client"
-                    />
-                  </div>
                 )}
+
+                {/* The client: the whole of a client-based invoice, and the
+                    optional home of a billed project. Switching basis keeps
+                    whatever is already chosen — it is the same client. */}
+                <div className="grid gap-2">
+                  <Label htmlFor="invoice-client" className="text-xs text-muted-foreground">
+                    {form.basis === 'project' ? 'Client (optional)' : 'Client'}
+                  </Label>
+                  <ClientSelect
+                    id="invoice-client"
+                    value={form.basis === 'project' ? form.clientId || 'none' : form.clientId}
+                    onValueChange={(v) => set('clientId', v === 'none' ? '' : v)}
+                    includeNone={form.basis === 'project'}
+                    noneLabel="No client"
+                    placeholder="Choose a client"
+                  />
+                </div>
               </div>
               <p className="text-xs text-muted-foreground">
                 {form.basis === 'project'
-                  ? 'Project based — this invoice bills the project named above, not a client.'
-                  : 'Client based — this invoice bills the client chosen above.'}
+                  ? 'Project based — this invoice bills the project named above. Naming a client is optional: it only says whose project it is.'
+                  : 'Client based — this invoice bills the client as a whole.'}
               </p>
             </div>
 

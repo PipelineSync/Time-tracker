@@ -160,9 +160,9 @@ export interface CreateNoteInput {
 /** Fields callers may set when creating an invoice. */
 export interface CreateInvoiceInput {
   /**
-   * The client billed — required for a client-based invoice, ignored (pass
-   * null) for a project-based one: client and project are different billing
-   * targets, never both.
+   * The client billed — required for a client-based invoice; optional on a
+   * project-based one, which may name the client the project belongs to (pass
+   * null to bill the named project on its own).
    */
   client_id: string | null
   /** Bills a client ('client', the default) or a named project ('project'). */

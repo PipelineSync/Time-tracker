@@ -1218,6 +1218,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     await refreshClients()
     const financeRes = await backend.listFinanceItems()
     if (financeRes.data) setFinanceItems(financeRes.data)
+    // The invoice board loses (or re-targets) rows with the client, so it
+    // re-reads too — otherwise the board would keep showing invoices for a
+    // client that no longer exists.
+    const invoiceRes = await backend.listInvoices()
+    if (invoiceRes.data) setInvoices(invoiceRes.data)
     return true
   }, [backend, refreshClients])
 

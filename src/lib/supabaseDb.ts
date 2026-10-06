@@ -850,6 +850,9 @@ function normalizeInvoiceRow(inv: Invoice): Invoice {
     ...inv,
     amount: Number.isFinite(amount) ? Math.max(0, amount) : 0,
     basis,
+    // A project-based invoice may carry the client its project belongs to, so
+    // the link is kept on both billing targets (the app decides when to set it).
+    client_id: inv.client_id ?? null,
     project_name: basis === 'project' && typeof inv.project_name === 'string' && inv.project_name.trim() ? inv.project_name.trim() : null,
     due_date: typeof inv.due_date === 'string' ? inv.due_date.slice(0, 10) : new Date().toISOString().slice(0, 10),
     stage: inv.stage === 'awaiting' || inv.stage === 'paid' ? inv.stage : 'pending',
@@ -2539,6 +2542,14 @@ export const supabaseBackend: DataBackend = {
     if ((tasksUsing.count ?? 0) > 0 || (entriesUsing.count ?? 0) > 0) {
       return fail('This client is used by existing tasks or time entries. Mark it inactive instead.')
     }
+    // Invoices follow their billing target: a client-based one for this
+    // client has nobody left to bill and comes off the board, a project-based
+    // one keeps billing its named project and only loses the link. (Untangled
+    // here rather than left to the foreign key, which nulls the link for
+    // both.) Best effort — a database without the invoicing migration still
+    // deletes the client.
+    await sb.from('invoices').update({ client_id: null }).eq('client_id', id).eq('basis', 'project')
+    await sb.from('invoices').delete().eq('client_id', id).eq('basis', 'client')
     const { error } = await sb.from('clients').delete().eq('id', id)
     if (error) return fail(error.message)
     return ok(null)
@@ -3013,10 +3024,10 @@ export const supabaseBackend: DataBackend = {
     if (me.error) return fail(me.error)
     if (!canDo(me.data!, 'invoices.view')) return denied('use the invoicing board')
     // Client and project are different billing targets: a client-based
-    // invoice bills a client, a project-based one bills a named project and
-    // carries no client at all.
+    // invoice bills a client, a project-based one bills a named project — and
+    // may name the client that project belongs to.
     const basis: InvoiceBasis = input.basis === 'project' ? 'project' : 'client'
-    const client_id = basis === 'client' ? input.client_id : null
+    const client_id = input.client_id || null
     if (basis === 'client' && !client_id) return fail('Pick a client to bill.')
     const project_name = basis === 'project' ? input.project_name?.trim() || null : null
     if (basis === 'project' && !project_name) return fail('Name the project this invoice bills.')
@@ -3053,8 +3064,9 @@ export const supabaseBackend: DataBackend = {
     if (!canDo(me.data!, 'invoices.view')) return denied('use the invoicing board')
     const update: Record<string, unknown> = {}
     if (patch.client_id !== undefined) {
-      // null clears the client — only valid on a project-based invoice,
-      // checked below together with the basis.
+      // null clears the client — only valid on a project-based invoice
+      // (a client-based one must bill somebody), checked below together with
+      // the basis.
       update.client_id = patch.client_id || null
     }
     if (patch.amount !== undefined) {
@@ -3068,26 +3080,29 @@ export const supabaseBackend: DataBackend = {
     if (patch.project_name !== undefined) {
       update.project_name = patch.project_name?.trim() || null
     }
-    // A project-based invoice must name its project. The name may arrive in
-    // the same patch as the basis (the edit dialog saves both) or already sit
-    // on the row, so resolve the effective pair — patch first, row second —
-    // before allowing the write. Stage-only patches (dragging a card) skip
-    // the extra read entirely.
-    if (update.basis !== undefined || update.project_name !== undefined) {
+    // A project-based invoice must name its project, and a client-based one
+    // must bill a client. Either half may arrive in the same patch as the
+    // basis (the edit dialog saves both) or already sit on the row, so
+    // resolve the effective trio — patch first, row second — before allowing
+    // the write. Stage-only patches (dragging a card) skip the extra read
+    // entirely.
+    if (update.basis !== undefined || update.project_name !== undefined || patch.client_id !== undefined) {
       const { data: currentRow } = await client()
         .from('invoices')
-        .select('basis, project_name')
+        .select('basis, project_name, client_id')
         .eq('id', id)
         .single()
-      const row = (currentRow ?? {}) as Pick<Invoice, 'basis' | 'project_name'>
+      const row = (currentRow ?? {}) as Pick<Invoice, 'basis' | 'project_name' | 'client_id'>
       const basis: InvoiceBasis = (update.basis as InvoiceBasis | undefined) ?? (row.basis === 'project' ? 'project' : 'client')
       const project_name = update.project_name !== undefined
         ? (update.project_name as string | null)
         : typeof row.project_name === 'string' && row.project_name.trim() ? row.project_name.trim() : null
+      const client_id = update.client_id !== undefined ? (update.client_id as string | null) : row.client_id ?? null
       if (basis === 'project' && !project_name) return fail('Name the project this invoice bills.')
-      // Project based bills the project alone — the client comes off.
-      if (basis === 'project') update.client_id = null
-      else if (update.client_id === null) return fail('Pick a client to bill.')
+      // A project-based invoice may keep the client its project belongs to; a
+      // client-based one has nobody to bill without one.
+      if (basis === 'client' && !client_id) return fail('Pick a client to bill.')
+      update.client_id = client_id
     }
     if (patch.due_date !== undefined) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(patch.due_date) || Number.isNaN(new Date(`${patch.due_date}T00:00:00`).getTime())) {

@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import {
+  Building2,
   CalendarDays,
   CheckCircle2,
   ChevronLeft,
@@ -23,6 +24,15 @@ import { StatCard } from '@/components/StatCard'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { InvoiceFormDialog } from '@/components/InvoiceFormDialog'
 import { ClientBadge } from '@/components/ClientBadge'
+import {
+  INVOICE_BASIS_FILTERS,
+  InvoiceBasisFilterLabels,
+  countInvoicesByBasis,
+  filterInvoicesByBasis,
+  readInvoiceBasisFilter,
+  writeInvoiceBasisFilter,
+  type InvoiceBasisFilter,
+} from '@/lib/invoices'
 import { cn, formatDate, money } from '@/lib/utils'
 
 /** Local 'YYYY-MM-DD' for "today" on the device viewing the board. */
@@ -43,6 +53,12 @@ function todayISO(): string {
  *
  * Access mirrors the priority board: admin-only until the admin grants
  * `invoices.view` — a granted worker sees and runs the very same board.
+ *
+ * The **basis switch** above the board narrows it to one billing target —
+ * everything, client based or project based. It is a view of the same rows,
+ * not a second board: the columns and totals all follow the choice, and it is
+ * remembered per device (`src/lib/invoices`). Raising an invoice while the
+ * board is narrowed starts it on that basis.
  */
 export function ClientInvoicingPage() {
   const { invoices, clients, settings, dataLoading, updateInvoice, deleteInvoice } = useStore()
@@ -53,6 +69,16 @@ export function ClientInvoicingPage() {
   const [editing, setEditing] = useState<Invoice | null>(null)
   const [defaultStage, setDefaultStage] = useState<InvoiceStage>('pending')
   const [deleting, setDeleting] = useState<Invoice | null>(null)
+
+  // Which billing target the board shows. Read once from storage, then
+  // written back on every change so the next visit opens on the same board.
+  const [basisFilter, setBasisFilterState] = useState<InvoiceBasisFilter>(readInvoiceBasisFilter)
+  function setBasisFilter(next: InvoiceBasisFilter) {
+    writeInvoiceBasisFilter(next)
+    setBasisFilterState(next)
+  }
+  /** The rows behind the board: everything, or just one billing target. */
+  const visibleInvoices = useMemo(() => filterInvoicesByBasis(invoices, basisFilter), [invoices, basisFilter])
 
   // Drag state — identical to the priority board: `dragging` is the card
   // under the pointer, `dropTarget` the column it would land in. The ref
@@ -86,17 +112,17 @@ export function ClientInvoicingPage() {
     else if (e.clientX > box.right - edge) row.scrollLeft += 18
   }
 
-  /** What the board shows: invoices grouped by column, due soonest on top. */
+  /** What the board shows: the filtered invoices by column, due soonest on top. */
   const lanes = useMemo(() => {
     const result = Object.fromEntries(INVOICE_STAGES.map((s) => [s, [] as Invoice[]])) as Record<InvoiceStage, Invoice[]>
-    for (const inv of invoices) {
+    for (const inv of visibleInvoices) {
       if (result[inv.stage]) result[inv.stage].push(inv)
     }
     for (const stage of INVOICE_STAGES) {
       result[stage].sort((a, b) => a.due_date.localeCompare(b.due_date) || a.created_at.localeCompare(b.created_at))
     }
     return result
-  }, [invoices])
+  }, [visibleInvoices])
 
   /** Commit a drop: the invoice moves to `stage` (a no-op if it is already there). */
   function commitDrop(stage: InvoiceStage) {
@@ -131,6 +157,8 @@ export function ClientInvoicingPage() {
     setDefaultStage(stage)
     setFormOpen(true)
   }
+  /** The basis a new invoice starts on: the one the board is narrowed to. */
+  const newInvoiceBasis = basisFilter === 'all' ? 'client' : basisFilter
 
   function openEdit(invoice: Invoice) {
     setEditing(invoice)
@@ -180,13 +208,17 @@ export function ClientInvoicingPage() {
           <div className="min-w-0 flex-1">
             {/* The billing target is the card's identity: a project-based
                 invoice bills the named project, a client-based one the
-                client — never both. */}
+                client. A project may also name the client it belongs to —
+                shown next to the project, never instead of it. */}
             {invoice.basis === 'project' ? (
-              <div className="flex items-center gap-1.5">
+              <div className="flex flex-wrap items-center gap-1.5">
                 <Badge variant="muted" className="gap-1 text-[11px]">
                   <Folder className="h-3 w-3" />
                   <span className="max-w-[14rem] truncate font-medium">{invoice.project_name || 'Project'}</span>
                 </Badge>
+                {clientOf(invoice.client_id) && (
+                  <ClientBadge client={clientOf(invoice.client_id)} showInactive={false} className="text-[10px]" />
+                )}
               </div>
             ) : (
               <div className="flex items-center gap-1.5">
@@ -316,7 +348,7 @@ export function ClientInvoicingPage() {
 
           {items.length === 0 && !isTarget && (
             <div className="flex flex-1 flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed p-4 text-center text-xs text-muted-foreground">
-              {dragging ? 'Drop the invoice here' : 'No invoices here yet'}
+              {dragging ? 'Drop the invoice here' : emptyLabel}
             </div>
           )}
 
@@ -334,9 +366,12 @@ export function ClientInvoicingPage() {
   // Header totals — the board at a glance: how much is still to be billed,
   // how much is out for payment, and how much has come in.
   const stageTotal = (stage: InvoiceStage) => lanes[stage].reduce((sum, inv) => sum + inv.amount, 0)
-  const overdueCount = invoices.filter(isOverdue).length
+  const overdueCount = visibleInvoices.filter(isOverdue).length
 
   const showSkeleton = dataLoading && invoices.length === 0
+  // Words for the empty board: a narrowed board says what it is narrowed to.
+  const emptyLabel =
+    basisFilter === 'all' ? 'No invoices here yet' : `No ${InvoiceBasisFilterLabels[basisFilter].toLowerCase()} invoices here yet`
 
   return (
     <div className="space-y-6">
@@ -348,6 +383,41 @@ export function ClientInvoicingPage() {
           <Plus className="mr-2 h-4 w-4" /> New invoice
         </Button>
       </PageHeader>
+
+      {/* Which billing target the board shows — client based, project based or
+          both. One switch for the whole page: the columns, the totals above
+          them and the empty lanes all follow it, and the choice is remembered
+          per device. The counts are of the whole board, so the size of the
+          other half stays visible while one is showing. */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div
+          className="flex w-fit flex-wrap gap-1 rounded-lg border bg-muted/50 p-1"
+          role="group"
+          aria-label="Show all invoices, or only client based or project based ones"
+        >
+          {INVOICE_BASIS_FILTERS.map((option) => (
+            <Button
+              key={option}
+              type="button"
+              variant="ghost"
+              size="sm"
+              aria-pressed={basisFilter === option}
+              onClick={() => setBasisFilter(option)}
+              className={cn('gap-1.5 px-3 text-muted-foreground', basisFilter === option && 'bg-background text-foreground shadow-sm')}
+            >
+              {option === 'client' && <Building2 className="h-3.5 w-3.5" />}
+              {option === 'project' && <Folder className="h-3.5 w-3.5" />}
+              {InvoiceBasisFilterLabels[option]}
+              <span className="text-xs text-muted-foreground">{countInvoicesByBasis(invoices, option)}</span>
+            </Button>
+          ))}
+        </div>
+        {basisFilter !== 'all' && (
+          <p className="text-xs text-muted-foreground">
+            Showing {visibleInvoices.length} of {invoices.length} invoices — {InvoiceBasisFilterLabels[basisFilter].toLowerCase()} only.
+          </p>
+        )}
+      </div>
 
       {showSkeleton ? (
         <>
@@ -412,6 +482,7 @@ export function ClientInvoicingPage() {
         onOpenChange={setFormOpen}
         invoice={editing}
         defaultStage={defaultStage}
+        defaultBasis={editing ? undefined : newInvoiceBasis}
       />
 
       <ConfirmDialog
