@@ -57,11 +57,11 @@
     "verify:worker-color": "tsx scripts/verify-worker-color-local.ts"
   },
   "dependencies": {
-    "@capacitor/app": "^8.1.1",
+    "@capacitor/app": "^8.1.2",
     "@capacitor/core": "^8.5.2",
-    "@capacitor/keyboard": "^8.0.5",
+    "@capacitor/keyboard": "^8.0.6",
     "@capacitor/splash-screen": "^8.0.2",
-    "@capacitor/status-bar": "^8.0.3",
+    "@capacitor/status-bar": "^8.0.4",
     "@fontsource/inter": "^5.3.0",
     "@radix-ui/react-dialog": "^1.1.2",
     "@radix-ui/react-dropdown-menu": "^2.1.2",
