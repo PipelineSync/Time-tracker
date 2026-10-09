@@ -305,3 +305,109 @@ export function financeChartMonths(range: { from: Date; to: Date }): string[] {
   for (let i = 5; i >= 0; i--) out.push(monthKeyOf(new Date(end.getFullYear(), end.getMonth() - i, 1)))
   return out
 }
+
+// ---- The monthly summary ----------------------------------------------------
+// The Finance page's cards and tabs cover one month at a time. One-time
+// expenses belong to the month they were recorded in; payroll to the month it
+// covers; subscriptions to the months they are billed in, by their schedule.
+
+/** A 'YYYY-MM' as a running month number, so months can be compared and counted. */
+export function monthIndex(ym: string): number {
+  const [year, month] = ym.split('-').map(Number)
+  return year * 12 + (month - 1)
+}
+
+/** The 'YYYY-MM' that is `months` away from `ym` (a negative count goes back). */
+export function addMonths(ym: string, months: number): string {
+  const i = monthIndex(ym) + months
+  const year = Math.floor(i / 12)
+  const month = i - year * 12 + 1
+  return `${year}-${String(month).padStart(2, '0')}`
+}
+
+const toCents = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100
+
+/**
+ * Whether a subscription is billed in month `ym`. Only an active subscription
+ * bills. A monthly one bills every month and a yearly one once a year, in the
+ * month of its billing date. It counts from the month it was added, since
+ * earlier months predate it. One with a set number of bills stops after the
+ * last of the bills it has left.
+ */
+export function subscriptionBillsIn(item: FinanceItem, ym: string): boolean {
+  if (item.kind !== 'subscription' || item.status !== 'active') return false
+  const target = monthIndex(ym)
+  if (target < monthIndex(monthKeyOf(new Date(item.created_at)))) return false
+  const step = item.cycle === 'yearly' ? 12 : 1
+  const billing = monthIndex(item.due_date.slice(0, 7))
+  if ((((target - billing) % step) + step) % step !== 0) return false
+  if (item.max_occurrences != null) {
+    const left = item.max_occurrences - item.billed_count
+    if (left <= 0 || target > billing + (left - 1) * step) return false
+  }
+  return true
+}
+
+/** Payroll runs that cover month `ym` (whatever their status). */
+export function payrollInMonth(items: FinanceItem[], ym: string): FinanceItem[] {
+  return items.filter((i) => i.kind === 'payroll' && i.period_month === ym)
+}
+
+/** One-time expenses recorded in month `ym`. */
+export function expensesInMonth(items: FinanceItem[], ym: string): FinanceItem[] {
+  return items.filter((i) => i.kind === 'expense' && i.due_date.slice(0, 7) === ym)
+}
+
+export interface ExpenseCategoryTotal {
+  category: string
+  amount: number
+  count: number
+}
+
+/** Expenses grouped by category, largest first. An expense with no category counts as Other. */
+export function expenseCategoryTotals(expenses: FinanceItem[]): ExpenseCategoryTotal[] {
+  const totals = new Map<string, { amount: number; count: number }>()
+  for (const expense of expenses) {
+    const category = expense.expense_category || 'Other'
+    const current = totals.get(category) ?? { amount: 0, count: 0 }
+    current.amount += expense.amount
+    current.count += 1
+    totals.set(category, current)
+  }
+  return [...totals.entries()]
+    .map(([category, t]) => ({ category, amount: toCents(t.amount), count: t.count }))
+    .sort((a, b) => b.amount - a.amount || a.category.localeCompare(b.category))
+}
+
+/** The four cards for one month: subscriptions, payroll, one-time expenses and their total. */
+export interface MonthlyFinanceSummary {
+  month: string
+  subscriptions: number
+  subscriptionCount: number
+  payroll: number
+  payrollCount: number
+  payrollUnpaidCount: number
+  expenses: number
+  expenseCount: number
+  total: number
+}
+
+export function monthlyFinanceSummary(items: FinanceItem[], ym: string): MonthlyFinanceSummary {
+  const subs = items.filter((i) => subscriptionBillsIn(i, ym))
+  const payroll = payrollInMonth(items, ym)
+  const expenses = expensesInMonth(items, ym)
+  const subscriptions = toCents(subs.reduce((sum, i) => sum + i.amount, 0))
+  const payrollTotal = toCents(payroll.reduce((sum, i) => sum + i.amount, 0))
+  const expenseTotal = toCents(expenses.reduce((sum, i) => sum + i.amount, 0))
+  return {
+    month: ym,
+    subscriptions,
+    subscriptionCount: subs.length,
+    payroll: payrollTotal,
+    payrollCount: payroll.length,
+    payrollUnpaidCount: payroll.filter((p) => p.status !== 'paid').length,
+    expenses: expenseTotal,
+    expenseCount: expenses.length,
+    total: toCents(subscriptions + payrollTotal + expenseTotal),
+  }
+}

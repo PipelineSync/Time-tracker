@@ -200,6 +200,7 @@ export function buildDemoSeed() {
     { id: 'c-seed-3', name: 'Globex', color: 'violet', status: 'active', created_at: daysAgo(25).toISOString(), updated_at: daysAgo(25).toISOString() },
     { id: 'c-seed-4', name: 'Internal', color: 'slate', status: 'active', created_at: daysAgo(25).toISOString(), updated_at: daysAgo(25).toISOString() },
     { id: 'c-seed-5', name: 'Initech (past project)', color: 'amber', status: 'inactive', created_at: daysAgo(60).toISOString(), updated_at: daysAgo(10).toISOString() },
+    { id: 'c-seed-6', name: 'Lumen Labs', color: 'rose', status: 'active', created_at: daysAgo(14).toISOString(), updated_at: daysAgo(14).toISOString() },
   ]
 
   function entry(worker_id: string, start: Date, end: Date, client_id: string, project: string | null, break_minutes: number, notes: string | null, hourly_rate: number): TimeEntry {
@@ -838,22 +839,90 @@ export function buildDemoSeed() {
     { id: 'm-seed-4', title: 'Payroll prep', start_time: at(-1, 17, 0).toISOString(), notes: null, created_at: daysAgo(4).toISOString(), updated_at: daysAgo(4).toISOString() },
   ]
 
-  // A partly-filled invoicing board so the Client Invoicing page shows all
-  // three columns — and both billing targets: three invoices bill a client
-  // (client based), three bill a named project (project based, one of them
-  // against the client the project belongs to). One is overdue (due date
-  // already past), one is due soon, two are chasing payment and two are
-  // already paid.
+  // The invoicing board, seeded to show every kind of invoice in every lane.
+  // Regular clients run monthly cycles, billed on the 1st and due on the 15th:
+  // Northwind and Globex are on auto-bill (their next cycle is already queued),
+  // Acme is billed by hand. Project-based invoices and one Upwork client sit
+  // alongside, and one regular invoice is overdue.
+  const monthDay = (shift: number, day: number) => toISODate(new Date(new Date().getFullYear(), new Date().getMonth() + shift, day))
+  const regularCycle = (
+    id: string,
+    client_id: string,
+    amount: number,
+    shift: number,
+    stage: Invoice['stage'],
+    autoBill: boolean,
+    notes: string | null,
+  ): Invoice => ({
+    id,
+    client_id,
+    basis: 'client',
+    project_name: null,
+    amount,
+    due_date: monthDay(shift, 15),
+    stage,
+    notes,
+    bill_on: monthDay(shift, 1),
+    auto_bill: autoBill,
+    auto_billed: false,
+    billed_on: stage === 'pending' ? null : monthDay(shift, 1),
+    paid_on: stage === 'paid' ? monthDay(shift, 20) : null,
+    created_at: daysAgo(40 - Math.max(0, shift) * 10).toISOString(),
+    updated_at: daysAgo(3).toISOString(),
+  })
   const invoices: Invoice[] = [
-    { id: 'inv-seed-1', client_id: null, basis: 'project', project_name: 'Landing page', amount: 1200, due_date: dateOffset(-2), stage: 'awaiting', notes: 'Phase 1 — landing page, billed per project. Payment overdue, chase on Monday.', created_at: daysAgo(20).toISOString(), updated_at: daysAgo(9).toISOString() },
-    { id: 'inv-seed-2', client_id: 'c-seed-2', basis: 'client', project_name: null, amount: 850, due_date: dateOffset(3), stage: 'awaiting', notes: 'Monthly retainer — sent, awaiting their accounts payable.', created_at: daysAgo(12).toISOString(), updated_at: daysAgo(12).toISOString() },
-    { id: 'inv-seed-3', client_id: 'c-seed-3', basis: 'client', project_name: null, amount: 640, due_date: dateOffset(10), stage: 'pending', notes: 'Draft — waiting for the scope change to be confirmed.', created_at: daysAgo(2).toISOString(), updated_at: daysAgo(2).toISOString() },
+    // Northwind — retainer on auto-bill: last month paid, this month sent, next queued.
+    regularCycle('inv-seed-2a', 'c-seed-2', 850, -1, 'paid', true, 'Monthly retainer — settled.'),
+    regularCycle('inv-seed-2', 'c-seed-2', 850, 0, 'awaiting', true, 'Monthly retainer — sent, awaiting their accounts payable.'),
+    regularCycle('inv-seed-2b', 'c-seed-2', 850, 1, 'pending', true, null),
+    // Globex — retainer on auto-bill; last month's is overdue (sent, not yet paid).
+    regularCycle('inv-seed-3a', 'c-seed-3', 640, -1, 'awaiting', true, 'Chase on Monday — they went quiet after the scope change.'),
+    regularCycle('inv-seed-3b', 'c-seed-3', 640, 0, 'awaiting', true, null),
+    regularCycle('inv-seed-3c', 'c-seed-3', 640, 1, 'pending', true, null),
+    // Acme — care plan billed by hand: auto-bill is off, so this month waits for you.
+    regularCycle('inv-seed-7a', 'c-seed-1', 400, -1, 'paid', false, null),
+    regularCycle('inv-seed-7', 'c-seed-1', 400, 0, 'pending', false, 'Care plan — bill it by hand this month.'),
+    // Project-based — one-off and milestone billing, raised by hand.
+    {
+      id: 'inv-seed-1', client_id: null, basis: 'project', project_name: 'Landing page', amount: 1200, due_date: dateOffset(-2), stage: 'awaiting',
+      notes: 'Phase 1 — landing page, billed per project. Payment overdue, chase on Monday.',
+      bill_on: null, auto_bill: false, auto_billed: false, billed_on: dateOffset(-9), paid_on: null,
+      created_at: daysAgo(20).toISOString(), updated_at: daysAgo(9).toISOString(),
+    },
     // A project-based invoice may name the client the project belongs to
     // (Components build is Acme's) — or bill the project on its own, like
     // "Landing page" above.
-    { id: 'inv-seed-4', client_id: 'c-seed-1', basis: 'project', project_name: 'Components build', amount: 2200, due_date: dateOffset(18), stage: 'pending', notes: 'Phase 2 — components build, billed per project at the end of the sprint. Acme’s project, invoiced per project rather than per client.', created_at: daysAgo(1).toISOString(), updated_at: daysAgo(1).toISOString() },
-    { id: 'inv-seed-5', client_id: 'c-seed-2', basis: 'client', project_name: null, amount: 150, due_date: dateOffset(-14), stage: 'paid', notes: 'Extra report export — settled in full.', created_at: daysAgo(30).toISOString(), updated_at: daysAgo(16).toISOString() },
-    { id: 'inv-seed-6', client_id: 'c-seed-1', basis: 'client', project_name: null, amount: 980, due_date: dateOffset(-28), stage: 'paid', notes: null, created_at: daysAgo(45).toISOString(), updated_at: daysAgo(29).toISOString() },
+    {
+      id: 'inv-seed-4', client_id: 'c-seed-1', basis: 'project', project_name: 'Components build', amount: 2200, due_date: dateOffset(18), stage: 'pending',
+      notes: 'Phase 2 — components build, billed per project at the end of the sprint. Acme’s project, invoiced per project rather than per client.',
+      bill_on: null, auto_bill: false, auto_billed: false, billed_on: null, paid_on: null,
+      created_at: daysAgo(1).toISOString(), updated_at: daysAgo(1).toISOString(),
+    },
+    {
+      id: 'inv-seed-5', client_id: 'c-seed-2', basis: 'project', project_name: 'Report export', amount: 150, due_date: dateOffset(-14), stage: 'paid',
+      notes: 'Extra report export — settled in full.',
+      bill_on: null, auto_bill: false, auto_billed: false, billed_on: dateOffset(-16), paid_on: dateOffset(-15),
+      created_at: daysAgo(30).toISOString(), updated_at: daysAgo(16).toISOString(),
+    },
+    {
+      id: 'inv-seed-6', client_id: 'c-seed-1', basis: 'project', project_name: 'Website redesign', amount: 980, due_date: dateOffset(-28), stage: 'paid',
+      notes: null,
+      bill_on: null, auto_bill: false, auto_billed: false, billed_on: dateOffset(-35), paid_on: dateOffset(-29),
+      created_at: daysAgo(45).toISOString(), updated_at: daysAgo(29).toISOString(),
+    },
+    // Upwork — billed by hand, counted in the same monthly totals.
+    {
+      id: 'inv-seed-8', client_id: 'c-seed-6', basis: 'upwork', project_name: null, amount: 480, due_date: dateOffset(6), stage: 'awaiting',
+      notes: 'Data cleanup sprint — milestone sent through Upwork.',
+      bill_on: null, auto_bill: false, auto_billed: false, billed_on: dateOffset(-3), paid_on: null,
+      created_at: daysAgo(5).toISOString(), updated_at: daysAgo(3).toISOString(),
+    },
+    {
+      id: 'inv-seed-9', client_id: 'c-seed-6', basis: 'upwork', project_name: null, amount: 1600, due_date: dateOffset(-6), stage: 'paid',
+      notes: 'Dashboard build — milestone 1, paid.',
+      bill_on: null, auto_bill: false, auto_billed: false, billed_on: dateOffset(-12), paid_on: dateOffset(-5),
+      created_at: daysAgo(14).toISOString(), updated_at: daysAgo(5).toISOString(),
+    },
   ]
 
   return { workers, clients, entries, tasks, settings, financeItems, clientPriorities, meetings, invoices, monthlyGoals, bonusDecisions }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Building2, Folder } from 'lucide-react'
+import { Briefcase, Building2, Folder } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -11,13 +11,14 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { ClientSelect } from '@/components/ClientSelect'
 import { useStore } from '@/lib/store'
 import { cn } from '@/lib/utils'
 import type { Invoice, InvoiceBasis, InvoiceStage } from '@/lib/types'
-import { INVOICE_STAGES, InvoiceStageNames } from '@/lib/types'
+import { INVOICE_BASES, INVOICE_STAGES, InvoiceBasisNames, InvoiceStageNames } from '@/lib/types'
 import { toast } from 'sonner'
 
 interface FormState {
@@ -25,26 +26,41 @@ interface FormState {
   basis: InvoiceBasis
   projectName: string
   amount: string
+  billOn: string // 'YYYY-MM-DD' (local) — regular clients only
   dueDate: string // 'YYYY-MM-DD' (local)
+  autoBill: boolean // regular clients only
   stage: InvoiceStage
   notes: string
 }
 
-/** Local 'YYYY-MM-DD' of a Date, for pre-filling the due-date input. */
+/** Local 'YYYY-MM-DD' of a Date, for pre-filling the date inputs. */
 function localDate(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 }
 
+const BASIS_ICONS: Record<InvoiceBasis, typeof Building2> = {
+  client: Building2,
+  project: Folder,
+  upwork: Briefcase,
+}
+
+/** What each billing target means, in the words the form uses. */
+const BASIS_HINTS: Record<InvoiceBasis, string> = {
+  client:
+    'Regular client — billed every month. While auto-bill is on, each cycle goes out on its bill-on date and the next month is queued behind it.',
+  project:
+    'Project-based — a one-off or milestone invoice for the project named above. Raised by hand. Naming a client is optional: it only says whose project it is.',
+  upwork: 'Upwork client — raised by hand, and counted in the same monthly totals as everything else.',
+}
+
 /**
- * Raise / edit an invoice: what is being billed (the whole client, or one
- * named project — which may in turn name the client the project belongs to),
- * an optional amount — an invoice can go on the board before its figure is
- * known and the amount filled in later — when payment is due and optional
- * notes. The stage picker doubles as the "record it straight into another
- * column" affordance, so logging an invoice that was already paid needs no
- * drag afterwards; a new invoice defaults to Pending and the board is still
- * where invoices move day to day.
+ * Raise / edit an invoice: what it bills (a regular client, a named project —
+ * which may name the client it belongs to — or an Upwork client), an optional
+ * amount (an invoice can go on the board before its figure is known), the
+ * dates, the column and notes. A regular client also carries its bill-on date
+ * and the client's auto-bill switch. The column picker doubles as "record it
+ * straight into another column", so an invoice already paid needs no drag.
  */
 export function InvoiceFormDialog({
   open,
@@ -60,13 +76,23 @@ export function InvoiceFormDialog({
   /** Column a new invoice starts in (the "＋" button of the lane it was raised from). */
   defaultStage?: InvoiceStage
   /**
-   * What a new invoice bills, when the board is already narrowed to one
-   * billing target — raising from a filtered board keeps the same basis.
+   * What a new invoice bills, when the board is already narrowed to one kind
+   * of invoice — raising from a narrowed board keeps the same kind.
    */
   defaultBasis?: InvoiceBasis
 }) {
   const { createInvoice, updateInvoice, settings } = useStore()
-  const [form, setForm] = useState<FormState>({ clientId: '', basis: 'client', projectName: '', amount: '', dueDate: '', stage: 'pending', notes: '' })
+  const [form, setForm] = useState<FormState>({
+    clientId: '',
+    basis: 'client',
+    projectName: '',
+    amount: '',
+    billOn: '',
+    dueDate: '',
+    autoBill: true,
+    stage: 'pending',
+    notes: '',
+  })
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
@@ -77,7 +103,11 @@ export function InvoiceFormDialog({
         basis: invoice.basis,
         projectName: invoice.project_name || '',
         amount: String(invoice.amount),
+        billOn: invoice.bill_on ?? localDate(new Date()),
         dueDate: invoice.due_date,
+        // Only a regular client carries the switch; one that becomes regular
+        // starts with auto-bill on, as a new regular client does.
+        autoBill: invoice.basis === 'client' ? invoice.auto_bill : true,
         stage: invoice.stage,
         notes: invoice.notes || '',
       })
@@ -86,7 +116,17 @@ export function InvoiceFormDialog({
       // enough that nobody accidentally bills two months out.
       const due = new Date()
       due.setDate(due.getDate() + 14)
-      setForm({ clientId: '', basis: defaultBasis ?? 'client', projectName: '', amount: '', dueDate: localDate(due), stage: defaultStage ?? 'pending', notes: '' })
+      setForm({
+        clientId: '',
+        basis: defaultBasis ?? 'client',
+        projectName: '',
+        amount: '',
+        billOn: localDate(new Date()),
+        dueDate: localDate(due),
+        autoBill: true,
+        stage: defaultStage ?? 'pending',
+        notes: '',
+      })
     }
   }, [open, invoice, defaultStage, defaultBasis])
 
@@ -95,17 +135,21 @@ export function InvoiceFormDialog({
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
-    // Client and project are different billing targets: a client-based
-    // invoice must pick a client, a project-based one must name the project
-    // and may also name the client that project belongs to.
+    const regular = form.basis === 'client'
     const projectName = form.basis === 'project' ? form.projectName.trim() : ''
     const clientId = form.clientId || null
-    if (form.basis === 'client' && !clientId) {
+    // A regular or Upwork invoice bills a client and must pick one; a
+    // project-based one must name the project and may also name its client.
+    if (form.basis !== 'project' && !clientId) {
       toast.error('Pick a client to bill.')
       return
     }
     if (form.basis === 'project' && !projectName) {
       toast.error('Name the project this invoice bills.')
+      return
+    }
+    if (regular && !form.billOn) {
+      toast.error('Pick the day this invoice is billed.')
       return
     }
     // The amount is optional: left blank it is recorded as zero, to be
@@ -129,6 +173,8 @@ export function InvoiceFormDialog({
         due_date: form.dueDate,
         stage: form.stage,
         notes: form.notes.trim() || null,
+        bill_on: regular ? form.billOn : null,
+        auto_bill: regular ? form.autoBill : false,
       }
       if (invoice) {
         const saved = await updateInvoice(invoice.id, payload)
@@ -137,13 +183,37 @@ export function InvoiceFormDialog({
       } else {
         const created = await createInvoice(payload)
         if (!created) return
-        toast.success(created.stage === 'pending' ? 'Invoice raised — it is on the board as Pending.' : `Invoice raised — filed under ${InvoiceStageNames[created.stage]}.`)
+        toast.success(
+          created.stage === 'pending'
+            ? 'Invoice raised — it is on the board as Pending.'
+            : `Invoice raised — filed under ${InvoiceStageNames[created.stage]}.`,
+        )
       }
       onOpenChange(false)
     } finally {
       setSaving(false)
     }
   }
+
+  const isRegular = form.basis === 'client'
+
+  const columnField = (
+    <div className="grid gap-2">
+      <span className="text-sm font-medium leading-none">Column</span>
+      <Select value={form.stage} onValueChange={(v) => set('stage', v as InvoiceStage)}>
+        <SelectTrigger id="invoice-stage" aria-label="Column">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {INVOICE_STAGES.map((stage) => (
+            <SelectItem key={stage} value={stage}>
+              {InvoiceStageNames[stage]}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  )
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -153,42 +223,35 @@ export function InvoiceFormDialog({
             <DialogTitle>{invoice ? 'Edit invoice' : 'New invoice'}</DialogTitle>
             <DialogDescription>
               {invoice
-                ? 'Change what it bills, the amount, due date, column or notes.'
-                : 'A card on the board: drag it to Awaiting once sent, and to Paid once settled.'}
+                ? 'Change what it bills, the amount, dates, column or notes.'
+                : 'A card on the board: it starts in Pending, moves to Awaiting once billed and to Paid once settled.'}
             </DialogDescription>
           </DialogHeader>
 
           <div className="grid gap-4 py-4">
-            {/* One choice, what the invoice bills: a client as a whole, or
-                one named project. The project keeps the client field too —
-                as the (optional) home of the project — so a project can be
-                billed on its own or against its client. */}
+            {/* What it bills — three kinds of invoice. Switching keeps whatever
+                client is already chosen; a project may keep its client too. */}
             <div className="grid gap-2">
               <span className="text-sm font-medium leading-none">Bill to</span>
               <div className="grid gap-3 rounded-lg border bg-muted/30 p-2.5">
-                <div className="flex w-fit gap-1 rounded-md bg-muted p-1" role="group" aria-label="Client based or project based">
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    aria-pressed={form.basis === 'client'}
-                    onClick={() => set('basis', 'client')}
-                    className={cn('gap-1.5 px-3 text-muted-foreground', form.basis === 'client' && 'bg-background text-foreground shadow-sm')}
-                  >
-                    <Building2 className="h-3.5 w-3.5" />
-                    Client
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    aria-pressed={form.basis === 'project'}
-                    onClick={() => set('basis', 'project')}
-                    className={cn('gap-1.5 px-3 text-muted-foreground', form.basis === 'project' && 'bg-background text-foreground shadow-sm')}
-                  >
-                    <Folder className="h-3.5 w-3.5" />
-                    Project
-                  </Button>
+                <div className="flex w-fit flex-wrap gap-1 rounded-md bg-muted p-1" role="group" aria-label="What this invoice bills">
+                  {INVOICE_BASES.map((basis) => {
+                    const Icon = BASIS_ICONS[basis]
+                    return (
+                      <Button
+                        key={basis}
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        aria-pressed={form.basis === basis}
+                        onClick={() => set('basis', basis)}
+                        className={cn('gap-1.5 px-3 text-muted-foreground', form.basis === basis && 'bg-background text-foreground shadow-sm')}
+                      >
+                        <Icon className="h-3.5 w-3.5" />
+                        {InvoiceBasisNames[basis]}
+                      </Button>
+                    )
+                  })}
                 </div>
 
                 {form.basis === 'project' && (
@@ -206,9 +269,6 @@ export function InvoiceFormDialog({
                   </div>
                 )}
 
-                {/* The client: the whole of a client-based invoice, and the
-                    optional home of a billed project. Switching basis keeps
-                    whatever is already chosen — it is the same client. */}
                 <div className="grid gap-2">
                   <Label htmlFor="invoice-client" className="text-xs text-muted-foreground">
                     {form.basis === 'project' ? 'Client (optional)' : 'Client'}
@@ -223,11 +283,7 @@ export function InvoiceFormDialog({
                   />
                 </div>
               </div>
-              <p className="text-xs text-muted-foreground">
-                {form.basis === 'project'
-                  ? 'Project based — this invoice bills the project named above. Naming a client is optional: it only says whose project it is.'
-                  : 'Client based — this invoice bills the client as a whole.'}
-              </p>
+              <p className="text-xs text-muted-foreground">{BASIS_HINTS[form.basis]}</p>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
@@ -257,21 +313,37 @@ export function InvoiceFormDialog({
               </div>
             </div>
 
-            <div className="grid gap-2">
-              <Label htmlFor="invoice-stage">Column</Label>
-              <Select value={form.stage} onValueChange={(v) => set('stage', v as InvoiceStage)}>
-                <SelectTrigger id="invoice-stage">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {INVOICE_STAGES.map((stage) => (
-                    <SelectItem key={stage} value={stage}>
-                      {InvoiceStageNames[stage]}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            {/* A regular client's cycle: the day it is billed, and whether
+                auto-bill raises it and queues the next one. */}
+            {isRegular && (
+              <div className="grid grid-cols-2 gap-4">
+                <div className="grid gap-2">
+                  <Label htmlFor="invoice-bill-on">Bill on</Label>
+                  <Input
+                    id="invoice-bill-on"
+                    type="date"
+                    value={form.billOn}
+                    onChange={(e) => set('billOn', e.target.value)}
+                    required
+                  />
+                </div>
+                {columnField}
+              </div>
+            )}
+
+            {isRegular && (
+              <div className="flex items-start justify-between gap-3 rounded-lg border p-3">
+                <div className="space-y-0.5">
+                  <Label htmlFor="invoice-auto-bill">Auto-bill</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Raised on its bill-on date, then next month is queued. The switch covers every invoice for this client.
+                  </p>
+                </div>
+                <Switch id="invoice-auto-bill" checked={form.autoBill} onCheckedChange={(v) => set('autoBill', v)} aria-label="Auto-bill for this client" />
+              </div>
+            )}
+
+            {!isRegular && columnField}
 
             <div className="grid gap-2">
               <Label htmlFor="invoice-notes">Notes (optional)</Label>

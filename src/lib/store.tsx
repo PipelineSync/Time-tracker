@@ -29,6 +29,7 @@ import type {
   Note,
   Permission,
   Invoice,
+  InvoicePatch,
   FinanceItem,
   Ticket,
   TicketReply,
@@ -297,7 +298,7 @@ interface StoreValue {
   /** Raise an invoice on the board. invoices.view. */
   createInvoice: (input: CreateInvoiceInput) => Promise<Invoice | null>
   /** Edit an invoice, or move it between board columns (patch `stage`). invoices.view. */
-  updateInvoice: (id: string, patch: Partial<Omit<Invoice, 'id' | 'created_at' | 'updated_at'>>) => Promise<Invoice | null>
+  updateInvoice: (id: string, patch: InvoicePatch) => Promise<Invoice | null>
   /** Remove an invoice from the board. invoices.view. */
   deleteInvoice: (id: string) => Promise<boolean>
 
@@ -1435,7 +1436,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return res.data
   }, [backend, refreshInvoices])
 
-  const updateInvoice = useCallback(async (id: string, patch: Partial<Omit<Invoice, 'id' | 'created_at' | 'updated_at'>>) => {
+  const updateInvoice = useCallback(async (id: string, patch: InvoicePatch) => {
     const res = await backend.updateInvoice(id, patch)
     if (res.error || !res.data) {
       toast.error(res.error || 'Could not save the invoice.')

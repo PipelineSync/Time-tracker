@@ -29,8 +29,9 @@ import type {
   NoteColor,
   Permission,
   Invoice,
-  InvoiceStage,
   InvoiceBasis,
+  InvoicePatch,
+  InvoiceStage,
   FinanceItem,
   FinanceKind,
   BillingCycle,
@@ -160,12 +161,16 @@ export interface CreateNoteInput {
 /** Fields callers may set when creating an invoice. */
 export interface CreateInvoiceInput {
   /**
-   * The client billed — required for a client-based invoice; optional on a
-   * project-based one, which may name the client the project belongs to (pass
-   * null to bill the named project on its own).
+   * The client billed — required for a regular or an Upwork invoice; optional
+   * on a project-based one, which may name the client the project belongs to
+   * (pass null to bill the named project on its own).
    */
   client_id: string | null
-  /** Bills a client ('client', the default) or a named project ('project'). */
+  /**
+   * What it bills: a regular client ('client', the default — recurring, see
+   * `bill_on` and `auto_bill`), a named project ('project') or an Upwork
+   * client ('upwork').
+   */
   basis?: InvoiceBasis
   /** The project billed — required when `basis` is 'project'. */
   project_name?: string | null
@@ -176,6 +181,14 @@ export interface CreateInvoiceInput {
   /** Board column; defaults to 'pending'. */
   stage?: InvoiceStage
   notes?: string | null
+  /** Regular clients: the cycle date this invoice is billed on. Defaults to today. */
+  bill_on?: string | null
+  /**
+   * Regular clients: the client's auto-bill switch. Defaults to on for a new
+   * client, or to the switch the client already has. Setting it sets it for
+   * every regular invoice of that client.
+   */
+  auto_bill?: boolean
 }
 
 export interface CreateFinanceItemInput {
@@ -377,7 +390,9 @@ export interface DataBackend {
 
   /**
    * Tasks on the kanban board. Scoped by role: the admin gets every worker's
-   * tasks, a worker only gets their own.
+   * tasks, a worker only gets their own. Reading also carries each Recurring-
+   * shelf template's cycle onto the board when a new month has begun (see
+   * lib/taskCarryOver); the cards it creates come back in the same list.
    */
   listTasks(): Promise<BackendResult<Task[]>>
   createTask(input: CreateTaskInput): Promise<BackendResult<Task>>
@@ -456,19 +471,25 @@ export interface DataBackend {
 
   /**
    * The client invoicing board's cards, one per invoice. The admin and
-   * workers granted `invoices.view` read them; everyone else — and any
-   * database without the client-invoicing migration — gets an empty list so
-   * the rest of the app never notices. Cards sort by due date, so the board
-   * owns the order and there is no position to store.
+   * workers granted `invoices.view` read them; everyone else — and a database
+   * with no `invoices` table yet — gets an empty list so the rest of the app
+   * never notices. A table that predates the auto-bill columns is an error
+   * that asks for the newest client-invoicing.sql. Cards sort by due date, so the board
+   * owns the order and there is no position to store. Reading also runs
+   * auto-bill: a regular invoice whose bill-on date has come is raised, and
+   * the client's next monthly invoice is queued (lib/invoiceCycles).
    */
   listInvoices(): Promise<BackendResult<Invoice[]>>
   createInvoice(input: CreateInvoiceInput): Promise<BackendResult<Invoice>>
   /**
    * Patch an invoice. Moving it between board columns is patching `stage`
-   * (free movement — forwards and backwards both allowed); the backend keeps
-   * `updated_at` fresh so other devices pick the change up on their next sync.
+   * (free movement — forwards and backwards both allowed). The backend stamps
+   * `billed_on` and `paid_on` as the stage moves, clears them on a move
+   * back to Pending, and keeps `updated_at` fresh so other devices pick the
+   * change up on their next sync. `auto_bill` belongs to the client: setting it
+   * on a regular invoice sets it on all of that client's regular invoices.
    */
-  updateInvoice(id: string, patch: Partial<Omit<Invoice, 'id' | 'created_at' | 'updated_at'>>): Promise<BackendResult<Invoice>>
+  updateInvoice(id: string, patch: InvoicePatch): Promise<BackendResult<Invoice>>
   deleteInvoice(id: string): Promise<BackendResult<null>>
 
   resetAll(): Promise<BackendResult<null>>

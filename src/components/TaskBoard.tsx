@@ -23,6 +23,7 @@ import {
   Repeat2,
   ShieldCheck,
   Timer,
+  History,
 } from 'lucide-react'
 import { useStore } from '@/lib/store'
 import type { Task, TaskPriority, TaskStatus } from '@/lib/types'
@@ -42,6 +43,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { cn, formatDate, isOverdueDate } from '@/lib/utils'
 import { applyTaskFilters, isAnyBoardFilterActive, DEFAULT_BOARD_FILTERS, type BoardFilters } from '@/lib/taskFilters'
+import { BOARD_COMPLETED_LIMIT, byCompletionNewestFirst, completionMonth } from '@/lib/completedTasks'
+import { CompletedTasksDialog } from '@/components/CompletedTasksDialog'
+import { MonthPicker } from '@/components/MonthPicker'
+import { monthLabel, todayISO } from '@/lib/finance'
+import { monthKeyOfISO, resolveMonthScope, type MonthScope } from '@/lib/monthScope'
+import { boardMonthTotals, isFinishedTask, taskMonthOptions, taskOnMonthBoard } from '@/lib/taskMonths'
 import { taskHealthBadges } from '@/lib/kpi'
 import { planRecreate } from '@/lib/taskWorkflow'
 import { toast } from 'sonner'
@@ -130,11 +137,18 @@ export function TaskBoard({
   const [confirmRestoreAll, setConfirmRestoreAll] = useState(false)
   /** The card whose QA review dialog is open (the For Review pile's action). */
   const [reviewing, setReviewing] = useState<Task | null>(null)
+  /** The full completed history, behind the Completed column's "View All Completed". */
+  const [historyOpen, setHistoryOpen] = useState(false)
+  // The month the board shows. "This month" is resolved on every render, so an
+  // open board moves on by itself when a new month starts.
+  const today = todayISO()
+  const currentMonth = monthKeyOfISO(today)
+  const boardMonth = resolveMonthScope(filters.month, today)
 
   const patch = (p: Partial<BoardFilters>) => onFiltersChange({ ...filters, ...p })
 
-  /** The original "Clear filters" behaviour: reset every board filter. */
-  const clearAllFilters = () => onFiltersChange({ ...DEFAULT_BOARD_FILTERS })
+  /** The original "Clear filters" behaviour: reset every board filter (back to this month). */
+  const clearAllFilters = () => onFiltersChange({ ...DEFAULT_BOARD_FILTERS, month: 'current' })
 
   // Drag state. `dragging` is the card under the pointer; `dropTarget` is the
   // column (and index) it would land in — used to draw the placeholder.
@@ -177,26 +191,46 @@ export function TaskBoard({
   const searchActive = filters.search.trim().length > 0
   const isArchived = (t: Task) => Boolean(t.archived_at)
 
-  // Unfiltered total counts for tabs (scoped to the user's role)
-  const totalActiveCount = useMemo(() => {
-    const rows = canViewAll ? tasks : tasks.filter((t) => t.worker_id === user?.workerId)
-    return rows.filter((t) => !isArchived(t)).length
-  }, [tasks, canViewAll, user?.workerId])
-
-  const totalArchivedCount = useMemo(() => {
-    const rows = canViewAll ? tasks : tasks.filter((t) => t.worker_id === user?.workerId)
-    return rows.filter((t) => isArchived(t)).length
-  }, [tasks, canViewAll, user?.workerId])
+  // Everything the viewer may see before the board filters: all tasks with
+  // tasks.view_all, otherwise only their own.
+  const scopedTasks = useMemo(
+    () => (canViewAll ? tasks : tasks.filter((t) => t.worker_id === user?.workerId)),
+    [tasks, canViewAll, user?.workerId]
+  )
 
   // Without tasks.view_all the backend only ever returns the signed-in
   // worker's own tasks; this keeps the UI honest if a stale row is cached.
-  const visible = useMemo(
-    () => applyTaskFilters(tasks, canViewAll ? null : (user?.workerId ?? null), filters),
-    [tasks, canViewAll, user?.workerId, filters]
+  const scopeId = canViewAll ? null : (user?.workerId ?? null)
+
+  // Unfiltered total counts for tabs (scoped to the user's role). The board
+  // count is the cards of the month the board shows.
+  const totalActiveCount = useMemo(
+    () =>
+      scopedTasks.filter((t) => !isArchived(t) && (boardMonth === 'all' || taskOnMonthBoard(t, boardMonth))).length,
+    [scopedTasks, boardMonth]
+  )
+  const totalArchivedCount = useMemo(() => scopedTasks.filter((t) => isArchived(t)).length, [scopedTasks])
+
+  // Finished work in every month. It is still a record: KPI, reports and the
+  // history all read it, whichever month it was finished in.
+  const finishedCount = useMemo(
+    () => scopedTasks.filter((t) => !isArchived(t) && isFinishedTask(t)).length,
+    [scopedTasks]
   )
 
-  // Active tasks for the kanban board
+  // The board's cards: the role scope and every filter, the month included.
+  const visible = useMemo(() => applyTaskFilters(tasks, scopeId, filters, today), [tasks, scopeId, filters, today])
+
+  // The kanban board's tasks: not archived (applyTaskFilters has limited them to the month).
   const activeTasks = useMemo(() => visible.filter((t) => !isArchived(t)), [visible])
+
+  // The month's figures above the board: the same filters across every month, then the month's own counts.
+  const monthChoices = useMemo(() => taskMonthOptions(scopedTasks, today), [scopedTasks, today])
+  const monthTotals = useMemo(() => {
+    if (boardMonth === 'all') return null
+    const sameFiltersAnyMonth = applyTaskFilters(tasks, scopeId, { ...filters, month: 'all' }, today)
+    return boardMonthTotals(sameFiltersAnyMonth, boardMonth)
+  }, [tasks, scopeId, filters, today, boardMonth])
 
   // Archived tasks for the archive view, newest archived first
   const archivedTasks = useMemo(() => {
@@ -252,6 +286,9 @@ export function TaskBoard({
     for (const status of TASK_STATUSES) {
       grouped[status].sort((a, b) => a.position - b.position || b.created_at.localeCompare(a.created_at))
     }
+    // Completed work reads newest-finished first, so the few cards the lane
+    // shows are the latest ones.
+    grouped.completed.sort(byCompletionNewestFirst)
     return grouped
   }, [activeTasks])
 
@@ -282,6 +319,8 @@ export function TaskBoard({
     const task = draggingRef.current
     endDrag()
     if (!task) return
+    // Completed cards stay in completion order, so moving one within the lane changes nothing.
+    if (status === 'completed' && task.status === 'completed') return
     const items = columns[status]
     const from = items.findIndex((t) => t.id === task.id)
     const others = items.filter((t) => t.id !== task.id)
@@ -359,7 +398,14 @@ export function TaskBoard({
   /** Restore an archived task back to the completed column */
   async function handleRestoreTask(task: Task) {
     const res = await restoreTask(task.id)
-    if (res) toast.success(`"${task.title}" restored to Completed.`)
+    if (!res) return
+    const finishedIn = completionMonth(task)
+    if (boardMonth === 'all' || finishedIn === boardMonth) {
+      toast.success(`"${task.title}" restored to Completed.`)
+    } else {
+      // Finished in another month: it goes back to that month's board.
+      toast.success(`"${task.title}" restored. It was finished in ${monthLabel(finishedIn)}, so it is on that month's board.`)
+    }
   }
 
   /** Archive all completed tasks currently on the board */
@@ -687,6 +733,8 @@ export function TaskBoard({
   function renderColumn(status: TaskStatus) {
     const style = columnStyles[status]
     const items = columns[status]
+    // The completed lane shows only its newest cards; the rest are in View All Completed.
+    const cards = status === 'completed' ? items.slice(0, BOARD_COMPLETED_LIMIT) : items
     const isTarget = dropTarget?.status === status
     return (
       <div
@@ -749,7 +797,7 @@ export function TaskBoard({
         </div>
 
         <div className="flex flex-1 flex-col gap-2">
-          {items.map((task, index) => (
+          {cards.map((task, index) => (
             <div key={task.id}>
               {isTarget && dropTarget.index === index && (
                 <div className="mb-2 h-1.5 rounded-full bg-primary/60" aria-hidden />
@@ -757,11 +805,11 @@ export function TaskBoard({
               {renderTaskCard({ task, index, status })}
             </div>
           ))}
-          {isTarget && dropTarget.index >= items.length && (
+          {isTarget && dropTarget.index >= cards.length && (
             <div className="h-1.5 rounded-full bg-primary/60" aria-hidden />
           )}
 
-          {items.length === 0 && !isTarget && (
+          {cards.length === 0 && !isTarget && (
             <button
               type="button"
               onClick={() => openNew(status)}
@@ -771,6 +819,19 @@ export function TaskBoard({
               {status === 'todo' ? 'Add a task' : `Drag a task here`}
             </button>
             )}
+          {status === 'completed' && (
+            <div className="mt-2 space-y-2 border-t pt-2">
+              {items.length > cards.length && (
+                <p className="text-center text-xs text-muted-foreground">
+                  Showing the {cards.length} most recent of {items.length}
+                  {boardMonth !== 'all' ? ` finished in ${monthLabel(boardMonth)}` : ''}
+                </p>
+              )}
+              <Button variant="outline" size="sm" className="w-full" onClick={() => setHistoryOpen(true)}>
+                <History className="mr-2 h-3.5 w-3.5" /> View All Completed
+              </Button>
+            </div>
+          )}
         </div>
       </div>
     )
@@ -921,10 +982,26 @@ export function TaskBoard({
           <div>
             <h2 className="text-base font-semibold leading-tight">Tasks Board</h2>
             <p className="text-sm text-muted-foreground">Drag tasks between stages. Keep it simple and focused.</p>
+            {monthTotals && (
+              <p className="mt-1 text-xs text-muted-foreground" aria-label={`Totals for ${monthLabel(boardMonth)}`}>
+                <span className="font-medium text-foreground">{monthLabel(boardMonth)}</span>
+                {` · ${monthTotals.due} planned (${monthTotals.dueDone} done) · ${monthTotals.finished} finished · ${monthTotals.carried} carried over from earlier months`}
+              </p>
+            )}
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {/* The month the board shows: this month by default, any month on record, or all of them. */}
+          <MonthPicker
+            label="Board month"
+            value={boardMonth}
+            current={currentMonth}
+            options={monthChoices}
+            allowAll
+            onChange={(next) => patch({ month: next === currentMonth ? 'current' : (next as MonthScope) })}
+          />
+
           {/* Worker filter (cross-team, for managers/admins) */}
           {canViewAll && (
             <Select value={filters.worker} onValueChange={(v) => patch({ worker: v })}>
@@ -1075,13 +1152,31 @@ export function TaskBoard({
                 icon={KanbanSquare}
                 title="No active tasks"
                 description={
-                  totalArchivedCount > 0
+                  boardMonth !== 'all'
+                    ? `Nothing is due, open or finished in ${monthLabel(boardMonth)}. Pick another month, or show all months.`
+                    : totalArchivedCount > 0
                     ? 'All tasks are in the archive. Switch to the Archive tab to view or restore them, or create a new task.'
                     : canManageAll
                     ? 'Add a task and assign it to a worker. It shows up on their board straight away.'
                     : 'Add your first task, then drag it across the board as you make progress.'
                 }
-                action={<Button onClick={() => openNew('todo')}><Plus className="mr-2 h-4 w-4" /> New task</Button>}
+                action={
+                  <div className="flex flex-wrap justify-center gap-2">
+                    {boardMonth !== 'all' && (
+                      <Button variant="outline" onClick={() => patch({ month: 'all' })}>
+                        Show all months
+                      </Button>
+                    )}
+                    {finishedCount > 0 && (
+                      <Button variant="outline" onClick={() => setHistoryOpen(true)}>
+                        <History className="mr-2 h-4 w-4" /> View All Completed
+                      </Button>
+                    )}
+                    <Button onClick={() => openNew('todo')}>
+                      <Plus className="mr-2 h-4 w-4" /> New task
+                    </Button>
+                  </div>
+                }
               />
             ) : (
               // Horizontal board: the stages sit side by side in a single row inside
@@ -1262,6 +1357,17 @@ export function TaskBoard({
         confirmLabel="Archive all"
         destructive={false}
         onConfirm={handleArchiveAllCompleted}
+      />
+
+      {/* Every completed task, not only the few the board keeps on screen. */}
+      <CompletedTasksDialog
+        open={historyOpen}
+        onOpenChange={setHistoryOpen}
+        tasks={scopedTasks}
+        workers={workers}
+        clients={clients}
+        canViewAll={canViewAll}
+        initialMonth={boardMonth}
       />
 
       {/* Bulk restore dialog */}

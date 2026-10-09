@@ -13,6 +13,7 @@ import {
   RefreshCw,
   Trash2,
   Undo2,
+  Wallet,
 } from 'lucide-react'
 import { useSearchParams } from 'react-router-dom'
 import { useStore } from '@/lib/store'
@@ -41,7 +42,12 @@ import {
   daysUntil,
   dueLabel,
   earningsByWorkerAndMonth,
+  expenseCategoryTotals,
+  expensesInMonth,
   monthLabel,
+  monthShortLabel,
+  monthlyFinanceSummary,
+  subscriptionBillsIn,
   summarizeFinance,
 } from '@/lib/finance'
 
@@ -148,7 +154,13 @@ export function FinancePage() {
     const t = params.get('tab')
     if (t === 'due' || t === 'subscriptions' || t === 'payroll' || (t === 'expenses' && canFinance)) setTab(t)
   }, [params, canFinance])
-  const [month, setMonth] = useState(currentMonthKey())
+  // The month the summary and every tab below it cover. It follows the calendar,
+  // so a new month starts with a fresh view, until someone picks another month.
+  const [pickedMonth, setPickedMonth] = useState<string | null>(null)
+  const month = pickedMonth ?? currentMonthKey()
+  function pickMonth(value: string) {
+    setPickedMonth(!value || value === currentMonthKey() ? null : value)
+  }
   const [subDialog, setSubDialog] = useState<{ open: boolean; item: FinanceItem | null }>({ open: false, item: null })
   const [payDialog, setPayDialog] = useState<{ open: boolean; item: FinanceItem | null }>({ open: false, item: null })
   const [billDialog, setBillDialog] = useState<{ open: boolean; item: FinanceItem | null }>({ open: false, item: null })
@@ -160,31 +172,18 @@ export function FinancePage() {
   const subscriptions = useMemo(() => financeItems.filter((f) => f.kind === 'subscription'), [financeItems])
   const payroll = useMemo(() => financeItems.filter((f) => f.kind === 'payroll'), [financeItems])
   const bills = useMemo(() => financeItems.filter((f) => f.kind === 'bill'), [financeItems])
-  const expenses = useMemo(() => financeItems.filter((f) => f.kind === 'expense'), [financeItems])
-  const recentExpenses = useMemo(
-    () => [...expenses].sort((a, b) => b.due_date.localeCompare(a.due_date) || b.created_at.localeCompare(a.created_at)),
-    [expenses]
+  // Expenses for the selected month only: a month's list hides the others until
+  // it is picked from the month control.
+  const monthExpenses = useMemo(
+    () =>
+      expensesInMonth(financeItems, month).sort(
+        (a, b) => b.due_date.localeCompare(a.due_date) || b.created_at.localeCompare(a.created_at)
+      ),
+    [financeItems, month]
   )
-  const expenseCategoryRows = useMemo(() => {
-    const totals = new Map<string, { amount: number; count: number }>()
-    for (const expense of expenses) {
-      const category = expense.expense_category || 'Other'
-      const current = totals.get(category) || { amount: 0, count: 0 }
-      current.amount += expense.amount
-      current.count += 1
-      totals.set(category, current)
-    }
-    return [...totals.entries()]
-      .map(([category, total]) => ({ category, ...total }))
-      .sort((a, b) => b.amount - a.amount || a.category.localeCompare(b.category))
-  }, [expenses])
-  const currentFinanceMonth = currentMonthKey()
-  const currentMonthExpenses = useMemo(
-    () => expenses.filter((expense) => expense.due_date.slice(0, 7) === currentFinanceMonth),
-    [expenses, currentFinanceMonth]
-  )
-  const currentMonthExpenseTotal = currentMonthExpenses.reduce((sum, expense) => sum + expense.amount, 0)
-  const allTimeExpenseTotal = expenses.reduce((sum, expense) => sum + expense.amount, 0)
+  const monthExpenseCategories = useMemo(() => expenseCategoryTotals(monthExpenses), [monthExpenses])
+  // The four summary cards and the subscriptions list column: all for `month`.
+  const monthSummary = useMemo(() => monthlyFinanceSummary(financeItems, month), [financeItems, month])
   const dueRows = useMemo(() => buildDueRows(financeItems), [financeItems])
   const summary = useMemo(() => summarizeFinance(financeItems), [financeItems])
 
@@ -313,42 +312,56 @@ export function FinancePage() {
         {addButtons}
       </PageHeader>
 
-      {/* Summary */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
+      {/* Monthly summary: the month control drives the four cards and every tab below. */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Input
+            type="month"
+            value={month}
+            onChange={(e) => pickMonth(e.target.value)}
+            className="w-40"
+            aria-label="Month to summarise"
+          />
+          {pickedMonth !== null && (
+            <Button variant="ghost" size="sm" onClick={() => setPickedMonth(null)}>
+              <Undo2 className="mr-1 h-3.5 w-3.5" /> This month
+            </Button>
+          )}
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Monthly summary for <span className="font-medium text-foreground">{monthLabel(month)}</span>
+        </p>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <StatCard
-          label="Subscriptions / month"
-          value={money(summary.subsMonthly, currency)}
-          sub={`${subscriptions.filter((s) => s.status === 'active').length} active`}
+          label="Subscriptions"
+          value={money(monthSummary.subscriptions, currency)}
+          sub={`${monthSummary.subscriptionCount} billed in ${monthShortLabel(month)}`}
           icon={CreditCard}
           loading={loading}
         />
         <StatCard
-          label="Payroll unpaid"
-          value={money(summary.owedPayroll, currency)}
-          sub={payroll.filter((p) => p.status !== 'paid').length + ' open run' + (payroll.filter((p) => p.status !== 'paid').length === 1 ? '' : 's')}
+          label="Payroll"
+          value={money(monthSummary.payroll, currency)}
+          sub={`${monthSummary.payrollCount} run${monthSummary.payrollCount === 1 ? '' : 's'}${
+            monthSummary.payrollUnpaidCount > 0 ? ` · ${monthSummary.payrollUnpaidCount} unpaid` : ''
+          }`}
           icon={HandCoins}
           loading={loading}
         />
         <StatCard
-          label="Due next 30 days"
-          value={money(summary.next30Amount, currency)}
-          sub={`${summary.next30Count} line${summary.next30Count === 1 ? '' : 's'}`}
-          icon={CalendarClock}
-          loading={loading}
-        />
-        <StatCard
-          label="Overdue"
-          value={money(summary.overdueAmount, currency)}
-          sub={`${summary.overdueCount} line${summary.overdueCount === 1 ? '' : 's'}`}
-          icon={AlertTriangle}
-          loading={loading}
-          className={cn(summary.overdueCount > 0 && 'border-destructive/40')}
-        />
-        <StatCard
-          label="Expenses this month"
-          value={money(currentMonthExpenseTotal, currency)}
-          sub={`${currentMonthExpenses.length} expense${currentMonthExpenses.length === 1 ? '' : 's'}`}
+          label="One-Time Expenses"
+          value={money(monthSummary.expenses, currency)}
+          sub={`${monthSummary.expenseCount} recorded in ${monthShortLabel(month)}`}
           icon={Receipt}
+          loading={loading}
+        />
+        <StatCard
+          label="Total Monthly Expenses"
+          value={money(monthSummary.total, currency)}
+          sub={`Subscriptions, payroll and expenses for ${monthShortLabel(month)}`}
+          icon={Wallet}
           loading={loading}
         />
       </div>
@@ -367,6 +380,15 @@ export function FinancePage() {
 
         {/* ---------------- Due dates ---------------- */}
         <TabsContent value="due" className="mt-4 space-y-4">
+          {/* Due dates cover every open line, whatever month they fall in. */}
+          <p className="text-sm text-muted-foreground">
+            <span className={cn(summary.overdueCount > 0 && 'font-medium text-destructive')}>
+              Overdue: {money(summary.overdueAmount, currency)} across {summary.overdueCount} line{summary.overdueCount === 1 ? '' : 's'}
+            </span>
+            {' · '}
+            Due in the next 30 days: <span className="font-medium text-foreground">{money(summary.next30Amount, currency)}</span> across{' '}
+            {summary.next30Count} line{summary.next30Count === 1 ? '' : 's'}
+          </p>
           {loading ? (
             <div className="space-y-2">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-14" />)}</div>
           ) : dueRows.length === 0 ? (
@@ -462,6 +484,9 @@ export function FinancePage() {
                     <tr>
                       <th className="px-3 py-2 font-medium">Name</th>
                       <th className="px-3 py-2 font-medium">Amount</th>
+                      <th className="px-3 py-2 font-medium" title={`Billed in ${monthLabel(month)}`}>
+                        Billed {monthShortLabel(month)}
+                      </th>
                       <th className="px-3 py-2 font-medium">Next due</th>
                       <th className="px-3 py-2 font-medium">Active</th>
                       {canManage && <th className="px-3 py-2 text-right font-medium">Actions</th>}
@@ -480,6 +505,13 @@ export function FinancePage() {
                         <td className="px-3 py-3 whitespace-nowrap">
                           <span className="font-semibold">{money(item.amount, currency)}</span>
                           <span className="text-xs text-muted-foreground"> / {item.cycle === 'yearly' ? 'yr' : 'mo'}</span>
+                        </td>
+                        <td className="px-3 py-3 whitespace-nowrap">
+                          {subscriptionBillsIn(item, month) ? (
+                            <span className="font-semibold">{money(item.amount, currency)}</span>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">not this month</span>
+                          )}
                         </td>
                         <td className="px-3 py-3">
                           <p className="whitespace-nowrap">{formatDate(item.due_date)}</p>
@@ -519,14 +551,6 @@ export function FinancePage() {
         <TabsContent value="payroll" className="mt-4 space-y-4">
           <Card>
             <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
-              <div className="flex items-center gap-2">
-                <Input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="w-40" aria-label="Payroll month" />
-                {month !== currentMonthKey() && (
-                  <Button variant="ghost" size="sm" onClick={() => setMonth(currentMonthKey())}>
-                    <Undo2 className="mr-1 h-3.5 w-3.5" /> This month
-                  </Button>
-                )}
-              </div>
               <p className="text-sm text-muted-foreground">
                 {monthLabel(month)} — <span className="font-semibold text-foreground">{money(monthPayrollTotal, currency)}</span> payroll
                 {monthPayroll.filter((p) => p.status !== 'paid').length > 0 && (
@@ -696,15 +720,15 @@ export function FinancePage() {
                     <CardTitle className="flex items-center gap-2 text-base">
                       <Tag className="h-4 w-4" /> Expense categories
                     </CardTitle>
-                    <p className="text-xs text-muted-foreground">All recorded one-time spend</p>
+                    <p className="text-xs text-muted-foreground">Spend recorded in {monthLabel(month)}</p>
                   </CardHeader>
                   <CardContent>
-                    {expenseCategoryRows.length === 0 ? (
+                    {monthExpenseCategories.length === 0 ? (
                       <p className="py-5 text-center text-sm text-muted-foreground">Categories will appear here when you log an expense.</p>
                     ) : (
                       <div className="space-y-4">
-                        {expenseCategoryRows.map((row) => {
-                          const share = allTimeExpenseTotal > 0 ? Math.round((row.amount / allTimeExpenseTotal) * 100) : 0
+                        {monthExpenseCategories.map((row) => {
+                          const share = monthSummary.expenses > 0 ? Math.round((row.amount / monthSummary.expenses) * 100) : 0
                           const accent = expenseAccent(row.category)
                           return (
                             <div key={row.category} className="space-y-1.5">
@@ -731,10 +755,10 @@ export function FinancePage() {
                         })}
                         <div className="border-t pt-3 text-sm">
                           <div className="flex items-center justify-between font-semibold">
-                            <span>Total recorded</span>
-                            <span>{money(allTimeExpenseTotal, currency)}</span>
+                            <span>Total for the month</span>
+                            <span>{money(monthSummary.expenses, currency)}</span>
                           </div>
-                          <p className="mt-1 text-xs text-muted-foreground">{expenses.length} expense{expenses.length === 1 ? '' : 's'}</p>
+                          <p className="mt-1 text-xs text-muted-foreground">{monthExpenses.length} expense{monthExpenses.length === 1 ? '' : 's'}</p>
                         </div>
                       </div>
                     )}
@@ -744,16 +768,16 @@ export function FinancePage() {
                 <Card className="lg:col-span-2">
                   <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0">
                     <div className="space-y-1.5">
-                      <CardTitle className="text-base">Recent Expenses</CardTitle>
-                      <p className="text-xs text-muted-foreground">Latest expenses first · {expenses.length} recorded</p>
+                      <CardTitle className="text-base">Expenses</CardTitle>
+                      <p className="text-xs text-muted-foreground">Newest first · {monthExpenses.length} recorded in {monthLabel(month)}</p>
                     </div>
                   </CardHeader>
                   <CardContent className="overflow-x-auto">
-                    {recentExpenses.length === 0 ? (
+                    {monthExpenses.length === 0 ? (
                       <EmptyState
                         icon={Receipt}
-                        title="No expenses yet"
-                        description="Log one-time purchases to see spending by category and client or project."
+                        title={`No expenses in ${monthLabel(month)}`}
+                        description="Log one-time purchases to see spending by category and client or project. Pick another month above to see earlier spend."
                         action={canManage ? <Button size="sm" onClick={() => setExpenseDialog({ open: true, item: null })}><Plus className="mr-1 h-4 w-4" /> Add expense</Button> : undefined}
                       />
                     ) : (
@@ -769,7 +793,7 @@ export function FinancePage() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-border">
-                          {recentExpenses.map((item) => {
+                          {monthExpenses.map((item) => {
                             const client = item.client_id ? clients.find((candidate) => candidate.id === item.client_id) : null
                             return (
                               <tr key={item.id} className="hover:bg-muted/40">

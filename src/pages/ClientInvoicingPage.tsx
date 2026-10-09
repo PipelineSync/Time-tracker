@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import {
+  Briefcase,
   Building2,
   CalendarDays,
   CheckCircle2,
@@ -13,81 +14,122 @@ import {
   ReceiptText,
   Trash2,
 } from 'lucide-react'
+import { toast } from 'sonner'
 import { useStore } from '@/lib/store'
-import type { Invoice, InvoiceStage } from '@/lib/types'
-import { INVOICE_STAGES, InvoiceStageNames, InvoiceStageStyles } from '@/lib/types'
+import type { Invoice, InvoiceBasis, InvoiceStage, InvoiceStatus } from '@/lib/types'
+import {
+  INVOICE_BASES,
+  INVOICE_STAGES,
+  INVOICE_STATUSES,
+  InvoiceStageNames,
+  InvoiceStatusNames,
+  InvoiceStatusStyles,
+} from '@/lib/types'
+import { invoiceStatus } from '@/lib/invoiceCycles'
+import { monthLabel, monthShortLabel, todayISO } from '@/lib/finance'
 import { PageHeader } from '@/components/PageHeader'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Switch } from '@/components/ui/switch'
 import { StatCard } from '@/components/StatCard'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { InvoiceFormDialog } from '@/components/InvoiceFormDialog'
 import { ClientBadge } from '@/components/ClientBadge'
+import { MonthPicker } from '@/components/MonthPicker'
 import {
-  INVOICE_BASIS_FILTERS,
-  InvoiceBasisFilterLabels,
+  InvoiceBasisLabels,
   countInvoicesByBasis,
   filterInvoicesByBasis,
-  readInvoiceBasisFilter,
-  writeInvoiceBasisFilter,
-  type InvoiceBasisFilter,
+  groupInvoicesByStatus,
+  invoiceMonthKey,
+  invoiceMonthOptions,
+  invoicesOnMonthBoard,
+  monthlyInvoiceTotals,
+  readInvoiceBasis,
+  regularChain,
+  writeInvoiceBasis,
 } from '@/lib/invoices'
 import { cn, formatDate, money } from '@/lib/utils'
 
-/** Local 'YYYY-MM-DD' for "today" on the device viewing the board. */
-function todayISO(): string {
-  const d = new Date()
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+const BASIS_ICONS: Record<InvoiceBasis, typeof Building2> = {
+  client: Building2,
+  project: Folder,
+  upwork: Briefcase,
 }
 
+/** What each lane says when it is empty. */
+const LANE_EMPTY: Record<InvoiceStatus, string> = {
+  pending: 'Nothing waiting to be billed',
+  awaiting: 'Nothing out for payment',
+  overdue: 'Nothing overdue. Invoices land here by themselves once a due date passes unpaid.',
+  paid: 'No payments confirmed yet',
+}
+
+/** A date for the card and the totals, in the words the board uses. */
+const shortDate = (iso: string) => formatDate(`${iso}T00:00:00`)
+
 /**
- * The client invoicing board: every invoice sits in one of three fixed
- * columns — Pending, Awaiting, Paid. Dragging a card into a column is the
- * whole workflow and it is free movement: forwards to progress an invoice,
- * backwards to undo a mistake. Each drop patches the invoice's stage through
- * the store — the board "saves automatically" because there is nothing to
- * save: the rows ARE the board. There is no ranking inside a column; cards
- * sort by due date, so the invoice that needs attention first is on top.
+ * The client invoicing board. Every invoice sits in one of four lanes, worked
+ * out from its column and its due date: Pending, Awaiting, Overdue and Paid.
+ * Overdue is automatic — an unpaid invoice lands there once its due date has
+ * passed — so it is the one lane you cannot drop into. Paid is a deliberate
+ * confirmation. Dragging moves an invoice between the other lanes (forwards to
+ * progress it, backwards to undo); each drop saves through the store.
+ *
+ * Three kinds of invoice share the board, switched above it:
+ *  - regular clients: recurring. Each client's card shows when it was last
+ *    billed, when auto-bill next raises a cycle, and the auto-bill switch;
+ *  - project-based: one-off and milestone invoices, raised by hand;
+ *  - Upwork clients: raised by hand.
+ * The switch narrows the lanes to one kind; the monthly totals above always
+ * cover all three. The choice is remembered per device (`src/lib/invoices`).
  *
  * Access mirrors the priority board: admin-only until the admin grants
  * `invoices.view` — a granted worker sees and runs the very same board.
- *
- * The **basis switch** above the board narrows it to one billing target —
- * everything, client based or project based. It is a view of the same rows,
- * not a second board: the columns and totals all follow the choice, and it is
- * remembered per device (`src/lib/invoices`). Raising an invoice while the
- * board is narrowed starts it on that basis.
  */
 export function ClientInvoicingPage() {
   const { invoices, clients, settings, dataLoading, updateInvoice, deleteInvoice } = useStore()
   const currency = settings?.currency || 'USD'
   const today = todayISO()
+  const currentMonth = today.slice(0, 7)
 
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<Invoice | null>(null)
   const [defaultStage, setDefaultStage] = useState<InvoiceStage>('pending')
   const [deleting, setDeleting] = useState<Invoice | null>(null)
 
-  // Which billing target the board shows. Read once from storage, then
-  // written back on every change so the next visit opens on the same board.
-  const [basisFilter, setBasisFilterState] = useState<InvoiceBasisFilter>(readInvoiceBasisFilter)
-  function setBasisFilter(next: InvoiceBasisFilter) {
-    writeInvoiceBasisFilter(next)
-    setBasisFilterState(next)
+  // Which kind of invoice the lanes show. Read once from storage, then written
+  // back on every change so the next visit opens on the same view.
+  const [basis, setBasisState] = useState<InvoiceBasis>(readInvoiceBasis)
+  function setBasis(next: InvoiceBasis) {
+    writeInvoiceBasis(next)
+    setBasisState(next)
   }
-  /** The rows behind the board: everything, or just one billing target. */
-  const visibleInvoices = useMemo(() => filterInvoicesByBasis(invoices, basisFilter), [invoices, basisFilter])
 
-  // Drag state — identical to the priority board: `dragging` is the card
-  // under the pointer, `dropTarget` the column it would land in. The ref
-  // mirrors `dragging` synchronously because dragover fires before React has
+  /**
+   * The month the board shows: 'current' (this month, moving on by itself when
+   * a new month starts) or one 'YYYY-MM' picked from the month chooser.
+   */
+  const [month, setMonth] = useState<string>('current')
+  const boardMonth = month === 'current' ? currentMonth : month
+
+  /** The rows behind the lanes: one kind of invoice, for the month shown. */
+  const visibleInvoices = useMemo(() => filterInvoicesByBasis(invoices, basis), [invoices, basis])
+  const monthInvoices = useMemo(() => invoicesOnMonthBoard(visibleInvoices, boardMonth), [visibleInvoices, boardMonth])
+  const lanes = useMemo(() => groupInvoicesByStatus(monthInvoices, today), [monthInvoices, today])
+  const totals = useMemo(() => monthlyInvoiceTotals(invoices, boardMonth, today), [invoices, boardMonth, today])
+  const monthChoices = useMemo(() => invoiceMonthOptions(invoices, today), [invoices, today])
+
+  // Drag state — the same pattern as the priority board: `dragging` is the card
+  // under the pointer, `dropTarget` the lane it would land in. The ref mirrors
+  // `dragging` synchronously because dragover fires before React has
   // re-rendered, and a background poll landing mid-drag must not make the
   // handlers think nothing is being dragged.
   const draggingRef = useRef<Invoice | null>(null)
   const [dragging, setDragging] = useState<Invoice | null>(null)
-  const [dropTarget, setDropTarget] = useState<InvoiceStage | null>(null)
+  const [dropTarget, setDropTarget] = useState<InvoiceStatus | null>(null)
 
   function startDrag(invoice: Invoice) {
     draggingRef.current = invoice
@@ -100,7 +142,7 @@ export function ClientInvoicingPage() {
     setDropTarget(null)
   }
 
-  // The lane row scrolls sideways when the columns do not all fit; dragging a
+  // The lane row scrolls sideways when the lanes do not all fit; dragging a
   // card to either edge nudges it along so cross-board drops stay possible.
   const rowRef = useRef<HTMLDivElement | null>(null)
   function edgeScroll(e: React.DragEvent<HTMLDivElement>) {
@@ -112,53 +154,66 @@ export function ClientInvoicingPage() {
     else if (e.clientX > box.right - edge) row.scrollLeft += 18
   }
 
-  /** What the board shows: the filtered invoices by column, due soonest on top. */
-  const lanes = useMemo(() => {
-    const result = Object.fromEntries(INVOICE_STAGES.map((s) => [s, [] as Invoice[]])) as Record<InvoiceStage, Invoice[]>
-    for (const inv of visibleInvoices) {
-      if (result[inv.stage]) result[inv.stage].push(inv)
-    }
-    for (const stage of INVOICE_STAGES) {
-      result[stage].sort((a, b) => a.due_date.localeCompare(b.due_date) || a.created_at.localeCompare(b.created_at))
-    }
-    return result
-  }, [visibleInvoices])
+  // A project-based invoice may have no client; a regular or Upwork one always does.
+  const clientOf = (clientId: string | null) => (clientId ? clients.find((c) => c.id === clientId) ?? null : null)
 
-  /** Commit a drop: the invoice moves to `stage` (a no-op if it is already there). */
-  function commitDrop(stage: InvoiceStage) {
+  /** What the invoice is billed to, in words — the client, or the project. */
+  const billedTo = (invoice: Invoice) =>
+    invoice.basis === 'project' ? invoice.project_name || 'project' : clientOf(invoice.client_id)?.name ?? 'client'
+
+  /**
+   * Move an invoice to a column (a no-op when it is already there). If it is
+   * still past its due date after the move, say so: moving it to Awaiting does
+   * not make it on time, and the card stays in Overdue until it is paid.
+   */
+  function moveTo(invoice: Invoice, stage: InvoiceStage) {
+    if (invoice.stage === stage) return
+    void updateInvoice(invoice.id, { stage }).then((saved) => {
+      if (saved && stage !== 'paid' && invoiceStatus(stage, invoice.due_date, today) === 'overdue') {
+        toast.info('Still past its due date, so it stays in Overdue until it is paid.')
+      }
+    })
+  }
+
+  /** Commit a drop onto a lane. Overdue is automatic, so a drop there is refused. */
+  function commitDrop(lane: InvoiceStatus) {
     const invoice = draggingRef.current
     endDrag()
-    if (!invoice || invoice.stage === stage) return
-    void updateInvoice(invoice.id, { stage })
+    if (!invoice) return
+    if (lane === 'overdue') {
+      if (invoiceStatus(invoice.stage, invoice.due_date, today) !== 'overdue') {
+        toast.error('Overdue is automatic. An invoice lands here by itself once its due date passes unpaid.')
+      }
+      return
+    }
+    moveTo(invoice, lane)
   }
 
   /** Keyboard / touch fallback: one column left or right (free movement). */
   function nudge(invoice: Invoice, direction: -1 | 1) {
-    const i = INVOICE_STAGES.indexOf(invoice.stage)
-    const next = INVOICE_STAGES[i + direction]
-    if (!next) return
-    void updateInvoice(invoice.id, { stage: next })
+    const next = INVOICE_STAGES[INVOICE_STAGES.indexOf(invoice.stage) + direction]
+    if (next) moveTo(invoice, next)
   }
 
-  // A project-based invoice has no client — only client-based ones look one up.
-  const clientOf = (clientId: string | null) => (clientId ? clients.find((c) => c.id === clientId) ?? null : null)
-
-  /** Is payment overdue? Unpaid stages only, compared as plain dates. */
-  const isOverdue = (invoice: Invoice) => invoice.stage !== 'paid' && invoice.due_date < today
-
-  /** What the invoice is billed to, in words — the client, or the project. */
-  const billedTo = (invoice: Invoice) =>
-    invoice.basis === 'project'
-      ? invoice.project_name || 'project'
-      : clientOf(invoice.client_id)?.name ?? 'client'
+  /** The auto-bill switch belongs to the client: it covers every regular invoice they have. */
+  function setAutoBill(invoice: Invoice, on: boolean) {
+    const name = billedTo(invoice)
+    void updateInvoice(invoice.id, { auto_bill: on }).then((saved) => {
+      if (saved) {
+        toast.success(
+          on
+            ? `Auto-bill is on for ${name}. Each cycle goes out on its bill-on date.`
+            : `Auto-bill is off for ${name}. Its invoices are raised by hand from now on.`,
+        )
+      }
+    })
+  }
 
   function openNew(stage: InvoiceStage) {
     setEditing(null)
     setDefaultStage(stage)
     setFormOpen(true)
   }
-  /** The basis a new invoice starts on: the one the board is narrowed to. */
-  const newInvoiceBasis = basisFilter === 'all' ? 'client' : basisFilter
 
   function openEdit(invoice: Invoice) {
     setEditing(invoice)
@@ -171,10 +226,23 @@ export function ClientInvoicingPage() {
    * re-created every render and unmount the very node the browser is
    * dragging, killing the drag on the first attempt).
    */
-  function renderCard({ invoice, stage }: { invoice: Invoice; stage: InvoiceStage }) {
-    const style = InvoiceStageStyles[stage]
-    const overdue = isOverdue(invoice)
-    const stageIndex = INVOICE_STAGES.indexOf(stage)
+  function renderCard({ invoice, lane }: { invoice: Invoice; lane: InvoiceStatus }) {
+    const style = InvoiceStatusStyles[lane]
+    const overdue = lane === 'overdue'
+    const stageIndex = INVOICE_STAGES.indexOf(invoice.stage)
+    const name = billedTo(invoice)
+    const regular = invoice.basis === 'client' && invoice.client_id !== null
+    const chain = regular && invoice.client_id ? regularChain(invoices, invoice.client_id) : null
+    const nextAutoBill = chain === null ? null : !chain.autoBill ? 'Off' : chain.nextAutoBill ? shortDate(chain.nextAutoBill) : '—'
+    // Pending cards say why auto-bill will not send them, if it will not.
+    const hint =
+      chain === null || lane !== 'pending'
+        ? null
+        : !chain.autoBill
+          ? 'Auto-bill is off, so bill this one by hand.'
+          : invoice.auto_billed
+            ? 'Auto-bill won’t send this cycle, so bill it by hand.'
+            : null
     return (
       <div
         draggable
@@ -189,12 +257,12 @@ export function ClientInvoicingPage() {
           if (!draggingRef.current) return
           e.preventDefault()
           e.stopPropagation()
-          setDropTarget(stage)
+          if (lane !== 'overdue') setDropTarget(lane)
         }}
         onDrop={(e) => {
           e.preventDefault()
           e.stopPropagation()
-          commitDrop(stage)
+          commitDrop(lane)
         }}
         className={cn(
           'group cursor-grab select-none rounded-lg border border-l-4 bg-card px-2.5 py-2 shadow-sm transition active:cursor-grabbing',
@@ -206,10 +274,9 @@ export function ClientInvoicingPage() {
         <div className="flex items-start gap-2">
           <GripVertical className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/50" aria-hidden />
           <div className="min-w-0 flex-1">
-            {/* The billing target is the card's identity: a project-based
-                invoice bills the named project, a client-based one the
-                client. A project may also name the client it belongs to —
-                shown next to the project, never instead of it. */}
+            {/* The billing target is the card's identity: a regular or Upwork
+                invoice bills the client, a project-based one the named project
+                — which may also name the client it belongs to. */}
             {invoice.basis === 'project' ? (
               <div className="flex flex-wrap items-center gap-1.5">
                 <Badge variant="muted" className="gap-1 text-[11px]">
@@ -221,23 +288,77 @@ export function ClientInvoicingPage() {
                 )}
               </div>
             ) : (
-              <div className="flex items-center gap-1.5">
+              <div className="flex flex-wrap items-center gap-1.5">
                 <ClientBadge client={clientOf(invoice.client_id)} showInactive={false} />
+                {invoice.basis === 'upwork' && (
+                  <Badge variant="outline" className="gap-1 text-[10px]">
+                    <Briefcase className="h-3 w-3" />
+                    Upwork
+                  </Badge>
+                )}
               </div>
             )}
-            {invoice.amount > 0 ? (
-              <p className="mt-1 text-lg font-bold leading-tight tracking-tight">{money(invoice.amount, currency)}</p>
-            ) : (
-              // No amount yet — the invoice went on the board before its
-              // figure was known.
-              <p className="mt-1 text-sm font-medium italic leading-tight text-muted-foreground">No amount yet</p>
-            )}
+
+            <div className="mt-1 flex items-start justify-between gap-2">
+              {invoice.amount > 0 ? (
+                <p className="text-lg font-bold leading-tight tracking-tight">{money(invoice.amount, currency)}</p>
+              ) : (
+                // No amount yet — the invoice went on the board before its
+                // figure was known.
+                <p className="text-sm font-medium italic leading-tight text-muted-foreground">No amount yet</p>
+              )}
+              {chain !== null && (
+                <Badge variant={overdue ? 'destructive' : lane === 'paid' ? 'success' : 'muted'} className="shrink-0 text-[10px]">
+                  {InvoiceStatusNames[lane]}
+                </Badge>
+              )}
+            </div>
             <div className="mt-1.5 flex flex-wrap items-center gap-1">
               <Badge variant={overdue ? 'destructive' : 'muted'} className="gap-1 text-[10px]">
                 <CalendarDays className="h-3 w-3" />
-                {overdue ? `Overdue · ${formatDate(`${invoice.due_date}T00:00:00`)}` : invoice.due_date === today ? 'Due today' : `Due ${formatDate(`${invoice.due_date}T00:00:00`)}`}
+                {overdue
+                  ? `Overdue · ${shortDate(invoice.due_date)}`
+                  : invoice.due_date === today
+                    ? 'Due today'
+                    : `Due ${shortDate(invoice.due_date)}`}
               </Badge>
+              {/* Still owed from an earlier month: it is carried onto this board. */}
+              {lane !== 'paid' && invoiceMonthKey(invoice) < boardMonth && (
+                <Badge variant="outline" className="text-[10px]">
+                  From {monthShortLabel(invoiceMonthKey(invoice))}
+                </Badge>
+              )}
             </div>
+
+            {/* A regular client's recurring billing, the same on every card of
+                that client: when it was last billed, when the next cycle goes
+                out, and the switch that runs it. */}
+            {chain !== null && (
+              <div className="mt-2 grid gap-1 rounded-md border bg-muted/40 px-2 py-1.5 text-[11px]">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-muted-foreground">Last billed</span>
+                  <span className="font-medium">{chain.lastBilled ? shortDate(chain.lastBilled) : 'Not yet'}</span>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-muted-foreground">Next auto-bill</span>
+                  <span className="font-medium">{nextAutoBill}</span>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <Label htmlFor={`auto-bill-${invoice.id}`} className="text-[11px] font-normal text-muted-foreground">
+                    Auto-bill
+                  </Label>
+                  <Switch
+                    id={`auto-bill-${invoice.id}`}
+                    checked={chain.autoBill}
+                    onCheckedChange={(on) => setAutoBill(invoice, on)}
+                    aria-label={`Auto-bill for ${name}`}
+                    className="scale-75"
+                  />
+                </div>
+              </div>
+            )}
+            {hint && <p className="mt-1.5 text-[11px] text-muted-foreground">{hint}</p>}
+
             {invoice.notes && (
               <p className="mt-1.5 line-clamp-2 break-words text-xs text-muted-foreground">{invoice.notes}</p>
             )}
@@ -254,7 +375,7 @@ export function ClientInvoicingPage() {
               size="icon"
               className="h-6 w-6"
               disabled={stageIndex === 0}
-              aria-label={`Move the ${billedTo(invoice)} invoice to the previous column`}
+              aria-label={`Move the ${name} invoice back to ${stageIndex > 0 ? InvoiceStageNames[INVOICE_STAGES[stageIndex - 1]] : 'the first column'}`}
               onClick={() => nudge(invoice, -1)}
             >
               <ChevronLeft className="h-3.5 w-3.5" />
@@ -264,27 +385,21 @@ export function ClientInvoicingPage() {
               size="icon"
               className="h-6 w-6"
               disabled={stageIndex === INVOICE_STAGES.length - 1}
-              aria-label={`Move the ${billedTo(invoice)} invoice to the next column`}
+              aria-label={`Move the ${name} invoice on to ${stageIndex < INVOICE_STAGES.length - 1 ? InvoiceStageNames[INVOICE_STAGES[stageIndex + 1]] : 'the last column'}`}
               onClick={() => nudge(invoice, 1)}
             >
               <ChevronRight className="h-3.5 w-3.5" />
             </Button>
           </div>
           <div className="flex items-center gap-0.5">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6"
-              aria-label={`Edit the ${billedTo(invoice)} invoice`}
-              onClick={() => openEdit(invoice)}
-            >
+            <Button variant="ghost" size="icon" className="h-6 w-6" aria-label={`Edit the ${name} invoice`} onClick={() => openEdit(invoice)}>
               <Pencil className="h-3.5 w-3.5" />
             </Button>
             <Button
               variant="ghost"
               size="icon"
               className="h-6 w-6 text-destructive"
-              aria-label={`Delete the ${billedTo(invoice)} invoice`}
+              aria-label={`Delete the ${name} invoice`}
               onClick={() => setDeleting(invoice)}
             >
               <Trash2 className="h-3.5 w-3.5" />
@@ -295,27 +410,28 @@ export function ClientInvoicingPage() {
     )
   }
 
-  function renderLane(stage: InvoiceStage) {
-    const style = InvoiceStageStyles[stage]
-    const items = lanes[stage]
+  function renderLane(lane: InvoiceStatus) {
+    const style = InvoiceStatusStyles[lane]
+    const items = lanes[lane]
     const total = items.reduce((sum, inv) => sum + inv.amount, 0)
-    const isTarget = dropTarget === stage
+    const automatic = lane === 'overdue'
+    const isTarget = dropTarget === lane && !automatic
     return (
       <div
-        key={stage}
+        key={lane}
         onDragOver={(e) => {
           if (!draggingRef.current) return
           e.preventDefault()
-          if (!isTarget) setDropTarget(stage)
+          if (!automatic && dropTarget !== lane) setDropTarget(lane)
         }}
         onDragLeave={(e) => {
           if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
-            setDropTarget((prev) => (prev === stage ? null : prev))
+            setDropTarget((prev) => (prev === lane ? null : prev))
           }
         }}
         onDrop={(e) => {
           e.preventDefault()
-          commitDrop(stage)
+          commitDrop(lane)
         }}
         className={cn(
           // One lane of the row: its own framed card, sharing the board evenly
@@ -328,27 +444,29 @@ export function ClientInvoicingPage() {
       >
         <div className="mb-3 flex items-center gap-2 px-1 pt-1">
           <span className={cn('h-2.5 w-2.5 shrink-0 rounded-full', style.dot)} aria-hidden />
-          <h2 className="min-w-0 flex-1 truncate text-sm font-semibold">{InvoiceStageNames[stage]}</h2>
+          <h2 className="min-w-0 flex-1 truncate text-sm font-semibold">{InvoiceStatusNames[lane]}</h2>
           <Badge variant="muted" className="text-[10px]">{items.length}</Badge>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6"
-            aria-label={`Add an invoice straight into ${InvoiceStageNames[stage]}`}
-            onClick={() => openNew(stage)}
-          >
-            <Plus className="h-3.5 w-3.5" />
-          </Button>
+          {!automatic && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              aria-label={`Add an invoice straight into ${InvoiceStatusNames[lane]}`}
+              onClick={() => openNew(lane as InvoiceStage)}
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </Button>
+          )}
         </div>
 
         <div className="flex flex-1 flex-col gap-2">
           {items.map((invoice) => (
-            <div key={invoice.id}>{renderCard({ invoice, stage })}</div>
+            <div key={invoice.id}>{renderCard({ invoice, lane })}</div>
           ))}
 
           {items.length === 0 && !isTarget && (
             <div className="flex flex-1 flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed p-4 text-center text-xs text-muted-foreground">
-              {dragging ? 'Drop the invoice here' : emptyLabel}
+              {dragging ? (automatic ? 'Overdue fills in by itself' : 'Drop the invoice here') : LANE_EMPTY[lane]}
             </div>
           )}
 
@@ -363,60 +481,51 @@ export function ClientInvoicingPage() {
     )
   }
 
-  // Header totals — the board at a glance: how much is still to be billed,
-  // how much is out for payment, and how much has come in.
-  const stageTotal = (stage: InvoiceStage) => lanes[stage].reduce((sum, inv) => sum + inv.amount, 0)
-  const overdueCount = visibleInvoices.filter(isOverdue).length
-
   const showSkeleton = dataLoading && invoices.length === 0
-  // Words for the empty board: a narrowed board says what it is narrowed to.
-  const emptyLabel =
-    basisFilter === 'all' ? 'No invoices here yet' : `No ${InvoiceBasisFilterLabels[basisFilter].toLowerCase()} invoices here yet`
+  const monthName = monthLabel(boardMonth)
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Client invoicing"
-        description="Drag invoices between Pending, Awaiting and Paid — forwards to progress them, backwards to undo. Saves automatically."
+        description="Regular clients bill themselves every month while auto-bill is on. Project-based and Upwork invoices are raised by hand. Overdue fills in by itself once a due date passes unpaid, and Paid is confirmed by you."
       >
         <Button onClick={() => openNew('pending')}>
           <Plus className="mr-2 h-4 w-4" /> New invoice
         </Button>
       </PageHeader>
 
-      {/* Which billing target the board shows — client based, project based or
-          both. One switch for the whole page: the columns, the totals above
-          them and the empty lanes all follow it, and the choice is remembered
-          per device. The counts are of the whole board, so the size of the
-          other half stays visible while one is showing. */}
+      {/* Which kind of invoice the lanes show. The counts are of the whole
+          board, so the size of the other kinds stays visible while one shows. */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div
           className="flex w-fit flex-wrap gap-1 rounded-lg border bg-muted/50 p-1"
           role="group"
-          aria-label="Show all invoices, or only client based or project based ones"
+          aria-label="Show regular clients, project-based clients or Upwork clients"
         >
-          {INVOICE_BASIS_FILTERS.map((option) => (
-            <Button
-              key={option}
-              type="button"
-              variant="ghost"
-              size="sm"
-              aria-pressed={basisFilter === option}
-              onClick={() => setBasisFilter(option)}
-              className={cn('gap-1.5 px-3 text-muted-foreground', basisFilter === option && 'bg-background text-foreground shadow-sm')}
-            >
-              {option === 'client' && <Building2 className="h-3.5 w-3.5" />}
-              {option === 'project' && <Folder className="h-3.5 w-3.5" />}
-              {InvoiceBasisFilterLabels[option]}
-              <span className="text-xs text-muted-foreground">{countInvoicesByBasis(invoices, option)}</span>
-            </Button>
-          ))}
+          {INVOICE_BASES.map((option) => {
+            const Icon = BASIS_ICONS[option]
+            return (
+              <Button
+                key={option}
+                type="button"
+                variant="ghost"
+                size="sm"
+                aria-pressed={basis === option}
+                onClick={() => setBasis(option)}
+                className={cn('gap-1.5 px-3 text-muted-foreground', basis === option && 'bg-background text-foreground shadow-sm')}
+              >
+                <Icon className="h-3.5 w-3.5" />
+                {InvoiceBasisLabels[option]}
+                <span className="text-xs text-muted-foreground">{countInvoicesByBasis(invoices, option)}</span>
+              </Button>
+            )
+          })}
         </div>
-        {basisFilter !== 'all' && (
-          <p className="text-xs text-muted-foreground">
-            Showing {visibleInvoices.length} of {invoices.length} invoices — {InvoiceBasisFilterLabels[basisFilter].toLowerCase()} only.
-          </p>
-        )}
+        <p className="text-xs text-muted-foreground">
+          {monthInvoices.length} {InvoiceBasisLabels[basis].toLowerCase()} invoices on {monthName}&rsquo;s board ·{' '}
+          {visibleInvoices.length} in all months.
+        </p>
       </div>
 
       {showSkeleton ? (
@@ -428,50 +537,56 @@ export function ClientInvoicingPage() {
           </div>
           <div className="rounded-2xl border bg-muted/30 p-2 sm:p-3">
             <div className="flex gap-2 overflow-hidden">
-              {INVOICE_STAGES.map((stage) => (
-                <Skeleton key={stage} className="h-56 flex-[1_0_15.5rem] rounded-xl" />
+              {INVOICE_STATUSES.map((lane) => (
+                <Skeleton key={lane} className="h-56 flex-[1_0_15.5rem] rounded-xl" />
               ))}
             </div>
           </div>
         </>
       ) : (
         <>
+          {/* The month's money, across every kind of invoice. Each month starts
+              from zero; what is still owed from earlier months is counted as
+              carried over. */}
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm font-medium">Totals for {monthName}</p>
+            <MonthPicker
+              label="Invoice month"
+              value={boardMonth}
+              current={currentMonth}
+              options={monthChoices}
+              onChange={(next) => setMonth(next === currentMonth ? 'current' : next)}
+            />
+          </div>
           <div className="grid gap-4 sm:grid-cols-3">
             <StatCard
-              label="Pending"
-              value={money(stageTotal('pending'), currency)}
-              sub={`${lanes.pending.length} ${lanes.pending.length === 1 ? 'invoice' : 'invoices'} still to bill`}
-              icon={Clock}
+              label={`Billed in ${monthName}`}
+              value={money(totals.billed, currency)}
+              sub={`${totals.billedCount} ${totals.billedCount === 1 ? 'invoice' : 'invoices'} · Regular ${money(totals.billedBy.client, currency)} · Project-based ${money(totals.billedBy.project, currency)} · Upwork ${money(totals.billedBy.upwork, currency)}`}
+              icon={ReceiptText}
               loading={dataLoading && invoices.length === 0}
             />
             <StatCard
-              label="Awaiting payment"
-              value={money(stageTotal('awaiting'), currency)}
-              sub={
-                overdueCount > 0
-                  ? `${lanes.awaiting.length} ${lanes.awaiting.length === 1 ? 'invoice' : 'invoices'} out · ${overdueCount} overdue`
-                  : `${lanes.awaiting.length} ${lanes.awaiting.length === 1 ? 'invoice' : 'invoices'} out`
-              }
-              icon={ReceiptText}
+              label="Outstanding"
+              value={money(totals.outstanding, currency)}
+              sub={`${totals.outstandingCount} ${totals.outstandingCount === 1 ? 'invoice' : 'invoices'} awaiting payment · ${totals.overdueCount} overdue · ${totals.carriedCount} carried over`}
+              icon={Clock}
+              accent={totals.overdueCount > 0}
             />
             <StatCard
-              label="Paid"
-              value={money(stageTotal('paid'), currency)}
-              sub={`${lanes.paid.length} ${lanes.paid.length === 1 ? 'invoice' : 'invoices'} settled`}
+              label={`Paid in ${monthName}`}
+              value={money(totals.paid, currency)}
+              sub={`${totals.paidCount} ${totals.paidCount === 1 ? 'invoice' : 'invoices'} settled · ${totals.dueSettledCount} of ${totals.dueCount} due this month paid`}
               icon={CheckCircle2}
             />
           </div>
 
-          {/* Horizontal board: the three lanes sit side by side inside one
+          {/* Horizontal board: the four lanes sit side by side inside one
               framed board. When the row is wider than the screen it scrolls
               sideways, one snapped lane at a time. */}
           <div className="rounded-2xl border bg-muted/30 p-2 sm:p-3">
-            <div
-              ref={rowRef}
-              onDragOver={edgeScroll}
-              className="flex snap-x snap-mandatory gap-2 overflow-x-auto"
-            >
-              {INVOICE_STAGES.map((stage) => renderLane(stage))}
+            <div ref={rowRef} onDragOver={edgeScroll} className="flex snap-x snap-mandatory gap-2 overflow-x-auto">
+              {INVOICE_STATUSES.map((lane) => renderLane(lane))}
             </div>
           </div>
         </>
@@ -482,7 +597,7 @@ export function ClientInvoicingPage() {
         onOpenChange={setFormOpen}
         invoice={editing}
         defaultStage={defaultStage}
-        defaultBasis={editing ? undefined : newInvoiceBasis}
+        defaultBasis={editing ? undefined : basis}
       />
 
       <ConfirmDialog

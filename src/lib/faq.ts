@@ -222,7 +222,7 @@ export const FAQ_SECTIONS: Record<FaqAudience, FaqSection[]> = {
           id: 'admin-subscriptions',
           question: 'Where do subscriptions, bills and due dates live?',
           answer:
-            'Finance includes recurring subscriptions, monthly payroll, bills with deadlines, and a One Time Expenses tab for completed purchases. Expenses need a category and can be tagged to one client or a named project; Recent Expenses is ordered newest first. Bills and payroll runs remain on the due-date agenda until marked paid.',
+            'Finance includes recurring subscriptions, monthly payroll, bills with deadlines, and a One Time Expenses tab for completed purchases, tagged to a client or project. The month control shows one month at a time, with expenses in the month they were recorded. Bills and payroll runs stay on the due-date agenda until marked paid.',
         },
         {
           id: 'admin-reports',

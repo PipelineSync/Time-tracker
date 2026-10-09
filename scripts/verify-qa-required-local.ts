@@ -281,18 +281,24 @@ async function main() {
   // Strip the field from every stored task, as a workspace saved by an older
   // version of the app would look.
   let stripped = 0
+  const storedIds = new Set<string>()
   for (const [key, raw] of [...mem.entries()]) {
     let parsed: any
     try { parsed = JSON.parse(raw) } catch { continue }
     if (parsed && Array.isArray(parsed.tasks) && parsed.tasks.length > 0) {
-      for (const task of parsed.tasks) { delete task.qa_required; stripped += 1 }
+      for (const task of parsed.tasks) { delete task.qa_required; storedIds.add(task.id); stripped += 1 }
       mem.set(key, JSON.stringify(parsed))
     }
   }
   assert(stripped > 0, `removed qa_required from ${stripped} stored tasks`)
   await localBackend.signIn('admin', 'admin.pipelinesync')
-  const legacyRows = (await localBackend.listTasks()).data!
+  // A read can also carry a Recurring-shelf cycle into the current month; those
+  // new cards are not legacy rows, but they must load as No all the same.
+  const loaded = (await localBackend.listTasks()).data!
+  const legacyRows = loaded.filter((x) => storedIds.has(x.id))
+  const carriedRows = loaded.filter((x) => !storedIds.has(x.id))
   assert(legacyRows.length === stripped && legacyRows.every((x) => x.qa_required === false), 'every legacy task loads as No')
+  assert(carriedRows.every((x) => x.qa_required === false), 'a cycle carried into this month loads as No as well')
   const reviewCard = legacyRows.find((x) => x.status === 'for_review' && x.worker_id === john.id) ?? legacyRows.find((x) => x.status === 'for_review')!
   const reviewOwner = workers.find((w) => w.id === reviewCard.worker_id)!
   await localBackend.signIn(reviewOwner.email, 'worker123')
