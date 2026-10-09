@@ -24,7 +24,6 @@ import type {
   NoteColor,
   Permission,
   Invoice,
-  InvoiceStage,
   InvoiceBasis,
   FinanceItem,
   FinanceKind,
@@ -42,7 +41,6 @@ import type {
 } from './types'
 import {
   CLIENT_PRIORITY_LANES,
-  INVOICE_STAGES,
   DEFAULT_CLIENT_COLOR,
   DEFAULT_NOTE_COLOR,
   DEFAULT_SLACK_SETTINGS,
@@ -64,6 +62,16 @@ import {
 import type { DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, CreateFinanceItemInput, CreateMeetingInput, CreateNoteInput, CreateInvoiceInput, CreateMonthlyGoalInput, SaveBonusDecisionInput } from './backend'
 import { ACCOUNT_DEACTIVATED_MESSAGE } from './backend'
 import { buildDemoSeed } from './demoSeed'
+import {
+  dateOrNull,
+  isISODate,
+  normalizeInvoiceBasis,
+  normalizeInvoiceStage,
+  planAutoBill,
+  resolveInvoiceWrite,
+  withChainAutoBill,
+  type AutoBillTrigger,
+} from './invoiceCycles'
 import {
   applyDueDateChange,
   applyStageTransition,
@@ -96,6 +104,7 @@ import {
 } from './tickets'
 import { uid, computeEarnings, formatMinutes, formatDate } from './utils'
 import { storage } from './storage'
+import { planRecurringCarryOver, RECURRING_CARRY_OVER_ACTOR } from './taskCarryOver'
 
 export const ADMIN_EMAIL = 'admin'
 export const ADMIN_PASSWORD = 'admin.pipelinesync'
@@ -314,6 +323,62 @@ function sortTasks(rows: Task[]): Task[] {
  * Re-number one worker's column so `movedId` sits at `index` and every other
  * card keeps its relative order with a gap-free position.
  */
+/** The card a carry-over plan creates: a To Do card at the top of its column, due on the cycle date. */
+function carriedOverTaskRow(input: CreateTaskInput, template: Task, stamp: string): Task {
+  return {
+    id: uid(),
+    worker_id: input.worker_id ?? template.worker_id,
+    client_id: input.client_id ?? null,
+    title: input.title,
+    description: input.description ?? null,
+    status: 'todo',
+    priority: input.priority ?? 'medium',
+    start_date: input.start_date ?? stamp.slice(0, 10),
+    due_date: input.due_date ?? null,
+    ...initialStageFields('todo', stamp, RECURRING_CARRY_OVER_ACTOR),
+    qa_required: input.qa_required === true,
+    estimated_hours: input.estimated_hours ?? null,
+    repeats: normalizeRepeats(input.repeats),
+    repeat_until: input.repeat_until ?? null,
+    series_id: input.series_id ?? null,
+    occurrence: normalizeOccurrence(input.occurrence),
+    position: 0,
+    created_by_role: template.created_by_role,
+    completed_at: null,
+    archived_at: null,
+    created_at: stamp,
+    updated_at: stamp,
+  }
+}
+
+/**
+ * Put every Recurring-shelf template's cycle for this month on the board (see
+ * taskCarryOver.ts). Runs on each read, so the first read in a new month does
+ * the work; later reads find nothing to do. Returns true when anything changed.
+ */
+function carryOverRecurringLocal(c: { data: UserData; user: AuthUser }, now: Date): boolean {
+  const plans = planRecurringCarryOver({
+    tasks: c.data.tasks,
+    today: toISODateOnly(now),
+    workdaysOf: (workerId) => c.data.workers.find((w) => w.id === workerId)?.workdays ?? [1, 2, 3, 4, 5],
+    canWrite: (task) => can(c, 'tasks.manage_all') || task.worker_id === c.user.workerId,
+  })
+  if (plans.length === 0) return false
+  const stamp = now.toISOString()
+  for (const plan of plans) {
+    const template = c.data.tasks.find((t) => t.id === plan.templateId)
+    if (!template) continue
+    const card = carriedOverTaskRow(plan.input, template, stamp)
+    c.data.tasks.push(card)
+    reindexTaskColumn(c.data.tasks, card.worker_id, 'todo', card.id, 0)
+    // The anchor moves with the card, as a manual Start would move it.
+    template.due_date = plan.due
+    template.occurrence = plan.occurrence
+    template.updated_at = stamp
+  }
+  return true
+}
+
 function reindexTaskColumn(tasks: Task[], workerId: string, status: TaskStatus, movedId: string, index: number) {
   const column = sortTasks(tasks.filter((t) => t.worker_id === workerId && t.status === status && t.id !== movedId))
   const moved = tasks.find((t) => t.id === movedId)
@@ -443,24 +508,10 @@ function sortNotes(rows: Note[]): Note[] {
 }
 
 // ---- Client invoicing -------------------------------------------------------
-// One board for the whole workspace: every invoice sits in Pending, Awaiting
-// or Paid, and dragging between the columns is the entire workflow. There is
-// no ranking inside a column — cards sort by due date — so a drag is one row
-// patch, not a re-index.
-
-/** Valid board column, defaulting anything unknown/legacy to Pending. */
-function normalizeInvoiceStage(stage: unknown): InvoiceStage {
-  return INVOICE_STAGES.includes(stage as InvoiceStage) ? (stage as InvoiceStage) : 'pending'
-}
-
-/**
- * What the invoice bills: 'client' (the whole client) or 'project' (one named
- * project). Anything unknown — pre-basis invoices, bad values — is client
- * based, which is what every invoice was before the choice existed.
- */
-function normalizeInvoiceBasis(basis: unknown): InvoiceBasis {
-  return basis === 'project' ? 'project' : 'client'
-}
+// One board for the whole workspace. Every invoice sits in Pending, Awaiting
+// or Paid, and Overdue is worked out from the due date. The rules — what a
+// billing does, how regular clients renew — live in lib/invoiceCycles.ts and
+// are shared with the Supabase backend; this file only applies them to storage.
 
 /** The project name, kept only when the invoice actually bills a project. */
 function normalizeInvoiceProjectName(basis: InvoiceBasis, projectName: unknown): string | null {
@@ -468,7 +519,7 @@ function normalizeInvoiceProjectName(basis: InvoiceBasis, projectName: unknown):
   return typeof projectName === 'string' && projectName.trim() ? projectName.trim() : null
 }
 
-/** Local 'YYYY-MM-DD', the invoice due-date format (a date, not an instant). */
+/** Local 'YYYY-MM-DD', the invoice date format (a date, not an instant). */
 function toISODateOnly(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
@@ -478,24 +529,56 @@ function toISODateOnly(d: Date): string {
 function normalizeInvoice(inv: Invoice): Invoice {
   const amount = Number(inv.amount)
   const basis = normalizeInvoiceBasis(inv.basis)
+  const stage = normalizeInvoiceStage(inv.stage)
+  const dueDate = isISODate(inv.due_date) ? inv.due_date : toISODateOnly(new Date())
+  const regular = basis === 'client'
+  // Invoices saved before the billing dates existed: a billed or paid one
+  // gets the day it was last touched, which is the nearest thing on record.
+  const touched = typeof inv.updated_at === 'string' ? dateOrNull(inv.updated_at.slice(0, 10)) : null
   return {
     ...inv,
-    // Both billing targets may carry a client: a client-based invoice always
-    // does, a project-based one may name the client its project belongs to.
-    // A dangling link is dropped when the data is read (see readData).
+    // A dangling client link is dropped when the data is read (see readData).
     client_id: inv.client_id ? String(inv.client_id) : null,
     basis,
     project_name: normalizeInvoiceProjectName(basis, inv.project_name),
     amount: Number.isFinite(amount) ? Math.max(0, amount) : 0,
-    due_date: typeof inv.due_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(inv.due_date) ? inv.due_date : toISODateOnly(new Date()),
-    stage: normalizeInvoiceStage(inv.stage),
+    due_date: dueDate,
+    stage,
     notes: typeof inv.notes === 'string' && inv.notes.trim() ? inv.notes.trim() : null,
+    bill_on: regular ? (dateOrNull(inv.bill_on) ?? dueDate) : null,
+    auto_bill: regular && inv.auto_bill === true,
+    auto_billed: regular && inv.auto_billed === true,
+    billed_on: dateOrNull(inv.billed_on) ?? (stage !== 'pending' ? touched : null),
+    paid_on: dateOrNull(inv.paid_on) ?? (stage === 'paid' ? touched : null),
   }
 }
 
 /** Board order within a column: due soonest on top, then oldest-created. */
 function sortInvoices(rows: Invoice[]): Invoice[] {
   return [...rows].sort((a, b) => a.due_date.localeCompare(b.due_date) || a.created_at.localeCompare(b.created_at))
+}
+
+/**
+ * Run auto-bill over the workspace's invoices, in place, until nothing more is
+ * due for this trigger (see planAutoBill). Returns whether anything changed.
+ */
+function settleInvoices(data: UserData, trigger: AutoBillTrigger, now: Date): boolean {
+  const today = toISODateOnly(now)
+  const stamp = now.toISOString()
+  let changed = false
+  for (let pass = 0; pass < 500; pass++) {
+    const ops = planAutoBill(data.invoices, today, trigger)
+    if (ops.length === 0) break
+    for (const op of ops) {
+      if (op.kind === 'insert') {
+        data.invoices = [...data.invoices, normalizeInvoice({ ...op.row, id: uid(), created_at: stamp, updated_at: stamp })]
+      } else {
+        data.invoices = data.invoices.map((i) => (i.id === op.id ? normalizeInvoice({ ...i, ...op.patch, updated_at: stamp }) : i))
+      }
+    }
+    changed = true
+  }
+  return changed
 }
 
 // ---- IT Support tickets -----------------------------------------------------
@@ -1037,11 +1120,13 @@ function maybeAutoSeed(data: UserData) {
       id: uid(),
     }))
     data.meetings = (seed.meetings ?? []).map((m) => ({ ...m, id: uid() }))
-    data.invoices = (seed.invoices ?? []).map((i) => ({
-      ...i,
-      client_id: i.client_id ? clientMap.get(i.client_id) ?? i.client_id : null,
-      id: uid(),
-    }))
+    data.invoices = (seed.invoices ?? []).map((i) =>
+      normalizeInvoice({
+        ...i,
+        client_id: i.client_id ? clientMap.get(i.client_id) ?? i.client_id : null,
+        id: uid(),
+      }),
+    )
     data.settings = seed.settings
   }
 }
@@ -2374,6 +2459,9 @@ export const localBackend: DataBackend = {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
     if (!can(c, 'invoices.view')) return denied('use the invoicing board')
+    // Auto-bill runs on every read, as it does on the Supabase backend: any
+    // regular cycle that has come due is raised and the next one queued.
+    if (settleInvoices(c.data, { kind: 'sweep' }, new Date())) save(c.data)
     return { data: sortInvoices(c.data.invoices), error: null }
   },
 
@@ -2381,90 +2469,66 @@ export const localBackend: DataBackend = {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
     if (!can(c, 'invoices.view')) return denied('use the invoicing board')
-    // Client and project are different billing targets: a client-based
-    // invoice bills a client from the master list, a project-based one bills
-    // a named project — and may name the client that project belongs to.
-    const basis = normalizeInvoiceBasis(input.basis)
     const client_id = input.client_id || null
     if (client_id && !c.data.clients.some((cl) => cl.id === client_id)) {
       return { data: null, error: 'That client is no longer on the list.' }
     }
-    if (basis === 'client' && !client_id) return { data: null, error: 'Pick a client to bill.' }
-    const project_name = normalizeInvoiceProjectName(basis, input.project_name)
-    if (basis === 'project' && !project_name) return { data: null, error: 'Name the project this invoice bills.' }
-    const amount = Number(input.amount)
-    if (!Number.isFinite(amount) || amount < 0) return { data: null, error: 'Give the invoice a valid amount — or leave it at zero while the figure is unknown.' }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(input.due_date) || Number.isNaN(new Date(`${input.due_date}T00:00:00`).getTime())) {
-      return { data: null, error: 'Pick the date payment is due.' }
+    const now = new Date()
+    const chain = client_id ? c.data.invoices.filter((i) => i.basis === 'client' && i.client_id === client_id) : []
+    const resolved = resolveInvoiceWrite(null, input, {
+      today: toISODateOnly(now),
+      chainAutoBill: chain.length ? chain[0].auto_bill : null,
+      clientHasPendingRegular: chain.some((i) => i.stage === 'pending'),
+    })
+    if (!resolved.ok) return { data: null, error: resolved.error }
+    const stamp = now.toISOString()
+    const created = normalizeInvoice({ ...resolved.row, id: uid(), created_at: stamp, updated_at: stamp })
+    c.data.invoices = [...c.data.invoices, created]
+    if (resolved.mirrorAutoBill !== null && created.client_id && created.basis === 'client') {
+      c.data.invoices = withChainAutoBill(c.data.invoices, created.client_id, resolved.mirrorAutoBill)
     }
-    const now = new Date().toISOString()
-    const invoice: Invoice = {
-      id: uid(),
-      client_id,
-      basis,
-      project_name,
-      amount: Math.round(amount * 100) / 100,
-      due_date: input.due_date,
-      stage: normalizeInvoiceStage(input.stage),
-      notes: input.notes?.trim() || null,
-      created_at: now,
-      updated_at: now,
-    }
-    c.data.invoices.push(invoice)
+    if (resolved.billed) settleInvoices(c.data, { kind: 'billed', id: created.id }, now)
+    settleInvoices(c.data, { kind: 'sweep' }, now)
     save(c.data)
-    return { data: invoice, error: null }
+    return { data: c.data.invoices.find((i) => i.id === created.id) ?? created, error: null }
   },
 
   async updateInvoice(id, patch) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
     if (!can(c, 'invoices.view')) return denied('use the invoicing board')
-    const idx = c.data.invoices.findIndex((i) => i.id === id)
-    if (idx === -1) return { data: null, error: 'Invoice not found.' }
-    const current = c.data.invoices[idx]
-    const basis = patch.basis !== undefined ? normalizeInvoiceBasis(patch.basis) : current.basis
-    // Switching basis re-targets the billing: client based must end up with a
-    // client from the master list, project based keeps the one it has (the
-    // project may belong to it) unless the patch clears it — a drag never
-    // touches either, because it only patches the stage.
+    const current = c.data.invoices.find((i) => i.id === id)
+    if (!current) return { data: null, error: 'Invoice not found.' }
     const client_id = patch.client_id !== undefined ? patch.client_id || null : current.client_id
     if (client_id && !c.data.clients.some((cl) => cl.id === client_id)) {
       return { data: null, error: 'That client is no longer on the list.' }
     }
-    if (basis === 'client' && !client_id) return { data: null, error: 'Pick a client to bill.' }
-    const project_name = patch.project_name !== undefined
-      ? normalizeInvoiceProjectName(basis, patch.project_name)
-      : normalizeInvoiceProjectName(basis, current.project_name)
-    if (basis === 'project' && !project_name) return { data: null, error: 'Name the project this invoice bills.' }
-    const amount = patch.amount !== undefined ? Number(patch.amount) : current.amount
-    if (!Number.isFinite(amount) || amount < 0) return { data: null, error: 'Give the invoice a valid amount — or leave it at zero while the figure is unknown.' }
-    const due_date = patch.due_date !== undefined ? patch.due_date : current.due_date
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(due_date) || Number.isNaN(new Date(`${due_date}T00:00:00`).getTime())) {
-      return { data: null, error: 'Pick the date payment is due.' }
-    }
-    const next: Invoice = normalizeInvoice({
-      ...current,
-      ...patch,
-      client_id,
-      basis,
-      project_name,
-      amount: Math.round(amount * 100) / 100,
-      due_date,
-      stage: normalizeInvoiceStage(patch.stage !== undefined ? patch.stage : current.stage),
-      notes: patch.notes !== undefined ? patch.notes?.trim() || null : current.notes,
-      id: current.id,
-      created_at: current.created_at,
-      updated_at: new Date().toISOString(),
+    const now = new Date()
+    const chain = client_id ? c.data.invoices.filter((i) => i.id !== id && i.basis === 'client' && i.client_id === client_id) : []
+    // A drag patches only the stage, so the same rules cover drags and edits.
+    const resolved = resolveInvoiceWrite(current, patch, {
+      today: toISODateOnly(now),
+      chainAutoBill: chain.length ? chain[0].auto_bill : null,
+      clientHasPendingRegular: false,
     })
-    c.data.invoices[idx] = next
+    if (!resolved.ok) return { data: null, error: resolved.error }
+    const next = normalizeInvoice({ ...resolved.row, id: current.id, created_at: current.created_at, updated_at: now.toISOString() })
+    c.data.invoices = c.data.invoices.map((i) => (i.id === id ? next : i))
+    if (resolved.mirrorAutoBill !== null && next.client_id && next.basis === 'client') {
+      c.data.invoices = withChainAutoBill(c.data.invoices, next.client_id, resolved.mirrorAutoBill)
+    }
+    if (resolved.resumed && next.client_id) settleInvoices(c.data, { kind: 'resumed', clientId: next.client_id }, now)
+    if (resolved.billed) settleInvoices(c.data, { kind: 'billed', id }, now)
+    settleInvoices(c.data, { kind: 'sweep' }, now)
     save(c.data)
-    return { data: next, error: null }
+    return { data: c.data.invoices.find((i) => i.id === id) ?? next, error: null }
   },
 
   async deleteInvoice(id) {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
     if (!can(c, 'invoices.view')) return denied('use the invoicing board')
+    // Deleting never queues anything: a removed cycle stays removed.
     c.data.invoices = c.data.invoices.filter((i) => i.id !== id)
     save(c.data)
     return { data: null, error: null }
@@ -2478,6 +2542,7 @@ export const localBackend: DataBackend = {
   async listTasks() {
     const c = ctx()
     if (!c) return { data: null, error: 'Not signed in.' }
+    if (carryOverRecurringLocal(c, new Date())) save(c.data)
     const rows = !can(c, 'tasks.view_all')
       ? c.data.tasks.filter((t) => t.worker_id === c.user.workerId)
       : c.data.tasks
@@ -3103,11 +3168,13 @@ export const localBackend: DataBackend = {
       })),
       meetings: (seed.meetings ?? []).map((m) => ({ ...m, id: uid() })),
       notes: [],
-      invoices: (seed.invoices ?? []).map((i) => ({
-        ...i,
-        client_id: i.client_id ? seedClientMap.get(i.client_id) ?? i.client_id : null,
-        id: uid(),
-      })),
+      invoices: (seed.invoices ?? []).map((i) =>
+        normalizeInvoice({
+          ...i,
+          client_id: i.client_id ? seedClientMap.get(i.client_id) ?? i.client_id : null,
+          id: uid(),
+        }),
+      ),
       financeItems: seed.financeItems.map((f) => ({
         ...f,
         worker_id: f.worker_id ? idMap.get(f.worker_id) ?? null : null,

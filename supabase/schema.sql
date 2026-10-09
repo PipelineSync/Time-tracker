@@ -1905,45 +1905,80 @@ create trigger trg_meetings_updated before update on public.meetings
 
 -- ============================================================
 -- Client invoicing
--- The workspace's invoice board (client or named project, amount, due date,
--- stage, notes).
+-- The workspace's invoice board. Each invoice bills one of three things: a
+-- regular client (recurring and automatic — its next cycle is raised once the
+-- current one is billed or paid), a named project (one-time or milestone, always
+-- manual), or an Upwork client (manual, counted in the same monthly totals).
+-- Each has an amount, a due date, a board column (pending / awaiting / paid) and
+-- notes. A regular invoice also carries its billing cycle (bill_on) and the
+-- auto-bill switch. Overdue is not stored: the app derives it from due_date.
 -- The admin runs the section; a worker reaches it only with `invoices.view`.
--- The stage is the whole status model — Pending, Awaiting, Paid — and
--- dragging between the columns is free movement. Deleting a client deletes
--- its invoices with it (an invoice has nobody to bill).
--- See supabase/client-invoicing.sql for existing databases.
+-- Deleting a client removes its regular and Upwork invoices (nobody left to
+-- bill) and clears the link on its project-based ones, which keep billing their
+-- project. See supabase/client-invoicing.sql for existing databases.
 -- ============================================================
 
 create table if not exists public.invoices (
   id        uuid primary key default gen_random_uuid(),
   -- Workspace owner (the admin). Set automatically by trg_invoices_user.
   user_id   uuid not null references auth.users (id) on delete cascade,
-  -- The client billed. A client-based invoice bills the client as a whole and
-  -- always has one; a project-based one bills its named project and *may*
-  -- name the client the project belongs to. Deleting a client clears the link
-  -- rather than the row: the app takes the client-based invoices off the
-  -- board (nobody left to bill) and leaves the project-based ones in place.
+  -- The client billed. A regular or Upwork invoice bills the client and always
+  -- has one; a project-based one bills its named project and *may* name the
+  -- client the project belongs to. Deleting a client clears this link; the app
+  -- then removes a regular or Upwork invoice (nobody left to bill) and keeps a
+  -- project-based one (see the note above).
   client_id uuid references public.clients (id) on delete set null,
-  -- What the invoice bills: a client as a whole, or a named project (the
-  -- project name is required then, enforced by the app) — which may in turn
-  -- name the client the project belongs to.
-  basis     text not null default 'client' check (basis in ('client', 'project')),
+  -- What the invoice bills: 'client' (a regular client, billed monthly — the
+  -- stored name predates the others), 'project' (a named project) or 'upwork'
+  -- (an Upwork client).
+  basis     text not null default 'client',
+  -- The project billed — required when basis is 'project' (enforced by the app).
   project_name text,
   -- Zero is allowed: an invoice can go on the board before its figure is known.
   amount    numeric(12, 2) not null default 0 check (amount >= 0),
   -- The day payment is due (a date, not an instant, so timezones cannot move it).
   due_date  date not null,
   -- Board column. Dragging is free movement, so the only constraint is that
-  -- the value is one of the three columns.
+  -- the value is one of the three columns. Overdue is derived, not stored.
   stage     text not null default 'pending' check (stage in ('pending', 'awaiting', 'paid')),
   notes     text,
+  -- Regular clients only: the cycle date this invoice is raised on, and the
+  -- client's auto-bill switch (the same value on every regular invoice of one client).
+  bill_on   date,
+  auto_bill boolean not null default false,
+  -- Regular clients only: auto-bill has already handled this invoice (raised it,
+  -- skipped it, or it was billed by hand while the switch was on), so it is
+  -- never raised again (moving it back to Pending stays a manual call).
+  auto_billed boolean not null default false,
+  -- The day the invoice was billed and the day payment was confirmed. Null until
+  -- it happens; cleared again on a move back to Pending.
+  billed_on date,
+  paid_on   date,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  constraint invoices_basis_valid check (basis in ('client', 'project', 'upwork'))
 );
 
 -- The board's exact query: one workspace, due-soonest order.
 create index if not exists invoices_user_due_idx on public.invoices (user_id, due_date);
 create index if not exists invoices_client_idx on public.invoices (client_id);
+
+-- One pending cycle per regular client per bill-on date. Guarded, so a database
+-- that already holds such a pair keeps working (see client-invoicing.sql).
+do $$
+begin
+  if not exists (
+    select 1 from pg_indexes
+     where schemaname = 'public' and indexname = 'invoices_one_pending_cycle'
+  ) then
+    create unique index invoices_one_pending_cycle
+      on public.invoices (user_id, client_id, bill_on)
+      where basis = 'client' and stage = 'pending';
+  end if;
+exception
+  when unique_violation then
+    raise notice 'invoices_one_pending_cycle was not created: two pending regular invoices of one client share a bill-on date.';
+end $$;
 
 alter table public.invoices enable row level security;
 

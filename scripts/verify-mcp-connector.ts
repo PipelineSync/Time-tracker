@@ -904,6 +904,134 @@ const afterDelete = await rpc({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, {
 assert(afterDelete.status === 401, 'after DELETE the token no longer works')
 
 // ===========================================================================
+// 15a. Invoices — the board's rules, applied to the connector's writes
+//
+// Runs after the session sections, so it signs the admin in again, the way the
+// diagnostics section does. Every earlier token has been rotated or revoked.
+// ===========================================================================
+
+console.log('\n--- Invoices ---')
+
+const invSignIn = await signIn('admin@example.com', 'admin.pipelinesync')
+assert(invSignIn.status === 302, 'sign-in still works before the invoice checks')
+const invCode = new URL(invSignIn.headers.get('location') ?? '').searchParams.get('code') ?? ''
+const invExchange = await exchange(invCode, verifier)
+const INVOICE_TOKEN = ((await invExchange.json()) as { access_token: string }).access_token
+
+const CLIENT_NORTH = 'dddddddd-0000-4000-8000-00000000000d' // a regular client
+const CLIENT_UPWORK = 'dddddddd-0000-4000-8000-00000000000e' // an Upwork client
+const CLIENT_DUE = 'dddddddd-0000-4000-8000-00000000000f' // a regular client whose cycle is due today
+table('clients').push({ id: CLIENT_NORTH, user_id: ADMIN_ID, name: 'Northwind', status: 'active' })
+table('clients').push({ id: CLIENT_UPWORK, user_id: ADMIN_ID, name: 'Lumen Labs', status: 'active' })
+table('clients').push({ id: CLIENT_DUE, user_id: ADMIN_ID, name: 'Due Co', status: 'active' })
+
+const TODAY = new Date().toISOString().slice(0, 10)
+const plusDays = (days: number) => new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10)
+/** One month on, clamped to the month's end. Written separately from the connector's arithmetic on purpose. */
+function plusMonth(iso: string): string {
+  const d = new Date(`${iso}T00:00:00.000Z`)
+  const day = d.getUTCDate()
+  const lastOfNext = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 2, 0)).getUTCDate()
+  d.setUTCDate(1)
+  d.setUTCMonth(d.getUTCMonth() + 1)
+  d.setUTCDate(Math.min(day, lastOfNext))
+  return d.toISOString().slice(0, 10)
+}
+type InvoiceRow = (typeof table extends (...a: never[]) => infer R ? R : never)[number] & Record<string, unknown>
+const invoiceRow = (id: string | undefined) => table('invoices').find((r) => r.id === id) as InvoiceRow | undefined
+const errorText = (r: { raw: unknown }) => ((r.raw as { result?: { content?: { text: string }[] } }).result?.content?.[0]?.text ?? '')
+const newId = (r: { data: unknown }) => (r.data as { invoiceId: string }).invoiceId
+
+// --- creating each kind of invoice ---------------------------------------
+const upwork = await callTool('create_invoice', { basis: 'upwork', client_id: CLIENT_UPWORK, amount: 1200, due_date: plusDays(20), stage: 'awaiting' }, INVOICE_TOKEN)
+assert(!upwork.isError && (upwork.data as { basis: string }).basis === 'upwork', 'an Upwork invoice is created with its own basis')
+const upworkRow = invoiceRow(newId(upwork))
+assert(upworkRow?.billed_on === TODAY && upworkRow?.bill_on === null && upworkRow?.auto_bill === false, 'an Upwork invoice billed on create is stamped, with no cycle or switch')
+assert(table('invoices').filter((r) => r.client_id === CLIENT_UPWORK).length === 1, 'billing an Upwork invoice queues nothing')
+
+const upworkNoClient = await callTool('create_invoice', { basis: 'upwork', due_date: plusDays(5) }, INVOICE_TOKEN)
+assert(upworkNoClient.isError && /client_id/.test(errorText(upworkNoClient)), 'an Upwork invoice needs its client')
+const projectNoName = await callTool('create_invoice', { basis: 'project', due_date: plusDays(5) }, INVOICE_TOKEN)
+assert(projectNoName.isError && /project_name/.test(errorText(projectNoName)), 'a project invoice needs its project name')
+const billOnOnProject = await callTool('create_invoice', { project_name: 'Website', due_date: plusDays(5), bill_on: plusDays(3) }, INVOICE_TOKEN)
+assert(billOnOnProject.isError && /regular client/.test(errorText(billOnOnProject)), 'a bill-on date is only for a regular client invoice')
+const project = await callTool('create_invoice', { project_name: 'Website redesign', amount: 5000, due_date: plusDays(30) }, INVOICE_TOKEN)
+assert(!project.isError && invoiceRow(newId(project))?.basis === 'project' && invoiceRow(newId(project))?.client_id === null, 'a project invoice bills its named project on its own')
+
+// --- the regular chain -----------------------------------------------------
+const billOnA = plusDays(3) // a cycle that has not come round yet
+const regular = await callTool('create_invoice', { client_id: CLIENT_NORTH, amount: 800, due_date: plusDays(13), bill_on: billOnA }, INVOICE_TOKEN)
+assert(!regular.isError && (regular.data as { stage: string }).stage === 'pending', 'a regular invoice starts pending on its bill-on date')
+const regularId = newId(regular)
+assert(invoiceRow(regularId)?.auto_bill === true && invoiceRow(regularId)?.auto_billed === false, 'a new regular invoice takes auto-bill on when its client has none yet')
+const second = await callTool('create_invoice', { client_id: CLIENT_NORTH, amount: 800, due_date: plusDays(40), bill_on: plusDays(33) }, INVOICE_TOKEN)
+assert(second.isError && /already has a regular invoice waiting/.test(errorText(second)), 'a second pending regular invoice for the same client is refused')
+
+const billed = await callTool('update_invoice', { invoice_id: regularId, stage: 'awaiting' }, INVOICE_TOKEN)
+assert(!billed.isError && (billed.data as { stage: string }).stage === 'awaiting', 'billing by hand moves the invoice to awaiting')
+assert(invoiceRow(regularId)?.billed_on === TODAY && invoiceRow(regularId)?.paid_on === null && invoiceRow(regularId)?.auto_billed === true, 'billing stamps the billed date and marks the cycle handled')
+const successors = table('invoices').filter((r) => r.client_id === CLIENT_NORTH && r.stage === 'pending' && r.id !== regularId)
+assert(
+  successors.length === 1 && successors[0].bill_on === plusMonth(billOnA) && successors[0].due_date === plusMonth(plusDays(13)) && successors[0].amount === 800 && successors[0].auto_bill === true && successors[0].notes === null,
+  'billing queues the next monthly cycle: next month, same amount and switch, no notes',
+)
+const successorId = successors[0]?.id as string
+
+const undo = await callTool('update_invoice', { invoice_id: regularId, stage: 'pending' }, INVOICE_TOKEN)
+assert(!undo.isError && (undo.data as { stage: string }).stage === 'pending', 'a billed invoice can be moved back to pending')
+assert(invoiceRow(regularId)?.billed_on === null && invoiceRow(regularId)?.auto_billed === true, 'undo clears the billed date and the cycle stays handled')
+const afterUndo = await callTool('update_invoice', { invoice_id: successorId, amount: 900 }, INVOICE_TOKEN)
+assert(!afterUndo.isError && invoiceRow(regularId)?.stage === 'pending', 'undoing a cycle does not re-raise it')
+
+const paid = await callTool('update_invoice', { invoice_id: successorId, stage: 'paid' }, INVOICE_TOKEN)
+assert(!paid.isError && (paid.data as { status: string }).status === 'paid', 'confirming payment marks the invoice paid')
+assert(invoiceRow(successorId)?.paid_on === TODAY && invoiceRow(successorId)?.billed_on === TODAY, 'paying stamps the paid date and the missing billed date')
+const open = table('invoices').filter((r) => r.client_id === CLIENT_NORTH && r.stage === 'pending' && r.auto_billed === false)
+assert(open.length === 1 && open[0].bill_on === plusMonth(successors[0].bill_on as string), 'paying queues the cycle after it, and only one cycle is open')
+
+const moveRegular = await callTool('update_invoice', { invoice_id: regularId, client_id: CLIENT_UPWORK }, INVOICE_TOKEN)
+assert(moveRegular.isError && /stays with its client/.test(errorText(moveRegular)), 'a regular invoice cannot be moved to another client')
+
+// --- the sweep: a cycle that is due today is raised when it is created ----
+const dueNow = await callTool('create_invoice', { client_id: CLIENT_DUE, amount: 300, due_date: plusDays(10), bill_on: TODAY }, INVOICE_TOKEN)
+assert(!dueNow.isError && (dueNow.data as { stage: string }).stage === 'awaiting', 'a cycle whose bill-on date has come is raised straight away')
+assert(invoiceRow(newId(dueNow))?.billed_on === TODAY && invoiceRow(newId(dueNow))?.auto_billed === true, 'and it is billed on its bill-on date, handled')
+const dueChain = table('invoices').filter((r) => r.client_id === CLIENT_DUE && r.stage === 'pending')
+assert(dueChain.length === 1 && dueChain[0].bill_on === plusMonth(TODAY), 'the cycle after it is queued for next month')
+
+// --- editing ----------------------------------------------------------------
+const edited = await callTool('update_invoice', { invoice_id: newId(project), amount: 5250.456, due_date: plusDays(45), notes: 'Milestone 1' }, INVOICE_TOKEN)
+assert(!edited.isError && (edited.data as { amount: number }).amount === 5250.46, 'amount, due date and notes update together, with the amount rounded to cents')
+const nothing = await callTool('update_invoice', { invoice_id: newId(project) }, INVOICE_TOKEN)
+assert(nothing.isError && /Nothing to change/.test(errorText(nothing)), 'an update with nothing to change is refused')
+const unknown = await callTool('update_invoice', { invoice_id: 'eeeeeeee-0000-4000-8000-000000000000', stage: 'paid' }, INVOICE_TOKEN)
+assert(unknown.isError && /No invoice has that id/.test(errorText(unknown)), 'an unknown invoice is refused')
+const negative = await callTool('update_invoice', { invoice_id: newId(project), amount: -1 }, INVOICE_TOKEN)
+assert(negative.isError && /zero or more/.test(errorText(negative)), 'a negative amount is refused')
+const upworkNoClientEdit = await callTool('update_invoice', { invoice_id: newId(upwork), client_id: null }, INVOICE_TOKEN)
+assert(upworkNoClientEdit.isError && /needs its client/.test(errorText(upworkNoClientEdit)), 'an Upwork invoice cannot lose its client')
+
+// --- the board: status and the filters ----------------------------------------
+const pastDue = await callTool('create_invoice', { project_name: 'Logo', amount: 150, due_date: plusDays(-4) }, INVOICE_TOKEN)
+const pastPaid = await callTool('create_invoice', { project_name: 'Brochure', amount: 90, due_date: plusDays(-9), stage: 'paid' }, INVOICE_TOKEN)
+const board = await callTool('list_invoices', { limit: 200 }, INVOICE_TOKEN) as {
+  data: { rows: { id: string; basis: string; status: string; overdue: boolean; billOn: string | null; autoBill: boolean | null; autoBilled: boolean | null; billedOn: string | null }[] }
+}
+const byId = Object.fromEntries(board.data.rows.map((r) => [r.id, r]))
+assert(byId[newId(pastDue)]?.status === 'overdue' && byId[newId(pastDue)]?.overdue === true, 'an unpaid invoice past its due date is overdue')
+assert(byId[newId(pastPaid)]?.status === 'paid' && byId[newId(pastPaid)]?.overdue === false, 'a paid invoice is never overdue, however late it was')
+assert(byId[regularId]?.basis === 'client' && byId[regularId]?.billOn === billOnA && byId[regularId]?.autoBill === true && byId[regularId]?.autoBilled === true, 'a regular row reports its cycle, switch and handled flag')
+assert(byId[newId(upwork)]?.basis === 'upwork' && byId[newId(upwork)]?.autoBill === null, 'an Upwork row reports its basis and no switch')
+const upworkOnly = await callTool('list_invoices', { basis: 'upwork' }, INVOICE_TOKEN) as { data: { rows: { basis: string }[] } }
+assert(upworkOnly.data.rows.length === 1 && upworkOnly.data.rows.every((r) => r.basis === 'upwork'), 'the basis filter narrows the list to Upwork invoices')
+
+// --- permissions ---------------------------------------------------------------
+const benCreate = await callTool('create_invoice', { project_name: 'Not mine', due_date: plusDays(5) }, BEN_TOKEN)
+assert(benCreate.isError && /invoices\.view/.test(errorText(benCreate)), 'a worker without invoices.view cannot raise an invoice')
+const benUpdate = await callTool('update_invoice', { invoice_id: newId(project), stage: 'paid' }, BEN_TOKEN)
+assert(benUpdate.isError && /invoices\.view/.test(errorText(benUpdate)), 'a worker without invoices.view cannot move an invoice')
+
+// ===========================================================================
 // 15. Deployment diagnostics
 //
 // A connector that "does nothing" on sign-in is almost always environmental:

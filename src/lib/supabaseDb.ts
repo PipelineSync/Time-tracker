@@ -21,7 +21,7 @@ import type {
   NoteColor,
   Permission,
   Invoice,
-  InvoiceBasis,
+  InvoicePatch,
   FinanceItem,
   Ticket,
   TicketReply,
@@ -59,6 +59,17 @@ import {
   normalizeTicketStatus,
   sortTickets,
 } from './tickets'
+import {
+  dateOrNull,
+  normalizeInvoiceBasis,
+  normalizeInvoiceStage,
+  planAutoBill,
+  resolveInvoiceWrite,
+  withChainAutoBill,
+  type AutoBillTrigger,
+} from './invoiceCycles'
+import { toISODate } from './finance'
+import { planRecurringCarryOver, RECURRING_CARRY_OVER_ACTOR } from './taskCarryOver'
 import type { BackendResult, DataBackend, CreateWorkerInput, CreateTaskInput, CreateClientInput, CreateFinanceItemInput, CreateMeetingInput, CreateNoteInput, CreateInvoiceInput, CreateMonthlyGoalInput, SaveBonusDecisionInput } from './backend'
 import { ACCOUNT_DEACTIVATED_MESSAGE } from './backend'
 import {
@@ -838,26 +849,99 @@ function normalizeFinanceRow(f: FinanceItem): FinanceItem {
 
 /**
  * Normalize an invoice row. PostgREST returns `numeric` columns as strings,
- * so the amount is coerced here; the stage check constraint has kept invalid
- * values out of the database, but an unknown one still falls back to Pending
- * so one bad row cannot break the board. The basis falls back to 'client'
- * for rows written before the column existed.
+ * so the amount is coerced here; the database checks keep invalid stages and
+ * bases out, but an unknown value still falls back (Pending, a regular client)
+ * so one bad row cannot break the board. The billing dates and the auto-bill
+ * switch only mean something on a regular client's invoice, so the others
+ * carry none.
  */
 function normalizeInvoiceRow(inv: Invoice): Invoice {
   const amount = Number(inv.amount)
-  const basis: InvoiceBasis = inv.basis === 'project' ? 'project' : 'client'
+  const basis = normalizeInvoiceBasis(inv.basis)
+  const regular = basis === 'client'
+  const dueDate = typeof inv.due_date === 'string' ? inv.due_date.slice(0, 10) : toISODate(new Date())
   return {
     ...inv,
     amount: Number.isFinite(amount) ? Math.max(0, amount) : 0,
     basis,
     // A project-based invoice may carry the client its project belongs to, so
-    // the link is kept on both billing targets (the app decides when to set it).
+    // the link is kept on every billing target (the app decides when to set it).
     client_id: inv.client_id ?? null,
     project_name: basis === 'project' && typeof inv.project_name === 'string' && inv.project_name.trim() ? inv.project_name.trim() : null,
-    due_date: typeof inv.due_date === 'string' ? inv.due_date.slice(0, 10) : new Date().toISOString().slice(0, 10),
-    stage: inv.stage === 'awaiting' || inv.stage === 'paid' ? inv.stage : 'pending',
+    due_date: dueDate,
+    stage: normalizeInvoiceStage(inv.stage),
     notes: typeof inv.notes === 'string' && inv.notes.trim() ? inv.notes.trim() : null,
+    bill_on: regular ? (dateOrNull(inv.bill_on) ?? dueDate) : null,
+    auto_bill: regular && inv.auto_bill === true,
+    auto_billed: regular && inv.auto_billed === true,
+    billed_on: dateOrNull(inv.billed_on),
+    paid_on: dateOrNull(inv.paid_on),
   }
+}
+
+/** The invoice columns, read every time so the rows are complete. */
+const INVOICE_COLUMNS = 'id, client_id, basis, project_name, amount, due_date, stage, notes, bill_on, auto_bill, auto_billed, billed_on, paid_on, created_at, updated_at'
+
+/** The columns added with the auto-bill rules: a database that predates them needs the newest migration. */
+const INVOICE_AUTOBILL_COLUMNS = ['bill_on', 'auto_bill', 'auto_billed', 'billed_on', 'paid_on']
+
+/** The message for a failed invoice write, in words the admin can act on. */
+function invoiceFailure(error: { code?: string; message?: string }): string {
+  if (isMissingTable(error, 'invoices')) {
+    return 'Invoicing is not set up on this database yet. Run supabase/client-invoicing.sql in the Supabase SQL editor.'
+  }
+  const message = error.message ?? ''
+  if (INVOICE_AUTOBILL_COLUMNS.some((column) => isMissingColumn(error, column)) || /invoices_basis_(valid|check)/.test(message)) {
+    return 'Invoicing needs the newest supabase/client-invoicing.sql. Run it in the Supabase SQL editor, then reload.'
+  }
+  return message || 'The invoice could not be saved.'
+}
+
+/** Board order within a column: due soonest on top, then oldest-created. */
+function sortInvoiceRows(rows: Invoice[]): Invoice[] {
+  return [...rows].sort((a, b) => a.due_date.localeCompare(b.due_date) || a.created_at.localeCompare(b.created_at))
+}
+
+/** Every invoice. The automation needs the whole board, not just the row being written. */
+async function readInvoiceRows(sb: SupabaseClient): Promise<{ rows: Invoice[]; error: { code?: string; message?: string } | null }> {
+  const { data, error } = await sb
+    .from('invoices')
+    .select(INVOICE_COLUMNS)
+    .order('due_date', { ascending: true })
+    .order('created_at', { ascending: true })
+  if (error) return { rows: [], error }
+  return { rows: ((data as Invoice[]) ?? []).map(normalizeInvoiceRow), error: null }
+}
+
+/**
+ * Apply auto-bill to the database (see planAutoBill) and return the rows as
+ * they now stand. A failed write stops the pass and is logged: the next read
+ * settles whatever is left, and nothing is queued twice.
+ */
+async function settleInvoicesRemote(sb: SupabaseClient, rows: Invoice[], trigger: AutoBillTrigger): Promise<Invoice[]> {
+  let current = rows
+  for (let pass = 0; pass < 500; pass++) {
+    const ops = planAutoBill(current, toISODate(new Date()), trigger)
+    if (ops.length === 0) break
+    for (const op of ops) {
+      if (op.kind === 'insert') {
+        const { data, error } = await sb.from('invoices').insert(op.row).select(INVOICE_COLUMNS).single()
+        if (error) {
+          console.warn('[work-tracker] auto-bill could not queue the next invoice:', error.message)
+          return sortInvoiceRows(current)
+        }
+        current = [...current, normalizeInvoiceRow(data as Invoice)]
+      } else {
+        const { error } = await sb.from('invoices').update(op.patch).eq('id', op.id)
+        if (error) {
+          console.warn('[work-tracker] auto-bill could not raise an invoice:', error.message)
+          return sortInvoiceRows(current)
+        }
+        current = current.map((r) => (r.id === op.id ? { ...r, ...op.patch } : r))
+      }
+    }
+  }
+  return current
 }
 
 /** Client-side validation mirroring the database constraints, for nice errors. */
@@ -998,6 +1082,193 @@ async function resolveTimer(backend: DataBackend, timerId?: string): Promise<Act
   }
   const { data } = await backend.getActiveTimer()
   return data ?? null
+}
+
+/** Task reads run one after another (see listTasks). */
+let taskReadQueue: Promise<unknown> = Promise.resolve()
+function serializeTaskReads<T>(run: () => Promise<T>): Promise<T> {
+  const next = taskReadQueue.then(run, run)
+  taskReadQueue = next.catch(() => undefined)
+  return next
+}
+
+const MONDAY_TO_FRIDAY = [1, 2, 3, 4, 5]
+
+/**
+ * Put every Recurring-shelf template's cycle for this month on the board: the
+ * server-side twin of the local carry-over (see taskCarryOver.ts). Returns the
+ * cards it created. A failure is logged and skipped, so the board still loads.
+ */
+async function carryOverRecurringRemote(user: AuthUser, rows: Task[]): Promise<Task[]> {
+  const today = toISODate(new Date())
+  const canWrite = (t: Task) => canDo(user, 'tasks.manage_all') || t.worker_id === user.workerId
+  const first = planRecurringCarryOver({ tasks: rows, today, workdaysOf: () => MONDAY_TO_FRIDAY, canWrite })
+  if (first.length === 0) return []
+  // The real working days of the workers (Monday–Friday when unreadable). Read
+  // only when a carry-over is due, so an ordinary refresh costs nothing extra.
+  const sb = client()
+  const { data: workerRows } = await sb.from('workers').select('id, workdays')
+  const workdays = new Map<string, number[]>()
+  for (const w of (workerRows as Array<{ id: string; workdays?: unknown }> | null) ?? []) {
+    if (Array.isArray(w.workdays)) workdays.set(w.id, w.workdays.filter((d): d is number => typeof d === 'number'))
+  }
+  const plans = planRecurringCarryOver({
+    tasks: rows,
+    today,
+    workdaysOf: (id) => workdays.get(id) ?? MONDAY_TO_FRIDAY,
+    canWrite,
+  })
+  const created: Task[] = []
+  for (const plan of plans) {
+    const template = rows.find((t) => t.id === plan.templateId)
+    const res = await insertTaskRow(user, plan.input, {
+      notify: false,
+      createdByRole: template?.created_by_role,
+      actor: RECURRING_CARRY_OVER_ACTOR,
+    })
+    if (res.error || !res.data) {
+      console.warn('[work-tracker] could not carry a recurring task into this month:', res.error)
+      continue
+    }
+    created.push(res.data)
+    const { error } = await sb
+      .from('tasks')
+      .update({ due_date: plan.due, occurrence: plan.occurrence, updated_at: new Date().toISOString() })
+      .eq('id', plan.templateId)
+    if (error) console.warn('[work-tracker] could not advance a recurring task to its new cycle:', error.message)
+    if (template) {
+      template.due_date = plan.due
+      template.occurrence = plan.occurrence
+    }
+  }
+  return created
+}
+
+/**
+ * Insert one task row for `user`: the body of createTask, shared with the
+ * recurring carry-over. `notify` tells the worker when an admin assigns them a
+ * card; a carried-over cycle is not an assignment, so it passes false.
+ */
+async function insertTaskRow(
+  user: AuthUser,
+  input: CreateTaskInput,
+  opts: { notify: boolean; createdByRole?: AuthUser['role']; actor?: string },
+): Promise<BackendResult<Task>> {
+  const title = input.title.trim()
+  if (!title) return fail('Give the task a title.')
+  // Every NEW work task needs a due date (§4).
+  if (!input.due_date) return fail('Every new task needs a due date.')
+  // Without tasks.manage_all a worker can only create tasks for themselves
+  // (RLS enforces it too). A task manager who doesn't pass a worker_id is
+  // treated as creating a task for themselves — same end result as a
+  // regular worker, just without the assignment UI step. This also avoids
+  // a race where the form's `canAssign` view and the backend's permission
+  // check briefly disagree.
+  const workerId = canDo(user, 'tasks.manage_all')
+    ? (input.worker_id || user.workerId || '')
+    : user.workerId
+  if (!workerId) return fail('Choose who the task is for.')
+  const status: TaskStatus = input.status ?? 'todo'
+  // "QA Required?" — a one-off task defaults to Yes (flag it for review); a
+  // repeating task defaults to No (routine work). Anyone may state either
+  // value; the flag never blocks a stage move.
+  const qaValue = resolveNewTaskQaRequired(
+    input.qa_required,
+    isRecurringTask({ repeats: normalizeRepeats(input.repeats), series_id: input.series_id ?? null }),
+  )
+  const now = new Date().toISOString()
+  const actor = opts.actor ?? (await actorLabelFor(user))
+  const sb = client()
+  // Top of the column: the new card takes position 0 and everyone already
+  // there moves down a slot (best-effort re-index once the row is in).
+  const { data: columnRows } = await sb
+    .from('tasks')
+    .select('id')
+    .eq('worker_id', workerId)
+    .eq('status', status)
+  const columnIds = ((columnRows as Array<{ id: string }> | null) ?? []).map((r) => r.id)
+  // Recurrence: send the new columns only when there is something to save,
+  // so plain one-off tasks keep working on a database that has not run
+  // supabase/recurring-tasks.sql yet.
+  const recurring = {
+    ...(input.repeats && input.repeats !== 'none' ? { repeats: normalizeRepeats(input.repeats) } : {}),
+    ...(typeof input.repeat_until === 'string' && input.repeat_until ? { repeat_until: input.repeat_until.slice(0, 10) } : {}),
+    ...(input.series_id ? { series_id: input.series_id } : {}),
+    ...(input.occurrence ? { occurrence: normalizeOccurrence(input.occurrence) } : {}),
+  }
+  const runInsert = (withClient: boolean, withStartDate: boolean, withQa: boolean) => {
+    const payload: Record<string, unknown> = {
+      worker_id: workerId,
+      ...(withClient ? { client_id: input.client_id ?? null } : {}),
+      title,
+      description: input.description?.trim() || null,
+      status,
+      priority: input.priority ?? 'medium',
+      due_date: input.due_date || null,
+      ...initialStageFields(status, now, actor),
+      estimated_hours: normalizeEstimatedHours(input.estimated_hours),
+      ...recurring,
+      position: 0,
+      created_by_role: opts.createdByRole ?? user.role,
+      completed_at: status === 'completed' ? now : null,
+      archived_at: null,
+    }
+    // Every new task gets a date started (§4): the form sends it; anything
+    // that omits it (e.g. an older connector) starts today.
+    if (withStartDate) payload.start_date = normalizeStartDate(input.start_date) ?? now.slice(0, 10)
+    // Always sent explicitly (never left to the column default), so the
+    // stored value is exactly what was validated above.
+    if (withQa) payload.qa_required = qaValue
+    return sb
+      .from('tasks')
+      .insert(payload)
+      .select()
+      .single() as PromiseLike<{ data: Task | null; error: { code?: string; message?: string } | null }>
+  }
+  const { data, error } = await withClientColumn<Task>(async (withClient) => {
+    let withStartDate = true
+    let withQa = true
+    let res = await runInsert(withClient, withStartDate, withQa)
+    // A database that predates a column: save everything else, drop only
+    // that column and retry (each pass drops one, so several stale
+    // migrations degrade together). hydrateTask() back-fills the start date
+    // from created_at on read, and a row without qa_required reads as "No".
+    for (let pass = 0; res.error && pass < 2; pass++) {
+      if (withStartDate && isMissingColumn(res.error, 'start_date')) {
+        console.warn('[work-tracker] tasks.start_date is missing on this database — run supabase/RUN-THIS-task-start-date.sql to enable it.')
+        withStartDate = false
+      } else if (withQa && isMissingColumn(res.error, 'qa_required')) {
+        console.warn(QA_COLUMN_MISSING_WARNING)
+        withQa = false
+      } else {
+        break
+      }
+      res = await runInsert(withClient, withStartDate, withQa)
+    }
+    return res
+  })
+  if (error) {
+    if (isMissingColumn(error, 'estimated_hours') || isMissingColumn(error, 'stage_history') || isMissingColumn(error, 'original_due_date')) {
+      return fail(TEAM_KPI_MIGRATION_MESSAGE)
+    }
+    if (RECURRING_TASK_COLUMNS.some((col) => isMissingColumn(error, col))) {
+      return fail(RECURRING_TASKS_MIGRATION_MESSAGE)
+    }
+    return fail(error.message ?? 'Could not add the task.')
+  }
+  // Best-effort re-index so the column numbering stays gap-free with the
+  // new card on top; a failure only affects ordering.
+  await Promise.all(
+    columnIds.map((rowId, i) => sb.from('tasks').update({ position: i + 1 }).eq('id', rowId))
+  )
+  // Tell the worker when the admin assigns them something.
+  if (opts.notify && user.role === 'admin') {
+    const recipient = await getWorkerUserId(workerId)
+    if (recipient) {
+      await pushNotification(recipient, { entry_id: null, type: 'note', message: `New task assigned: "${title}"` })
+    }
+  }
+  return ok(hydrateTask(data as Task))
 }
 
 export const supabaseBackend: DataBackend = {
@@ -2542,7 +2813,7 @@ export const supabaseBackend: DataBackend = {
     if ((tasksUsing.count ?? 0) > 0 || (entriesUsing.count ?? 0) > 0) {
       return fail('This client is used by existing tasks or time entries. Mark it inactive instead.')
     }
-    // Invoices follow their billing target: a client-based one for this
+    // Invoices follow their billing target: a regular or Upwork invoice for this
     // client has nobody left to bill and comes off the board, a project-based
     // one keeps billing its named project and only loses the link. (Untangled
     // here rather than left to the foreign key, which nulls the link for
@@ -2550,6 +2821,7 @@ export const supabaseBackend: DataBackend = {
     // deletes the client.
     await sb.from('invoices').update({ client_id: null }).eq('client_id', id).eq('basis', 'project')
     await sb.from('invoices').delete().eq('client_id', id).eq('basis', 'client')
+    await sb.from('invoices').delete().eq('client_id', id).eq('basis', 'upwork')
     const { error } = await sb.from('clients').delete().eq('id', id)
     if (error) return fail(error.message)
     return ok(null)
@@ -3004,131 +3276,88 @@ export const supabaseBackend: DataBackend = {
     const me = await requireUser()
     if (me.error) return fail(me.error)
     if (!canDo(me.data!, 'invoices.view')) return denied('use the invoicing board')
-    const { data, error } = await client()
-      .from('invoices')
-      .select('id, client_id, basis, project_name, amount, due_date, stage, notes, created_at, updated_at')
-      .order('due_date', { ascending: true })
-      .order('created_at', { ascending: true })
-    if (error) {
-      if (isMissingTable(error as { code?: string; message?: string }, 'invoices')) {
+    const sb = client()
+    const read = await readInvoiceRows(sb)
+    if (read.error) {
+      if (isMissingTable(read.error, 'invoices')) {
         console.warn('[work-tracker] the invoices table is missing — run supabase/client-invoicing.sql to enable the invoicing section.')
         return ok([] as Invoice[])
       }
-      return fail(error.message)
+      return fail(invoiceFailure(read.error))
     }
-    return ok(((data as Invoice[]) ?? []).map(normalizeInvoiceRow))
+    // Auto-bill runs on every read: any regular cycle that has come due is
+    // raised and the next one queued, whichever device opened the board.
+    const rows = await settleInvoicesRemote(sb, read.rows, { kind: 'sweep' })
+    return ok(sortInvoiceRows(rows))
   },
 
   async createInvoice(input: CreateInvoiceInput) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
     if (!canDo(me.data!, 'invoices.view')) return denied('use the invoicing board')
-    // Client and project are different billing targets: a client-based
-    // invoice bills a client, a project-based one bills a named project — and
-    // may name the client that project belongs to.
-    const basis: InvoiceBasis = input.basis === 'project' ? 'project' : 'client'
-    const client_id = input.client_id || null
-    if (basis === 'client' && !client_id) return fail('Pick a client to bill.')
-    const project_name = basis === 'project' ? input.project_name?.trim() || null : null
-    if (basis === 'project' && !project_name) return fail('Name the project this invoice bills.')
-    const amount = Number(input.amount)
-    if (!Number.isFinite(amount) || amount < 0) return fail('Give the invoice a valid amount — or leave it at zero while the figure is unknown.')
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(input.due_date) || Number.isNaN(new Date(`${input.due_date}T00:00:00`).getTime())) {
-      return fail('Pick the date payment is due.')
+    const sb = client()
+    const read = await readInvoiceRows(sb)
+    if (read.error) return fail(invoiceFailure(read.error))
+    const clientId = input.client_id || null
+    const chain = clientId ? read.rows.filter((i) => i.basis === 'client' && i.client_id === clientId) : []
+    const resolved = resolveInvoiceWrite(null, input, {
+      today: toISODate(new Date()),
+      chainAutoBill: chain.length ? chain[0].auto_bill : null,
+      clientHasPendingRegular: chain.some((i) => i.stage === 'pending'),
+    })
+    if (!resolved.ok) return fail(resolved.error)
+    const { data, error } = await sb.from('invoices').insert(resolved.row).select(INVOICE_COLUMNS).single()
+    if (error) return fail(invoiceFailure(error))
+    const created = normalizeInvoiceRow(data as Invoice)
+    let rows = [...read.rows, created]
+    if (resolved.mirrorAutoBill !== null && created.client_id && created.basis === 'client') {
+      const { error: mirrorError } = await sb.from('invoices').update({ auto_bill: resolved.mirrorAutoBill }).eq('client_id', created.client_id).eq('basis', 'client')
+      if (mirrorError) return fail(invoiceFailure(mirrorError))
+      rows = withChainAutoBill(rows, created.client_id, resolved.mirrorAutoBill)
     }
-    const { data, error } = await client()
-      .from('invoices')
-      .insert({
-        client_id,
-        basis,
-        project_name,
-        amount: Math.round(amount * 100) / 100,
-        due_date: input.due_date,
-        stage: input.stage ?? 'pending',
-        notes: input.notes?.trim() || null,
-      })
-      .select()
-      .single()
-    if (error) {
-      if (isMissingTable(error as { code?: string; message?: string }, 'invoices')) {
-        return fail('Invoicing is not set up on this database yet. Run supabase/client-invoicing.sql in the Supabase SQL editor.')
-      }
-      return fail(error.message)
-    }
-    return ok(normalizeInvoiceRow(data as Invoice))
+    if (resolved.billed) rows = await settleInvoicesRemote(sb, rows, { kind: 'billed', id: created.id })
+    rows = await settleInvoicesRemote(sb, rows, { kind: 'sweep' })
+    return ok(rows.find((i) => i.id === created.id) ?? created)
   },
 
-  async updateInvoice(id, patch) {
+  async updateInvoice(id, patch: InvoicePatch) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
     if (!canDo(me.data!, 'invoices.view')) return denied('use the invoicing board')
-    const update: Record<string, unknown> = {}
-    if (patch.client_id !== undefined) {
-      // null clears the client — only valid on a project-based invoice
-      // (a client-based one must bill somebody), checked below together with
-      // the basis.
-      update.client_id = patch.client_id || null
+    const sb = client()
+    const read = await readInvoiceRows(sb)
+    if (read.error) return fail(invoiceFailure(read.error))
+    const current = read.rows.find((i) => i.id === id)
+    if (!current) return fail('Invoice not found.')
+    const clientId = patch.client_id !== undefined ? patch.client_id || null : current.client_id
+    const chain = clientId ? read.rows.filter((i) => i.id !== id && i.basis === 'client' && i.client_id === clientId) : []
+    // A drag patches only the stage, so the same rules cover drags and edits.
+    const resolved = resolveInvoiceWrite(current, patch, {
+      today: toISODate(new Date()),
+      chainAutoBill: chain.length ? chain[0].auto_bill : null,
+      clientHasPendingRegular: false,
+    })
+    if (!resolved.ok) return fail(resolved.error)
+    const { data, error } = await sb.from('invoices').update(resolved.row).eq('id', id).select(INVOICE_COLUMNS).single()
+    if (error) return fail(invoiceFailure(error))
+    const next = normalizeInvoiceRow(data as Invoice)
+    let rows = read.rows.map((i) => (i.id === id ? next : i))
+    if (resolved.mirrorAutoBill !== null && next.client_id && next.basis === 'client') {
+      const { error: mirrorError } = await sb.from('invoices').update({ auto_bill: resolved.mirrorAutoBill }).eq('client_id', next.client_id).eq('basis', 'client')
+      if (mirrorError) return fail(invoiceFailure(mirrorError))
+      rows = withChainAutoBill(rows, next.client_id, resolved.mirrorAutoBill)
     }
-    if (patch.amount !== undefined) {
-      const amount = Number(patch.amount)
-      if (!Number.isFinite(amount) || amount < 0) return fail('Give the invoice a valid amount — or leave it at zero while the figure is unknown.')
-      update.amount = Math.round(amount * 100) / 100
-    }
-    if (patch.basis !== undefined) {
-      update.basis = patch.basis === 'project' ? 'project' : 'client'
-    }
-    if (patch.project_name !== undefined) {
-      update.project_name = patch.project_name?.trim() || null
-    }
-    // A project-based invoice must name its project, and a client-based one
-    // must bill a client. Either half may arrive in the same patch as the
-    // basis (the edit dialog saves both) or already sit on the row, so
-    // resolve the effective trio — patch first, row second — before allowing
-    // the write. Stage-only patches (dragging a card) skip the extra read
-    // entirely.
-    if (update.basis !== undefined || update.project_name !== undefined || patch.client_id !== undefined) {
-      const { data: currentRow } = await client()
-        .from('invoices')
-        .select('basis, project_name, client_id')
-        .eq('id', id)
-        .single()
-      const row = (currentRow ?? {}) as Pick<Invoice, 'basis' | 'project_name' | 'client_id'>
-      const basis: InvoiceBasis = (update.basis as InvoiceBasis | undefined) ?? (row.basis === 'project' ? 'project' : 'client')
-      const project_name = update.project_name !== undefined
-        ? (update.project_name as string | null)
-        : typeof row.project_name === 'string' && row.project_name.trim() ? row.project_name.trim() : null
-      const client_id = update.client_id !== undefined ? (update.client_id as string | null) : row.client_id ?? null
-      if (basis === 'project' && !project_name) return fail('Name the project this invoice bills.')
-      // A project-based invoice may keep the client its project belongs to; a
-      // client-based one has nobody to bill without one.
-      if (basis === 'client' && !client_id) return fail('Pick a client to bill.')
-      update.client_id = client_id
-    }
-    if (patch.due_date !== undefined) {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(patch.due_date) || Number.isNaN(new Date(`${patch.due_date}T00:00:00`).getTime())) {
-        return fail('Pick the date payment is due.')
-      }
-      update.due_date = patch.due_date
-    }
-    // Free movement: dropping a card into any column — forwards or back — is
-    // just a stage patch. Postgres' check constraint is the last line of
-    // defence against an invalid stage.
-    if (patch.stage !== undefined) update.stage = patch.stage
-    if (patch.notes !== undefined) update.notes = patch.notes?.trim() || null
-    const { data, error } = await client().from('invoices').update(update).eq('id', id).select().single()
-    if (error) {
-      if (isMissingTable(error as { code?: string; message?: string }, 'invoices')) {
-        return fail('Invoicing is not set up on this database yet. Run supabase/client-invoicing.sql in the Supabase SQL editor.')
-      }
-      return fail(error.message)
-    }
-    return ok(normalizeInvoiceRow(data as Invoice))
+    if (resolved.resumed && next.client_id) rows = await settleInvoicesRemote(sb, rows, { kind: 'resumed', clientId: next.client_id })
+    if (resolved.billed) rows = await settleInvoicesRemote(sb, rows, { kind: 'billed', id })
+    rows = await settleInvoicesRemote(sb, rows, { kind: 'sweep' })
+    return ok(rows.find((i) => i.id === id) ?? next)
   },
 
   async deleteInvoice(id) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
     if (!canDo(me.data!, 'invoices.view')) return denied('use the invoicing board')
+    // Deleting never queues anything: a removed cycle stays removed.
     const { error } = await client().from('invoices').delete().eq('id', id)
     if (error) return fail(error.message)
     return ok(null)
@@ -3142,135 +3371,29 @@ export const supabaseBackend: DataBackend = {
   async listTasks() {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    // `select('*')` so a column added by a later migration is picked up
-    // without a redeploy — and a column NOT yet added simply doesn't arrive,
-    // which hydrateTask() fills with its neutral default (unlike naming a
-    // missing column, which makes PostgREST error the whole query).
-    let q = client().from('tasks').select('*')
-    if (!canDo(me.data!, 'tasks.view_all') && me.data!.workerId) q = q.eq('worker_id', me.data!.workerId)
-    const res = await q.order('position', { ascending: true }).order('created_at', { ascending: false })
-    if (res.error) return fail(res.error.message)
-    return ok(((res.data as unknown as Task[]) ?? []).map((t) => hydrateTask({ ...t, client_id: t.client_id ?? null, archived_at: t.archived_at ?? null })))
+    // One read at a time: the recurring carry-over below writes, and a second
+    // read starting meanwhile could write the same cycle again.
+    return serializeTaskReads(async () => {
+      // `select('*')` so a column added by a later migration is picked up
+      // without a redeploy — and a column NOT yet added simply doesn't arrive,
+      // which hydrateTask() fills with its neutral default (unlike naming a
+      // missing column, which makes PostgREST error the whole query).
+      let q = client().from('tasks').select('*')
+      if (!canDo(me.data!, 'tasks.view_all') && me.data!.workerId) q = q.eq('worker_id', me.data!.workerId)
+      const res = await q.order('position', { ascending: true }).order('created_at', { ascending: false })
+      if (res.error) return fail(res.error.message)
+      const rows = ((res.data as unknown as Task[]) ?? []).map((t) =>
+        hydrateTask({ ...t, client_id: t.client_id ?? null, archived_at: t.archived_at ?? null }),
+      )
+      const carried = await carryOverRecurringRemote(me.data!, rows)
+      return ok(carried.length > 0 ? [...rows, ...carried] : rows)
+    })
   },
 
   async createTask(input: CreateTaskInput) {
     const me = await requireUser()
     if (me.error) return fail(me.error)
-    const title = input.title.trim()
-    if (!title) return fail('Give the task a title.')
-    // Every NEW work task needs a due date (§4).
-    if (!input.due_date) return fail('Every new task needs a due date.')
-    // Without tasks.manage_all a worker can only create tasks for themselves
-    // (RLS enforces it too). A task manager who doesn't pass a worker_id is
-    // treated as creating a task for themselves — same end result as a
-    // regular worker, just without the assignment UI step. This also avoids
-    // a race where the form's `canAssign` view and the backend's permission
-    // check briefly disagree.
-    const workerId = canDo(me.data!, 'tasks.manage_all')
-      ? (input.worker_id || me.data!.workerId || '')
-      : me.data!.workerId
-    if (!workerId) return fail('Choose who the task is for.')
-    const status: TaskStatus = input.status ?? 'todo'
-    // "QA Required?" — a one-off task defaults to Yes (flag it for review); a
-    // repeating task defaults to No (routine work). Anyone may state either
-    // value; the flag never blocks a stage move.
-    const qaValue = resolveNewTaskQaRequired(
-      input.qa_required,
-      isRecurringTask({ repeats: normalizeRepeats(input.repeats), series_id: input.series_id ?? null }),
-    )
-    const now = new Date().toISOString()
-    const actor = await actorLabelFor(me.data!)
-    const sb = client()
-    // Top of the column: the new card takes position 0 and everyone already
-    // there moves down a slot (best-effort re-index once the row is in).
-    const { data: columnRows } = await sb
-      .from('tasks')
-      .select('id')
-      .eq('worker_id', workerId)
-      .eq('status', status)
-    const columnIds = ((columnRows as Array<{ id: string }> | null) ?? []).map((r) => r.id)
-    // Recurrence: send the new columns only when there is something to save,
-    // so plain one-off tasks keep working on a database that has not run
-    // supabase/recurring-tasks.sql yet.
-    const recurring = {
-      ...(input.repeats && input.repeats !== 'none' ? { repeats: normalizeRepeats(input.repeats) } : {}),
-      ...(typeof input.repeat_until === 'string' && input.repeat_until ? { repeat_until: input.repeat_until.slice(0, 10) } : {}),
-      ...(input.series_id ? { series_id: input.series_id } : {}),
-      ...(input.occurrence ? { occurrence: normalizeOccurrence(input.occurrence) } : {}),
-    }
-    const runInsert = (withClient: boolean, withStartDate: boolean, withQa: boolean) => {
-      const payload: Record<string, unknown> = {
-        worker_id: workerId,
-        ...(withClient ? { client_id: input.client_id ?? null } : {}),
-        title,
-        description: input.description?.trim() || null,
-        status,
-        priority: input.priority ?? 'medium',
-        due_date: input.due_date || null,
-        ...initialStageFields(status, now, actor),
-        estimated_hours: normalizeEstimatedHours(input.estimated_hours),
-        ...recurring,
-        position: 0,
-        created_by_role: me.data!.role,
-        completed_at: status === 'completed' ? now : null,
-        archived_at: null,
-      }
-      // Every new task gets a date started (§4): the form sends it; anything
-      // that omits it (e.g. an older connector) starts today.
-      if (withStartDate) payload.start_date = normalizeStartDate(input.start_date) ?? now.slice(0, 10)
-      // Always sent explicitly (never left to the column default), so the
-      // stored value is exactly what was validated above.
-      if (withQa) payload.qa_required = qaValue
-      return sb
-        .from('tasks')
-        .insert(payload)
-        .select()
-        .single() as PromiseLike<{ data: Task | null; error: { code?: string; message?: string } | null }>
-    }
-    const { data, error } = await withClientColumn<Task>(async (withClient) => {
-      let withStartDate = true
-      let withQa = true
-      let res = await runInsert(withClient, withStartDate, withQa)
-      // A database that predates a column: save everything else, drop only
-      // that column and retry (each pass drops one, so several stale
-      // migrations degrade together). hydrateTask() back-fills the start date
-      // from created_at on read, and a row without qa_required reads as "No".
-      for (let pass = 0; res.error && pass < 2; pass++) {
-        if (withStartDate && isMissingColumn(res.error, 'start_date')) {
-          console.warn('[work-tracker] tasks.start_date is missing on this database — run supabase/RUN-THIS-task-start-date.sql to enable it.')
-          withStartDate = false
-        } else if (withQa && isMissingColumn(res.error, 'qa_required')) {
-          console.warn(QA_COLUMN_MISSING_WARNING)
-          withQa = false
-        } else {
-          break
-        }
-        res = await runInsert(withClient, withStartDate, withQa)
-      }
-      return res
-    })
-    if (error) {
-      if (isMissingColumn(error, 'estimated_hours') || isMissingColumn(error, 'stage_history') || isMissingColumn(error, 'original_due_date')) {
-        return fail(TEAM_KPI_MIGRATION_MESSAGE)
-      }
-      if (RECURRING_TASK_COLUMNS.some((col) => isMissingColumn(error, col))) {
-        return fail(RECURRING_TASKS_MIGRATION_MESSAGE)
-      }
-      return fail(error.message ?? 'Could not add the task.')
-    }
-    // Best-effort re-index so the column numbering stays gap-free with the
-    // new card on top; a failure only affects ordering.
-    await Promise.all(
-      columnIds.map((rowId, i) => sb.from('tasks').update({ position: i + 1 }).eq('id', rowId))
-    )
-    // Tell the worker when the admin assigns them something.
-    if (me.data!.role === 'admin') {
-      const recipient = await getWorkerUserId(workerId)
-      if (recipient) {
-        await pushNotification(recipient, { entry_id: null, type: 'note', message: `New task assigned: "${title}"` })
-      }
-    }
-    return ok(hydrateTask(data as Task))
+    return insertTaskRow(me.data!, input, { notify: true })
   },
 
   async updateTask(id, patch) {
@@ -3896,7 +4019,7 @@ export const supabaseBackend: DataBackend = {
       await sb.from('meetings').insert({ title: m.title, start_time: m.start_time, notes: m.notes })
     }
     // Sample invoices — best effort, same deal (supabase/client-invoicing.sql).
-    // Project-based invoices bill a named project and carry no client.
+    // Project-based invoices bill a named project; regular and Upwork ones bill a client.
     for (const inv of invoices ?? []) {
       const seededClientId = inv.client_id ? clientIdBySeedId.get(inv.client_id) : null
       if (inv.client_id && !seededClientId) continue
@@ -3908,6 +4031,11 @@ export const supabaseBackend: DataBackend = {
         due_date: inv.due_date,
         stage: inv.stage,
         notes: inv.notes,
+        bill_on: inv.bill_on,
+        auto_bill: inv.auto_bill,
+        auto_billed: inv.auto_billed,
+        billed_on: inv.billed_on,
+        paid_on: inv.paid_on,
       })
     }
     return ok(null)

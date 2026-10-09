@@ -944,10 +944,10 @@ export interface Note {
 // ---- Client invoicing -------------------------------------------------------
 
 /**
- * The fixed columns of the client invoicing board. An invoice sits in exactly
- * one of them and dragging is free — forwards to progress it, backwards to
- * undo a mistake. There is no ranking inside a column: the cards sort by due
- * date, so the invoice that needs attention first is always on top.
+ * The stored columns of the client invoicing board. An invoice is raised as
+ * Pending, moves to Awaiting once it is billed and to Paid once payment is
+ * confirmed. Dragging between them is free movement (undo included). Overdue
+ * is not a stored column — it is derived from the due date (InvoiceStatus).
  */
 export type InvoiceStage = 'pending' | 'awaiting' | 'paid'
 
@@ -960,43 +960,64 @@ export const InvoiceStageNames: Record<InvoiceStage, string> = {
 }
 
 /**
- * What an invoice bills: the client as a whole, or one named project of that
- * client. Projects are free text here (like time entries carried before
- * clients existed) — there is no projects master list to attach to.
+ * What an invoice bills:
+ *  - 'client'  — a regular client. Recurring and automatic: while auto-bill is
+ *                on, each monthly cycle is raised on its bill-on date and the
+ *                next month's invoice is queued behind it.
+ *  - 'project' — a one-time or milestone invoice for a named project, raised by hand.
+ *  - 'upwork'  — an Upwork client's invoice, raised by hand.
+ * Regular clients keep the stored value 'client' from before the other two existed.
  */
-export type InvoiceBasis = 'client' | 'project'
+export type InvoiceBasis = 'client' | 'project' | 'upwork'
 
-export const INVOICE_BASES: InvoiceBasis[] = ['client', 'project']
+export const INVOICE_BASES: InvoiceBasis[] = ['client', 'project', 'upwork']
 
 export const InvoiceBasisNames: Record<InvoiceBasis, string> = {
-  client: 'Client',
-  project: 'Project',
+  client: 'Regular client',
+  project: 'Project-based',
+  upwork: 'Upwork client',
 }
 
-/** Column accent classes — mirrors the priority board's column dots. */
-export const InvoiceStageStyles: Record<InvoiceStage, { dot: string; accent: string; ring: string }> = {
+/**
+ * The lane an invoice shows in: its column, except that an invoice still
+ * unpaid past its due date is Overdue. Derived from the stage and the due
+ * date every time, never stored (see invoiceStatus in lib/invoiceCycles).
+ */
+export type InvoiceStatus = 'pending' | 'awaiting' | 'overdue' | 'paid'
+
+export const INVOICE_STATUSES: InvoiceStatus[] = ['pending', 'awaiting', 'overdue', 'paid']
+
+export const InvoiceStatusNames: Record<InvoiceStatus, string> = {
+  pending: 'Pending',
+  awaiting: 'Awaiting',
+  overdue: 'Overdue',
+  paid: 'Paid',
+}
+
+/** Lane accent classes — mirrors the priority board's column dots. */
+export const InvoiceStatusStyles: Record<InvoiceStatus, { dot: string; accent: string; ring: string }> = {
   pending: { dot: 'bg-sky-500', accent: 'border-l-sky-500', ring: 'ring-sky-500/40' },
   awaiting: { dot: 'bg-amber-500', accent: 'border-l-amber-500', ring: 'ring-amber-500/40' },
+  overdue: { dot: 'bg-red-500', accent: 'border-l-red-500', ring: 'ring-red-500/40' },
   paid: { dot: 'bg-emerald-500', accent: 'border-l-emerald-500', ring: 'ring-emerald-500/40' },
 }
 
 /**
- * One invoice on the client invoicing board: a client, an amount, when
- * payment is due and optional notes. The kanban stage is the whole status
- * model — there is no invoice numbering, line items or tax here (an invoice
- * raised in the team's real invoicing tool is tracked, not reproduced).
- * Deliberately minimal, like Meetings: whoever can open the board can run it.
+ * One invoice on the client invoicing board: what it bills, an amount, when
+ * payment is due and notes. There is no invoice numbering, line items or tax
+ * here (an invoice raised in the team's real invoicing tool is tracked, not
+ * reproduced). Deliberately minimal, like Meetings: whoever can open the board
+ * can run it.
  */
 export interface Invoice {
   id: string
   /**
-   * The client billed. A client-based invoice bills the client as a whole and
-   * always carries one; a project-based invoice bills its named project and
-   * *may* name the client the project belongs to — the link is optional there,
-   * so a project can also be billed on its own (null).
+   * The client billed. A regular and an Upwork invoice bill that client and
+   * always carry one. A project-based invoice bills its named project and
+   * *may* name the client the project belongs to — null when it stands alone.
    */
   client_id: string | null
-  /** Whether the invoice bills a client ('client') or a named project ('project'). */
+  /** What it bills: a regular client, a named project or an Upwork client. */
   basis: InvoiceBasis
   /** The project billed — required when `basis` is 'project', null otherwise. */
   project_name: string | null
@@ -1004,11 +1025,38 @@ export interface Invoice {
   amount: number
   /** 'YYYY-MM-DD' — the day payment is due (a date, not an instant, so timezones cannot move it). */
   due_date: string
+  /** Board column: Pending, Awaiting or Paid. Overdue is derived from `due_date`. */
   stage: InvoiceStage
   notes: string | null
+  /**
+   * Regular clients only: the cycle date this invoice is raised on. While
+   * auto-bill is on it goes out (Awaiting) on this day. Null for other bases.
+   */
+  bill_on: string | null
+  /**
+   * Regular clients only: the auto-bill switch. It is one switch per client —
+   * every regular invoice of a client carries the same value.
+   */
+  auto_bill: boolean
+  /**
+   * Regular clients only: auto-bill has already handled this invoice — it raised
+   * it, skipped it when auto-bill was switched back on, or it was billed by hand
+   * while the switch was on. Auto-bill never raises it again, so moving it back
+   * to Pending stays a manual call.
+   */
+  auto_billed: boolean
+  /** 'YYYY-MM-DD' the invoice was billed (sent). Null until it is billed. */
+  billed_on: string | null
+  /** 'YYYY-MM-DD' payment was confirmed. Null until it is paid. */
+  paid_on: string | null
   created_at: string
   updated_at: string
 }
+
+/** The fields a board edit may change. Ids, timestamps and the billing dates are the backend's to keep. */
+export type InvoicePatch = Partial<
+  Pick<Invoice, 'client_id' | 'basis' | 'project_name' | 'amount' | 'due_date' | 'stage' | 'notes' | 'bill_on' | 'auto_bill'>
+>
 
 // ---- IT Support tickets ----------------------------------------------------
 
@@ -1314,8 +1362,9 @@ export interface Task {
   /**
    * Recurrence: how often this task repeats. 'none' = one-off. A repeating
    * COMPLETED card gets a "Recreate next" action that clones it into a new
-   * Todo card with the due date advanced by one interval — nothing happens
-   * on its own, the series only continues when someone recreates it.
+   * Todo card with the due date advanced by one interval. Within a month
+   * nothing happens on its own; a template on the Recurring shelf does get its
+   * cycle for each new month, as a To Do card (see lib/taskCarryOver.ts).
    */
   repeats: TaskRepeats
   /**

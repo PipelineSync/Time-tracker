@@ -1,6 +1,9 @@
 import type { Task, TaskPriority, TaskStatus } from '@/lib/types'
 import { normalizeTaskStage, TASK_STATUSES } from '@/lib/types'
 import { daysUntilDue, isOverdueDate } from '@/lib/utils'
+import { todayISO } from '@/lib/finance'
+import { isMonthKey, resolveMonthScope, type MonthScope } from '@/lib/monthScope'
+import { taskOnMonthBoard } from '@/lib/taskMonths'
 
 /**
  * A due-date window. ISO date strings (yyyy-mm-dd), both ends inclusive.
@@ -36,6 +39,12 @@ export interface BoardFilters {
   dueRange: DueRange | null
   /** Title-only search. */
   search: string
+  /**
+   * The month the board shows: 'current' (this month, moving on by itself),
+   * 'all' (no month limit), or one 'YYYY-MM'. See taskMonths.ts for what a
+   * month holds. The Dashboard works on every month, so its default is 'all'.
+   */
+  month: MonthScope
 }
 
 export const DEFAULT_BOARD_FILTERS: BoardFilters = {
@@ -47,6 +56,7 @@ export const DEFAULT_BOARD_FILTERS: BoardFilters = {
   dueTodayOnly: false,
   dueRange: null,
   search: '',
+  month: 'all',
 }
 
 export function isAnyBoardFilterActive(f: BoardFilters): boolean {
@@ -71,10 +81,18 @@ export function dateOffsetISO(days = 0): string {
 }
 
 /** Apply the role scope (null = see everyone, otherwise only that worker's
-    tasks) plus every board filter. Archived rows stay in the result — the
-    caller splits active vs archived. */
-export function applyTaskFilters(tasks: Task[], ownWorkerId: string | null, f: BoardFilters): Task[] {
+    tasks) plus every board filter, including the month. Archived rows are
+    never narrowed by the month, so the archive stays complete — the caller
+    splits active vs archived. */
+export function applyTaskFilters(
+  tasks: Task[],
+  ownWorkerId: string | null,
+  f: BoardFilters,
+  today: string = todayISO(),
+): Task[] {
   let rows = ownWorkerId ? tasks.filter((t) => t.worker_id === ownWorkerId) : tasks
+  const month = resolveMonthScope(f.month, today)
+  if (month !== 'all') rows = rows.filter((t) => Boolean(t.archived_at) || taskOnMonthBoard(t, month))
   if (f.worker !== 'all') rows = rows.filter((t) => t.worker_id === f.worker)
   if (f.client !== 'all') rows = rows.filter((t) => t.client_id === f.client)
   if (f.priority !== 'all') rows = rows.filter((t) => t.priority === f.priority)
@@ -107,6 +125,8 @@ export function boardFiltersToParams(f: BoardFilters): URLSearchParams {
   if (f.dueRange?.from) p.set('from', f.dueRange.from)
   if (f.dueRange?.to) p.set('to', f.dueRange.to)
   if (f.search.trim()) p.set('q', f.search.trim())
+  // 'current' is the default, so it is left out of the link.
+  if (f.month !== 'current') p.set('month', f.month)
   return p
 }
 
@@ -129,5 +149,10 @@ export function boardFiltersFromParams(p: URLSearchParams): BoardFilters {
   if (from || to) f.dueRange = { from: from || null, to: to || null }
   const q = p.get('q')
   if (q) f.search = q
+  // No month in the link means this month; 'all' and 'YYYY-MM' are explicit.
+  const month = p.get('month')
+  if (month === 'all') f.month = 'all'
+  else if (month && isMonthKey(month)) f.month = month as MonthScope
+  else f.month = 'current'
   return f
 }

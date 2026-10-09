@@ -42,6 +42,12 @@ export const state = {
   // a tasks insert/update that names `qa_required` fails the way PostgREST does
   // (PGRST204, "Could not find the 'qa_required' column of 'tasks'…").
   tasksQaColumnMissing: false,
+  // The client invoicing table (supabase/client-invoicing.sql). Rows are the
+  // full invoice rows, as PostgREST returns them.
+  invoices: [],
+  // Simulates a database that has not run the newest client-invoicing.sql: a
+  // read or write that names an auto-bill column fails the way PostgREST does.
+  invoiceAutoBillColumnsMissing: false,
 }
 
 export function resetState() {
@@ -65,6 +71,128 @@ export function resetState() {
   state.workersColorColumnMissing = false
   state.workersKpiRoleColumnMissing = false
   state.tasksQaColumnMissing = false
+  state.invoices = []
+  state.invoiceAutoBillColumnsMissing = false
+}
+
+/** The invoices table: selects, inserts, updates and deletes with chained filters, as supabase-js builds them. */
+const INVOICE_AUTOBILL_COLUMNS = ['bill_on', 'auto_bill', 'auto_billed', 'billed_on', 'paid_on']
+
+function invoiceBuilder() {
+  let op = 'select'
+  let payload = null
+  let projection = '*'
+  const filters = []
+  const matched = () => state.invoices.filter((r) => filters.every(([col, val]) => r[col] === val))
+  const project = (row) => {
+    if (!projection || projection === '*') return { ...row }
+    const want = new Set(projection.split(',').map((c) => c.trim()))
+    return Object.fromEntries(Object.entries(row).filter(([k]) => want.has(k)))
+  }
+  const missingColumn = () => {
+    if (!state.invoiceAutoBillColumnsMissing) return null
+    const named = [...(op === 'select' ? [projection] : [])].join(',')
+    const payloadKeys = payload && !Array.isArray(payload) ? Object.keys(payload) : []
+    const hit = INVOICE_AUTOBILL_COLUMNS.find((c) => named.includes(c) || payloadKeys.includes(c))
+    return hit ? { code: '42703', message: `column invoices.${hit} does not exist` } : null
+  }
+  // Runs the operation once. Returns { data, error }.
+  const execute = () => {
+    const missing = missingColumn()
+    if (missing) return { data: null, error: missing }
+    if (op === 'select') return { data: matched().map(project), error: null }
+    if (op === 'delete') {
+      const gone = new Set(matched())
+      state.invoices = state.invoices.filter((r) => !gone.has(r))
+      return { data: null, error: null }
+    }
+    if (op === 'update') {
+      const rows = matched()
+      if (rows.length === 0) return { data: null, error: { code: 'PGRST116', message: 'no rows matched' } }
+      const now = new Date().toISOString()
+      const out = rows.map((r) => {
+        Object.assign(r, payload, { updated_at: now })
+        return project(r)
+      })
+      return { data: out, error: null }
+    }
+    // insert
+    const list = Array.isArray(payload) ? payload : [payload]
+    // The unique index on one pending regular cycle per client and day: a
+    // second one is refused the way Postgres refuses it, before anything is written.
+    for (const row of list) {
+      const clash = state.invoices.some(
+        (r) => r.basis === 'client' && row.basis === 'client' && r.stage === 'pending' && row.stage === 'pending' &&
+          r.client_id === row.client_id && row.bill_on != null && r.bill_on === row.bill_on,
+      )
+      if (clash) {
+        return { data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint "invoices_one_pending_cycle"' } }
+      }
+    }
+    const inserted = list.map((row) => {
+      const now = new Date().toISOString()
+      const full = {
+        id: row.id || `inv-${state.invoices.length + 1}-${Math.random().toString(36).slice(2, 8)}`,
+        user_id: state.authUser ? state.authUser.id : null,
+        created_at: now,
+        updated_at: now,
+        ...row,
+      }
+      state.invoices.push(full)
+      return project(full)
+    })
+    return { data: inserted, error: null }
+  }
+  const api = {
+    select(columns) {
+      projection = columns ?? '*'
+      return api
+    },
+    eq(col, val) {
+      filters.push([col, val])
+      return api
+    },
+    order() {
+      return api
+    },
+    limit() {
+      return api
+    },
+    insert(value) {
+      op = 'insert'
+      payload = value
+      return api
+    },
+    update(value) {
+      op = 'update'
+      payload = value
+      return api
+    },
+    delete() {
+      op = 'delete'
+      return api
+    },
+    async single() {
+      const { data, error } = execute()
+      if (error) return { data: null, error }
+      const first = Array.isArray(data) ? data[0] : data
+      return first ? { data: first, error: null } : { data: null, error: { message: 'no rows returned by single()' } }
+    },
+    async maybeSingle() {
+      const { data, error } = execute()
+      if (error) return { data: null, error }
+      const first = Array.isArray(data) ? data[0] : data
+      return { data: first ?? null, error: null }
+    },
+    then(resolve, reject) {
+      try {
+        return Promise.resolve(execute()).then(resolve, reject)
+      } catch (e) {
+        return Promise.resolve({ data: null, error: e }).then(resolve, reject)
+      }
+    },
+  }
+  return api
 }
 
 function matches(row, filters) {
@@ -99,6 +227,7 @@ function clientColorViolation(payload) {
 }
 
 function from(table) {
+  if (table === 'invoices') return invoiceBuilder()
   const filters = []
   // The last `select(columns)` call — used to project the returned rows the
   // way real PostgREST does. The bug we're guarding against only shows up
@@ -209,6 +338,8 @@ function from(table) {
               if (table === 'profiles') state.deletedProfiles.push(val)
               if (table === 'workers') state.workers = state.workers.filter((r) => r[col] !== val)
               if (table === 'profiles') state.profiles = state.profiles.filter((r) => r[col] !== val)
+              // Any other table: the matching rows go, as PostgREST deletes them.
+              else if (Array.isArray(state[table])) state[table] = state[table].filter((r) => r[col] !== val)
               resolve({ data: null, error: null })
             } catch (e) {
               reject(e)

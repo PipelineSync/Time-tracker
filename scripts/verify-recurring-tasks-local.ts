@@ -195,29 +195,41 @@ async function main() {
   }
 
   // ---- 6. the Recurring shelf: start / return flow (local backend) ----
-  // John works Mon–Fri in the seed. 2026-09-28 is a Monday.
+  // John works Mon–Fri in the seed. The daily template is dated inside the
+  // current month: a template dated in an earlier month would have its cycle
+  // carried onto the board by the first read (see taskCarryOver.ts), which is
+  // correct, but would move the anchor this section is checking.
+  const dayAfter = (iso: string, n: number) => {
+    const d = new Date(`${iso}T12:00:00`)
+    d.setDate(d.getDate() + n)
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  }
+  const now0 = new Date()
+  let monday = `${now0.getFullYear()}-${String(now0.getMonth() + 1).padStart(2, '0')}-01`
+  while (new Date(`${monday}T12:00:00`).getDay() !== 1) monday = dayAfter(monday, 1)
+  const anchor = dayAfter(monday, 7) // a Monday in the second week: +1 and +2 are workdays
   const shelf = (await localBackend.createTask({
     worker_id: john.id, client_id: client.id, title: 'RS shelf daily', status: 'recurring',
-    due_date: '2026-09-28', priority: 'medium', estimated_hours: 2, repeats: 'daily',
+    due_date: anchor, priority: 'medium', estimated_hours: 2, repeats: 'daily',
   })).data!
   assert(shelf.status === 'recurring', 'a task can be created straight onto the Recurring shelf')
 
   const started = (await localBackend.startRecurringOccurrence(shelf.id)).data!
   assert(started.id !== shelf.id, 'starting creates a NEW occurrence card — the template is not moved')
   assert(started.status === 'todo', 'the occurrence lands in To Do')
-  assert(started.due_date === '2026-09-29', 'the occurrence is due the next interval (daily → +1 day)')
+  assert(started.due_date === dayAfter(anchor, 1), 'the occurrence is due the next interval (daily → +1 day)')
   assert(started.occurrence === 1 && started.series_id === shelf.id, 'the occurrence is #1, anchored on the template as its series')
   assert(started.position === 0, 'the occurrence lands at the top of To Do')
   assert(started.repeats === 'daily' && started.title === shelf.title && started.estimated_hours === 2,
     'the occurrence keeps the interval and the template\'s fields')
   const shelfAfter = (await localBackend.listTasks()).data!.find((t) => t.id === shelf.id)!
   assert(shelfAfter.status === 'recurring', 'the template STAYS on the Recurring shelf')
-  assert(shelfAfter.due_date === '2026-09-29' && shelfAfter.occurrence === 1, 'the template\'s anchor advances one interval (#1)')
+  assert(shelfAfter.due_date === dayAfter(anchor, 1) && shelfAfter.occurrence === 1, 'the template\'s anchor advances one interval (#1)')
 
   const started2 = (await localBackend.startRecurringOccurrence(shelf.id)).data!
   const shelfAfter2 = (await localBackend.listTasks()).data!.find((t) => t.id === shelf.id)!
-  assert(started2.due_date === '2026-09-30' && started2.occurrence === 2, 'the next start schedules the following cycle (#2)')
-  assert(shelfAfter2.due_date === '2026-09-30', 'the anchor keeps advancing with each start')
+  assert(started2.due_date === dayAfter(anchor, 2) && started2.occurrence === 2, 'the next start schedules the following cycle (#2)')
+  assert(shelfAfter2.due_date === dayAfter(anchor, 2), 'the anchor keeps advancing with each start')
 
   // An occurrence can still be re-shelved as the template (the reset path).
   const reShelved = (await localBackend.moveTask(started.id, 'recurring', 0)).data!

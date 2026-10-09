@@ -192,9 +192,23 @@ Prompts that work well:
 - *"Ana has 7 unsettled hours — settle her time."*
 - *"Create a high-priority task for Ben to fix the login page, due Friday."*
 - *"Which invoices are overdue?"*
+- *"Which Upwork invoices are still unpaid?"*
 
 Money comes back in your workspace currency; call `get_settings` first if you
 are unsure what that is.
+
+Invoices follow the same rules as the board, so Claude's changes match what
+you see in the app. A **regular client** invoice is recurring: when it is billed
+or paid while its client's auto-bill is on, the next monthly cycle is queued, and
+`create_invoice` refuses a second pending regular invoice for a client that already
+has one; the rule is checked when an invoice is created, not when an existing one is
+edited. `create_invoice` takes `basis: "upwork"` for an Upwork client and
+`basis: "project"` for a named project (one-time or milestone). Moving an invoice
+to awaiting or paid stamps the billed or paid date, and moving it back to pending
+clears them. `list_invoices` reports an unpaid invoice past its due date as
+`status: "overdue"`, and it only reads: a due cycle is raised when the app next
+reads the board, or when Claude changes that client's invoices. The auto-bill
+switch itself is set in the app, not by Claude.
 
 ---
 
@@ -461,6 +475,7 @@ curl -s https://your-site.netlify.app/mcp-status
 | `netlify/functions/lib/mcp/session.ts` | Bearer token → caller with a user-scoped Supabase client |
 | `netlify/functions/lib/mcp/oauth-store.ts` | OAuth table access (service role only) |
 | `netlify/functions/lib/mcp/tools/*` | The tools themselves |
+| `netlify/functions/lib/mcp/invoice-rules.ts` | The invoice rules the connector applies to a write: a hand-kept copy of the app's `invoiceCycles.ts` rules |
 | `supabase/mcp-oauth.sql` | OAuth tables, RLS with no policies |
 | `scripts/verify-mcp-connector.ts` | End-to-end verification harness |
 
