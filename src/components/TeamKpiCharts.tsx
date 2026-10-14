@@ -22,16 +22,16 @@ function shortName(name: string): string {
 
 function scoreColor(score: number | null): string {
   if (score === null) return '#94a3b8'
-  if (score >= 90) return '#10b981'
-  if (score >= 75) return '#f59e0b'
-  return '#ef4444'
+  if (score >= 90) return '#34d399'
+  if (score >= 75) return '#fbbf24'
+  return '#f87171'
 }
 
 const WORKLOAD_HEX: Record<string, string> = {
-  available: '#10b981',
-  normal: '#3b82f6',
-  high: '#f59e0b',
-  overloaded: '#ef4444',
+  available: '#34d399',
+  normal: '#5b8cff',
+  high: '#fbbf24',
+  overloaded: '#f87171',
 }
 
 /** Bar chart: KPI Score by Employee (§7 left chart). */
@@ -103,7 +103,7 @@ export function WorkloadByEmployeeChart({ employees }: { employees: EmployeeKpi[
                 {data.map((d, i) => (
                   <Cell
                     key={i}
-                    fill={d.has ? WORKLOAD_HEX[String(d.level)] ?? '#3b82f6' : '#94a3b8'}
+                    fill={d.has ? WORKLOAD_HEX[String(d.level)] ?? '#5b8cff' : '#94a3b8'}
                   />
                 ))}
               </Bar>
@@ -159,7 +159,7 @@ export function HoursByClientChart({
                 {data.map((d, i) => (
                   <Cell
                     key={i}
-                    fill="#8b5cf6"
+                    fill="#5b8cff"
                     onClick={onDrill ? () => onDrill(d.clientId) : undefined}
                   />
                 ))}
@@ -168,7 +168,7 @@ export function HoursByClientChart({
                 {data.map((d, i) => (
                   <Cell
                     key={i}
-                    fill="#3b82f6"
+                    fill="#ff7a1a"
                     onClick={onDrill ? () => onDrill(d.clientId) : undefined}
                   />
                 ))}
@@ -177,8 +177,8 @@ export function HoursByClientChart({
           </ResponsiveContainer>
         )}
         <p className="mt-1 text-center text-[11px] text-muted-foreground">
-          <span className="text-violet-500">■</span> Estimated = task-board estimates (open + completed in scope)
-          &nbsp; <span className="text-blue-500">■</span> Logged = time entries of the scoped team
+          <span className="text-[#5b8cff]">■</span> Estimated = task-board estimates (open + completed in scope)
+          &nbsp; <span className="text-[#ff7a1a]">■</span> Logged = time entries of the scoped team
           {onDrill ? ' · click a bar for that client’s tasks' : ''}
         </p>
       </CardContent>
@@ -216,14 +216,14 @@ export function MonthlyKpiTrendChart({ points }: { points: TrendPoint[] }) {
               <XAxis dataKey="label" fontSize={12} />
               <YAxis domain={[0, 100]} fontSize={12} unit="%" />
               <Tooltip formatter={(v: number, name: string) => [fmtPct(v), name === 'score' ? 'Team KPI score' : 'On-time']} />
-              <Line type="monotone" dataKey="score" stroke="#22c55e" strokeWidth={2} dot={{ r: 3 }} name="score" />
-              <Line type="monotone" dataKey="onTime" stroke="#3b82f6" strokeWidth={2} strokeDasharray="5 4" dot={{ r: 3 }} name="onTime" />
+              <Line type="monotone" dataKey="score" stroke="#ff7a1a" strokeWidth={2} dot={{ r: 3, fill: '#ff7a1a' }} name="score" />
+              <Line type="monotone" dataKey="onTime" stroke="#5b8cff" strokeWidth={2} strokeDasharray="5 4" dot={{ r: 3 }} name="onTime" />
             </LineChart>
           </ResponsiveContainer>
         )}
         <p className="mt-1 text-center text-[11px] text-muted-foreground">
-          <span className="text-emerald-600">●</span> Team KPI score &nbsp;
-          <span className="text-sky-600">●</span> On-time completion
+          <span className="text-[#ff7a1a]">●</span> Team KPI score &nbsp;
+          <span className="text-[#5b8cff]">●</span> On-time completion
         </p>
       </CardContent>
     </Card>

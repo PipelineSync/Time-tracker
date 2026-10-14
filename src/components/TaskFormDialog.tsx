@@ -404,10 +404,8 @@ export function TaskFormDialog({
                   setQaTouched(true)
                   set('qaRequired', e.target.checked)
                 }}
-                /* accent-[#0868D9]: brand blue, kept constant on purpose —
-                   checkbox accents are tiny and don't need to re-skin with
-                   the seasonal theme (same as the sign-in page). */
-                className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer rounded border-border accent-[#0868D9]"
+                /* accent-brand: native checkbox tinted PipelineSync orange. */
+                className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer rounded border-border accent-brand"
               />
               <div className="grid gap-0.5">
                 <Label htmlFor="task-qa-required" className="cursor-pointer">

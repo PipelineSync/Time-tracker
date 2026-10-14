@@ -11,12 +11,12 @@
       stored === 'dark' ||
       (stored !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches)
     document.documentElement.classList.add(dark ? 'dark' : 'light')
-    // Seasonal skin, applied before first paint so the festive palette
+    // Seasonal skin, applied before first paint so the spooky palette
     // never flashes in as the bundle boots. This pre-paint hint is
     // always added; if the build disabled the theme
-    // (VITE_CHRISTMAS_THEME=off) the app removes the class on mount —
+    // (VITE_HALLOWEEN_THEME=off) the app removes the class on mount —
     // see src/lib/theme.tsx.
-    document.documentElement.classList.add('christmas')
+    document.documentElement.classList.add('halloween')
   } catch (e) {
     /* private mode: default to light */
   }

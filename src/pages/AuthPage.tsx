@@ -59,7 +59,7 @@ export function AuthPage() {
                 Sign in with the credentials provided to you.
               </CardDescription>
               {!supabaseReady && (
-                <p className="flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-2 text-xs text-amber-800">
+                <p className="flex items-start gap-1.5 rounded-xl border border-amber-300 bg-amber-50 px-2.5 py-2 text-xs text-amber-800 dark:border-amber-400/35 dark:bg-amber-400/10 dark:text-amber-200">
                   <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                   <span>
                     <strong>Demo mode.</strong> Supabase environment variables were missing when this site was
@@ -104,11 +104,8 @@ export function AuthPage() {
                     type="checkbox"
                     checked={showPassword}
                     onChange={(e) => setShowPassword(e.target.checked)}
-                    /* accent-[#0868D9]: brand blue, kept constant on purpose —
-                       checkbox accents are tiny and don't need to re-skin with
-                       the seasonal theme (same reasoning as the navy action
-                       buttons, see src/lib/brand.ts). */
-                    className="h-4 w-4 rounded border-border accent-[#0868D9]"
+                    /* accent-brand: native checkbox tinted PipelineSync orange. */
+                    className="h-4 w-4 rounded border-border accent-brand"
                   />
                   Show password
                 </label>

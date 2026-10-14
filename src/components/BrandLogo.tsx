@@ -1,7 +1,7 @@
 import { useTheme } from '@/lib/theme'
 import { cn } from '@/lib/utils'
-import { SantaHat } from '@/components/SantaHat'
-import { isChristmasTheme } from '@/lib/christmas'
+import { WitchHat } from '@/components/WitchHat'
+import { isHalloweenTheme } from '@/lib/halloween'
 
 /**
  * Where the "S" mark sits inside each logo file, measured from the artwork
@@ -23,10 +23,10 @@ const BRIM_OVERLAP = 0.27
 const BRIM_BOTTOM_IN_VIEWBOX = 0.94
 
 /**
- * PipelineSync brand lockup. Uses the white/orange variant on navy
- * backgrounds, otherwise auto-picks light/dark to match the active theme.
+ * PipelineSync brand lockup. Uses the white/orange variant on the dark
+ * sidebar, otherwise auto-picks light/dark to match the active theme.
  *
- * While the Christmas theme is on, a Santa hat is tilted over the "S" mark so
+ * While the Halloween theme is on, a witch hat is tilted over the "S" mark so
  * the logo itself looks like it is wearing it. Everything is sized as a
  * fraction of the logo's rendered height, so the hat tracks the logo at every
  * size it appears at (sidebar, mobile header, sign-in card).
@@ -40,7 +40,7 @@ export function BrandLogo({
 }) {
   const { resolved } = useTheme()
   const useDark = onNavy || resolved === 'dark'
-  const festive = isChristmasTheme()
+  const festive = isHalloweenTheme()
 
   const mark = useDark ? MARK.dark : MARK.light
   // Place the hat so its brim lands just over the top of the mark.
@@ -62,8 +62,8 @@ export function BrandLogo({
         // it are height-relative, which matters because the two lockups have
         // different aspect ratios (width-relative offsets would drift).
         <span className="pointer-events-none absolute left-0 top-0 aspect-square h-full">
-          <SantaHat
-            className="absolute -rotate-[20deg] drop-shadow-sm"
+          <WitchHat
+            className="absolute -rotate-[14deg] drop-shadow-sm"
             style={{
               top: `${hatTop * 100}%`,
               left: `${hatLeft * 100}%`,

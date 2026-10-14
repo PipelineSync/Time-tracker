@@ -1,15 +1,17 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { Toaster } from 'sonner'
-// Self-hosted Inter (the same face and weights 400–800 the app used to load
-// from Google Fonts). Self-hosting removes a render-blocking cross-origin
-// stylesheet, works offline inside the PWA/native shells, and keeps the
-// Content-Security-Policy at 'self' with no font exceptions.
-import '@fontsource/inter/400.css'
-import '@fontsource/inter/500.css'
-import '@fontsource/inter/600.css'
-import '@fontsource/inter/700.css'
-import '@fontsource/inter/800.css'
+// Self-hosted Geist + Geist Mono (the PipelineSync brand faces). Self-hosting
+// removes a render-blocking cross-origin stylesheet, works offline inside the
+// PWA/native shells, and keeps the Content-Security-Policy at 'self' with no
+// font exceptions.
+import '@fontsource/geist-sans/400.css'
+import '@fontsource/geist-sans/500.css'
+import '@fontsource/geist-sans/600.css'
+import '@fontsource/geist-sans/700.css'
+import '@fontsource/geist-mono/400.css'
+import '@fontsource/geist-mono/500.css'
+import '@fontsource/geist-mono/600.css'
 import { App } from './App'
 import { StoreProvider } from '@/lib/store'
 import { ThemeProvider } from '@/lib/theme'
@@ -17,8 +19,10 @@ import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { initNativeShell } from '@/lib/native'
 import { isNativeShell } from '@/lib/platform'
 import { installAudioUnlock } from '@/lib/sounds'
-import { isChristmasTheme } from '@/lib/christmas'
-import { Snowfall } from '@/components/Snowfall'
+import { isHalloweenTheme } from '@/lib/halloween'
+import { HalloweenLayer } from '@/components/HalloweenLayer'
+import { AmbientBackground } from '@/components/AmbientBackground'
+import { installCardSpotlight } from '@/lib/spotlight'
 import './index.css'
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
@@ -28,8 +32,9 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           (a bad row shape on boot) must land here, not in a white screen. */}
       <ErrorBoundary>
         <StoreProvider>
+          <AmbientBackground />
           <App />
-          {isChristmasTheme() && <Snowfall />}
+          {isHalloweenTheme() && <HalloweenLayer />}
           <Toaster position="top-center" richColors closeButton />
         </StoreProvider>
       </ErrorBoundary>
@@ -55,3 +60,6 @@ void initNativeShell()
 // sound before the first real interaction. Arm the audio context on it, so the
 // very first clock-in of a session is not silently swallowed.
 installAudioUnlock()
+
+// Cards light up around the cursor (fine pointers only, off for reduced motion).
+installCardSpotlight()

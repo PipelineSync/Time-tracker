@@ -203,12 +203,15 @@ export function AppLayout() {
   )
 
   return (
-    // Transparent on purpose: the Christmas snow layer sits at z-index -1 over
-    // the body background, so an opaque wrapper here would hide it.
+    // Transparent on purpose: the ambient brand background and the seasonal
+    // particle layer sit at negative z-index over the body background, so an
+    // opaque wrapper here would hide them.
     <div className="min-h-screen">
-      {/* Desktop sidebar (navy) */}
-      <aside className="fixed inset-y-0 left-0 z-30 hidden w-64 flex-col bg-sidebar lg:flex">
-        <div className="flex h-16 items-center border-b border-white/10 px-6">
+      {/* Desktop sidebar — dark brand chrome in both modes. The `dark` class
+          scopes the dark tokens to it, so its controls read correctly even
+          when the page itself is in light mode. */}
+      <aside className="dark fixed inset-y-0 left-0 z-30 hidden w-64 flex-col border-r border-[var(--line)] bg-sidebar text-foreground lg:flex">
+        <div className="flex h-16 items-center border-b border-[var(--line)] px-6">
           <BrandLogo onNavy />
         </div>
         <nav className="flex-1 space-y-4 overflow-y-auto px-3 py-4">
@@ -216,11 +219,11 @@ export function AppLayout() {
             <div key={section.title || `nav-${si}`} className="space-y-1">
               {section.title ? (
                 <div className="flex items-center gap-2 px-3 pb-1 pt-2">
-                  <div className="h-px flex-1 bg-white/15" />
-                  <p className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/45">
+                  <div className="h-px flex-1 bg-[var(--line)]" />
+                  <p className="ps-label shrink-0 text-[10px]">
                     {section.title}
                   </p>
-                  <div className="h-px flex-1 bg-white/15" />
+                  <div className="h-px flex-1 bg-[var(--line)]" />
                 </div>
               ) : null}
               {section.items.map((item) => (
@@ -230,10 +233,11 @@ export function AppLayout() {
                   end={item.to === '/'}
                   className={({ isActive }) =>
                     cn(
-                      'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+                      // The active row gets a soft fill and an orange icon.
+                      'flex items-center gap-3 rounded-[8px] px-3 py-2 text-sm font-medium transition-colors duration-200 ease-ps',
                       isActive
-                        ? 'bg-white/15 text-white'
-                        : 'text-white/70 hover:bg-white/10 hover:text-white'
+                        ? 'bg-white/[.06] text-white [&_svg]:text-brand'
+                        : 'text-[var(--text-2)] hover:bg-white/[.04] hover:text-white'
                     )
                   }
                 >
@@ -244,7 +248,7 @@ export function AppLayout() {
             </div>
           ))}
         </nav>
-        <div className="border-t border-white/10 px-4 py-3">
+        <div className="border-t border-[var(--line)] px-4 py-3">
           {isDemo && (
             <div className="mb-2 flex justify-center">
               <DemoModeBadge onNavy />
@@ -260,7 +264,7 @@ export function AppLayout() {
       </aside>
 
       {/* Mobile header — padded out of the notch when installed / native */}
-      <header className="sticky top-0 z-30 border-b border-border bg-background/95 backdrop-blur lg:hidden">
+      <header className="ps-glass sticky top-0 z-30 border-b lg:hidden">
         <div className="pt-safe">
           <div className="flex h-14 items-center justify-between px-4">
             <div className="flex min-w-0 items-center gap-2">
@@ -297,7 +301,7 @@ export function AppLayout() {
       </main>
 
       {/* Mobile bottom nav — sits above the iPhone home indicator */}
-      <nav className="pb-safe fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/95 backdrop-blur lg:hidden">
+      <nav className="ps-glass pb-safe fixed inset-x-0 bottom-0 z-30 border-t lg:hidden">
         <div className="grid" style={{ gridTemplateColumns: `repeat(${navItems.length}, minmax(0,1fr))` }}>
           {navItems.map((item) => (
             <NavLink

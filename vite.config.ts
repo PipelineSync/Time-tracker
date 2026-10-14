@@ -118,7 +118,7 @@ export default defineConfig({
         // scoped per signed-in user by RLS, so a URL-keyed cache could leak
         // one account's data to another account on a shared device. The app
         // shell + assets are fully offline-capable; live data needs network.
-        // Inter is self-hosted (@fontsource, see src/main.tsx) — its files
+        // Geist + Geist Mono are self-hosted (@fontsource, see src/main.tsx) — its files
         // are fingerprinted build output, so the precache + /assets/*
         // immutable headers cover them; no external font caching needed.
         runtimeCaching: [

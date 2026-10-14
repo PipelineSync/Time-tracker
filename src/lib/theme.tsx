@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import type { Theme } from './types'
 import { storage } from './storage'
-import { isChristmasTheme } from './christmas'
+import { isHalloweenTheme } from './halloween'
 
 const KEY = 'wt_theme'
 
@@ -41,8 +41,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     root.classList.remove('light', 'dark')
     root.classList.add(resolved)
     // The seasonal skin layers on top of light/dark rather than replacing it,
-    // so both `.christmas` and `.christmas.dark` are meaningful.
-    root.classList.toggle('christmas', isChristmasTheme())
+    // so both `.halloween` and `.halloween.dark` are meaningful.
+    root.classList.toggle('halloween', isHalloweenTheme())
   }, [resolved])
 
   const setTheme = (t: Theme) => {
