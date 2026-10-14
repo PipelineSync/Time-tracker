@@ -230,6 +230,60 @@
 }
 
 /* ============================================================
+   Flying bats — a small flock swoops across in front of the app
+   every 25–45s. Click-through, gone in a few seconds.
+   ============================================================ */
+.halloween-flyer {
+  position: absolute;
+  left: 0;
+  display: block;
+  color: #1b1030;
+  opacity: 0;
+  will-change: transform;
+  animation: flyer-across var(--dur, 7s) linear both;
+}
+.halloween-flyer.rtl {
+  animation-name: flyer-back;
+}
+.halloween.dark .halloween-flyer {
+  color: #c4b5fd;
+  filter: drop-shadow(0 0 6px rgba(167, 139, 250, 0.55));
+}
+.halloween-flyer-body {
+  display: block;
+  width: 100%;
+  height: 100%;
+  animation: flyer-swoop var(--dur, 7s) ease-in-out both;
+  animation-delay: inherit;
+}
+.halloween-flyer.rtl .halloween-flyer-body svg {
+  transform: scaleX(-1);
+}
+.halloween-flyer svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.halloween-flyer svg path {
+  transform-origin: 50% 40%;
+  animation: bat-flap 0.18s ease-in-out infinite alternate;
+}
+@keyframes flyer-across {
+  0% { transform: translate3d(-8vw, 0, 0); opacity: 0.9; }
+  100% { transform: translate3d(108vw, 0, 0); opacity: 0.9; }
+}
+@keyframes flyer-back {
+  0% { transform: translate3d(108vw, 0, 0); opacity: 0.9; }
+  100% { transform: translate3d(-8vw, 0, 0); opacity: 0.9; }
+}
+@keyframes flyer-swoop {
+  0% { transform: translate3d(0, 0, 0) rotate(-4deg); }
+  30% { transform: translate3d(0, var(--swoop, 8vh), 0) rotate(6deg); }
+  60% { transform: translate3d(0, calc(var(--swoop, 8vh) * -0.5), 0) rotate(-6deg); }
+  100% { transform: translate3d(0, calc(var(--swoop, 8vh) * 0.4), 0) rotate(3deg); }
+}
+
+/* ============================================================
    Clock-out ghost — floats up from where you clicked and fades
    ============================================================ */
 .halloween-ghost {
@@ -284,7 +338,8 @@
     transform: translate3d(var(--rest-x, 50vw), 0, 0);
   }
   .halloween-cursor-layer,
-  .halloween-ghost {
+  .halloween-ghost,
+  .halloween-flyer {
     display: none;
   }
 }

@@ -60,7 +60,7 @@ function Bat() {
     <svg viewBox="0 0 64 32" aria-hidden="true" focusable="false">
       <path
         fill="currentColor"
-        d="M32 10c-1.6 0-2.6-2.4-3-4l-1.4 3.2C22 6 13 4 2 8c5 1 8 4 9 8 3-2 7-2 9 1 2-2 5-2 7 0l5 7 5-7c2-2 5-2 7 0 2-3 6-3 9-1 1-4 4-7 9-8-11-4-20-2-25.6 1.2L36 6c-.4 1.6-1.4 4-3 4h-1z"
+        d={BAT_PATH}
       />
     </svg>
   )
@@ -97,6 +97,52 @@ function useCursorSparks(host: React.RefObject<HTMLDivElement>) {
     }
     window.addEventListener('pointermove', onMove, { passive: true })
     return () => window.removeEventListener('pointermove', onMove)
+  }, [host])
+}
+
+const BAT_PATH =
+  'M32 10c-1.6 0-2.6-2.4-3-4l-1.4 3.2C22 6 13 4 2 8c5 1 8 4 9 8 3-2 7-2 9 1 2-2 5-2 7 0l5 7 5-7c2-2 5-2 7 0 2-3 6-3 9-1 1-4 4-7 9-8-11-4-20-2-25.6 1.2L36 6c-.4 1.6-1.4 4-3 4h-1z'
+
+/** First flock shortly after the app opens, then one every 25–45 seconds. */
+const FIRST_FLOCK_MS = 2500
+const FLOCK_GAP_MS: [number, number] = [25_000, 45_000]
+
+/**
+ * Every so often a small flock of bats swoops across the screen, in front of
+ * the app. They take no clicks and are gone in a few seconds, so they never
+ * get in the way; nothing flies for reduced motion or in a background tab.
+ */
+function useBatFlocks(host: React.RefObject<HTMLDivElement>) {
+  useEffect(() => {
+    let timer = 0
+    const launch = () => {
+      const layer = host.current
+      if (layer && !reducedMotion() && document.visibilityState === 'visible') {
+        const rtl = Math.random() < 0.5
+        const baseY = 8 + Math.random() * 55 // vh
+        const count = 2 + Math.floor(Math.random() * 3)
+        for (let i = 0; i < count; i++) {
+          const bat = document.createElement('span')
+          bat.className = `halloween-flyer${rtl ? ' rtl' : ''}`
+          const size = 30 + Math.random() * 22
+          bat.style.width = `${size}px`
+          bat.style.height = `${size / 2}px`
+          bat.style.top = `${baseY + (Math.random() - 0.5) * 12}vh`
+          bat.style.setProperty('--dur', `${6 + Math.random() * 2.5}s`)
+          bat.style.setProperty('--swoop', `${(Math.random() < 0.5 ? -1 : 1) * (6 + Math.random() * 10)}vh`)
+          bat.style.animationDelay = `${i * (0.25 + Math.random() * 0.35)}s`
+          bat.innerHTML = `<span class="halloween-flyer-body"><svg viewBox="0 0 64 32" aria-hidden="true"><path fill="currentColor" d="${BAT_PATH}"/></svg></span>`
+          bat.addEventListener('animationend', (e) => {
+            if (e.target === bat) bat.remove()
+          })
+          layer.appendChild(bat)
+        }
+      }
+      const [lo, hi] = FLOCK_GAP_MS
+      timer = window.setTimeout(launch, lo + Math.random() * (hi - lo))
+    }
+    timer = window.setTimeout(launch, FIRST_FLOCK_MS)
+    return () => window.clearTimeout(timer)
   }, [host])
 }
 
@@ -138,10 +184,11 @@ export function HalloweenLayer() {
   const fx = useRef<HTMLDivElement>(null)
   useCursorSparks(fx)
   useClockOutGhost(fx)
+  useBatFlocks(fx)
 
   return (
     <>
-    {/* Above content but click-through: cursor sparks and the clock-out ghost. */}
+    {/* Above content but click-through: cursor sparks, flying bats and the clock-out ghost. */}
     <div ref={fx} className="halloween-cursor-layer" aria-hidden="true" />
     <div className="halloween-layer" aria-hidden="true">
       <Cobweb className="halloween-cobweb-page" />
