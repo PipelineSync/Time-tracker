@@ -39,7 +39,7 @@ export function useSeasonClass(): string | null {
   return useHalloween() ? HALLOWEEN_CLASS : null
 }
 
-/** Bats, embers, page cobweb, cursor sparks and the clock-out ghost. */
+/** Embers, page cobweb, cursor sparks and the clock-out ghost. */
 export function SeasonLayer() {
   return useHalloween() ? <HalloweenLayer /> : null
 }
@@ -68,7 +68,7 @@ export function SeasonSettings() {
       <div className="space-y-1">
         <Label htmlFor="season-halloween">Halloween decorations</Label>
         <p className="text-sm text-muted-foreground">
-          Pumpkins, bats, cobwebs and spooky sounds, on this device. They switch off by
+          Pumpkins, embers, cobwebs and spooky sounds, on this device. They switch off by
           themselves after October 31.
         </p>
       </div>

@@ -9,8 +9,7 @@ Everything Halloween lives in this folder. The app reaches it only through
 | --- | --- |
 | Pumpkin/purple/slime palette | `halloween.css` (top) |
 | Witch hat on the logo | `LogoHat.tsx`, `WitchHat.tsx` |
-| Bats and rising embers behind the app | `HalloweenLayer.tsx` |
-| A flock of bats swooping across the screen every 25–45s | `HalloweenLayer.tsx` (`useBatFlocks`) |
+| Rising embers behind the app | `HalloweenLayer.tsx` |
 | Flickering pumpkin "on the clock" dot | `PumpkinDot.tsx` |
 | Cobwebs (page corner + sidebar corner) | `Cobweb.tsx` |
 | Ember trail behind the mouse (desktop only) | `HalloweenLayer.tsx` (`useCursorSparks`) |

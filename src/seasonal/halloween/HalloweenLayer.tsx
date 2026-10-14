@@ -1,23 +1,21 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { onAppEvent } from '@/lib/appEvents'
-import { BAT_ASPECT, BAT_SVG } from './bat'
 import { Cobweb } from './Cobweb'
 
 /**
- * Halloween atmosphere: a few bats flitting across the viewport and embers
- * rising from the bottom.
+ * Halloween atmosphere: embers rising from the bottom of the viewport, a
+ * corner cobweb, a short ember trail behind the mouse and the clock-out ghost.
  *
  * Readability comes first, so this layer is deliberately restrained:
  *   * it is `pointer-events-none` and sits at a negative z-index, so it never
  *     intercepts a click and never paints over text — content scrolls above it;
- *   * bats are small and faint, embers are tiny and low-opacity, so they read
- *     as texture rather than competing with type;
- *   * it is `aria-hidden` and honours `prefers-reduced-motion` (index.css
- *     parks every bat and ember in place), so it is not a problem for anyone
+ *   * embers are tiny and low-opacity, so they read as texture rather than
+ *     competing with type;
+ *   * it is `aria-hidden` and honours `prefers-reduced-motion` (halloween.css
+ *     parks every ember in place), so it is not a problem for anyone
  *     who finds movement distracting.
  */
 const EMBER_COUNT = 26
-const BAT_COUNT = 5
 
 /** Deterministic PRNG so the layout is stable across re-renders. */
 function rng(seed: number) {
@@ -42,18 +40,6 @@ function makeEmbers() {
       slime: rand() < 0.22,
     }
   })
-}
-
-function makeBats() {
-  const rand = rng(31102025)
-  return Array.from({ length: BAT_COUNT }, () => ({
-    top: 6 + rand() * 60,
-    size: 24 + rand() * 18, // 24–42px wide
-    duration: 22 + rand() * 18,
-    delay: -rand() * 40,
-    opacity: 0.12 + rand() * 0.14,
-    restX: 10 + rand() * 80,
-  }))
 }
 
 const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -87,49 +73,6 @@ function useCursorSparks(host: React.RefObject<HTMLDivElement>) {
     }
     window.addEventListener('pointermove', onMove, { passive: true })
     return () => window.removeEventListener('pointermove', onMove)
-  }, [host])
-}
-
-/** First flock shortly after the app opens, then one every 25–45 seconds. */
-const FIRST_FLOCK_MS = 2500
-const FLOCK_GAP_MS: [number, number] = [25_000, 45_000]
-
-/**
- * Every so often a small flock of bats swoops across the screen, in front of
- * the app. They take no clicks and are gone in a few seconds, so they never
- * get in the way; nothing flies for reduced motion or in a background tab.
- */
-function useBatFlocks(host: React.RefObject<HTMLDivElement>) {
-  useEffect(() => {
-    let timer = 0
-    const launch = () => {
-      const layer = host.current
-      if (layer && !reducedMotion() && document.visibilityState === 'visible') {
-        const rtl = Math.random() < 0.5
-        const baseY = 8 + Math.random() * 55 // vh
-        const count = 2 + Math.floor(Math.random() * 3)
-        for (let i = 0; i < count; i++) {
-          const bat = document.createElement('span')
-          bat.className = `halloween-flyer${rtl ? ' rtl' : ''}`
-          const size = 44 + Math.random() * 26 // 44–70px wide
-          bat.style.width = `${size}px`
-          bat.style.height = `${size / BAT_ASPECT}px`
-          bat.style.top = `${baseY + (Math.random() - 0.5) * 12}vh`
-          bat.style.setProperty('--dur', `${6 + Math.random() * 2.5}s`)
-          bat.style.setProperty('--swoop', `${(Math.random() < 0.5 ? -1 : 1) * (6 + Math.random() * 10)}vh`)
-          bat.style.animationDelay = `${i * (0.25 + Math.random() * 0.35)}s`
-          bat.innerHTML = `<span class="halloween-flyer-body">${BAT_SVG}</span>`
-          bat.addEventListener('animationend', (e) => {
-            if (e.target === bat) bat.remove()
-          })
-          layer.appendChild(bat)
-        }
-      }
-      const [lo, hi] = FLOCK_GAP_MS
-      timer = window.setTimeout(launch, lo + Math.random() * (hi - lo))
-    }
-    timer = window.setTimeout(launch, FIRST_FLOCK_MS)
-    return () => window.clearTimeout(timer)
   }, [host])
 }
 
@@ -167,15 +110,13 @@ function useClockOutGhost(host: React.RefObject<HTMLDivElement>) {
 
 export function HalloweenLayer() {
   const embers = useMemo(makeEmbers, [])
-  const bats = useMemo(makeBats, [])
   const fx = useRef<HTMLDivElement>(null)
   useCursorSparks(fx)
   useClockOutGhost(fx)
-  useBatFlocks(fx)
 
   return (
     <>
-    {/* Above content but click-through: cursor sparks, flying bats and the clock-out ghost. */}
+    {/* Above content but click-through: cursor sparks and the clock-out ghost. */}
     <div ref={fx} className="halloween-cursor-layer" aria-hidden="true" />
     <div className="halloween-layer" aria-hidden="true">
       <Cobweb className="halloween-cobweb-page" />
@@ -194,22 +135,6 @@ export function HalloweenLayer() {
             ['--drift' as string]: `${e.drift}px`,
             ['--rest' as string]: e.rest,
           }}
-        />
-      ))}
-      {bats.map((b, i) => (
-        <span
-          key={`b${i}`}
-          className="halloween-bat"
-          style={{
-            top: `${b.top}%`,
-            width: `${b.size}px`,
-            height: `${b.size / BAT_ASPECT}px`,
-            opacity: b.opacity,
-            animationDuration: `${b.duration}s`,
-            animationDelay: `${b.delay}s`,
-            ['--rest-x' as string]: `${b.restX}vw`,
-          }}
-          dangerouslySetInnerHTML={{ __html: BAT_SVG }}
         />
       ))}
     </div>

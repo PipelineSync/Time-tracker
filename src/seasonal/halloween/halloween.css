@@ -59,7 +59,7 @@
 
 /* ============================================================
    Halloween particles
-   Bats flit across and embers rise, BEHIND the app's content on a negative
+   Embers rise BEHIND the app's content on a negative
    z-index with no pointer events — texture, never in the way of a click or
    a line of text.
    ============================================================ */
@@ -89,32 +89,6 @@
   box-shadow: 0 0 6px 1px rgba(255, 122, 26, 0.35);
 }
 
-.halloween-bat {
-  position: absolute;
-  left: 0;
-  display: block;
-  color: #1b1030;
-  will-change: transform;
-  animation: bat-fly linear infinite;
-}
-.halloween.dark .halloween-bat {
-  color: #b9a3ff;
-}
-.halloween-bat svg {
-  display: block;
-  width: 100%;
-  height: 100%;
-}
-
-/* Wings flap from the shoulder: each wing path pivots on its inner edge. The
-   left wing is the same path mirrored, so the same rotation flaps it the
-   other way. */
-.halloween-bat-wing {
-  transform-box: fill-box;
-  transform-origin: 0% 40%;
-  animation: bat-flap 0.34s ease-in-out infinite alternate;
-}
-
 @keyframes ember-rise {
   0% {
     transform: translate3d(0, 0, 0);
@@ -127,31 +101,6 @@
   100% {
     transform: translate3d(var(--drift, 0px), -105vh, 0);
     opacity: 0;
-  }
-}
-@keyframes bat-fly {
-  0% {
-    transform: translate3d(-10vw, 0, 0);
-  }
-  25% {
-    transform: translate3d(25vw, -3vh, 0);
-  }
-  50% {
-    transform: translate3d(55vw, 2vh, 0);
-  }
-  75% {
-    transform: translate3d(85vw, -2vh, 0);
-  }
-  100% {
-    transform: translate3d(112vw, 0, 0);
-  }
-}
-@keyframes bat-flap {
-  from {
-    transform: rotate(-28deg);
-  }
-  to {
-    transform: rotate(22deg);
   }
 }
 
@@ -240,59 +189,6 @@
 }
 
 /* ============================================================
-   Flying bats — a small flock swoops across in front of the app
-   every 25–45s. Click-through, gone in a few seconds.
-   ============================================================ */
-.halloween-flyer {
-  position: absolute;
-  left: 0;
-  display: block;
-  color: #1b1030;
-  opacity: 0;
-  will-change: transform;
-  animation: flyer-across var(--dur, 7s) linear both;
-}
-.halloween-flyer.rtl {
-  animation-name: flyer-back;
-}
-.halloween.dark .halloween-flyer {
-  color: #c4b5fd;
-  filter: drop-shadow(0 0 6px rgba(167, 139, 250, 0.55));
-}
-.halloween-flyer-body {
-  display: block;
-  width: 100%;
-  height: 100%;
-  animation: flyer-swoop var(--dur, 7s) ease-in-out both;
-  animation-delay: inherit;
-}
-.halloween-flyer.rtl .halloween-flyer-body svg {
-  transform: scaleX(-1);
-}
-.halloween-flyer svg {
-  display: block;
-  width: 100%;
-  height: 100%;
-}
-.halloween-flyer .halloween-bat-wing {
-  animation-duration: 0.2s;
-}
-@keyframes flyer-across {
-  0% { transform: translate3d(-8vw, 0, 0); opacity: 0.9; }
-  100% { transform: translate3d(108vw, 0, 0); opacity: 0.9; }
-}
-@keyframes flyer-back {
-  0% { transform: translate3d(108vw, 0, 0); opacity: 0.9; }
-  100% { transform: translate3d(-8vw, 0, 0); opacity: 0.9; }
-}
-@keyframes flyer-swoop {
-  0% { transform: translate3d(0, 0, 0) rotate(-4deg); }
-  30% { transform: translate3d(0, var(--swoop, 8vh), 0) rotate(6deg); }
-  60% { transform: translate3d(0, calc(var(--swoop, 8vh) * -0.5), 0) rotate(-6deg); }
-  100% { transform: translate3d(0, calc(var(--swoop, 8vh) * 0.4), 0) rotate(3deg); }
-}
-
-/* ============================================================
    Clock-out ghost — floats up from where you clicked and fades
    ============================================================ */
 .halloween-ghost {
@@ -331,7 +227,6 @@
    Reduced motion: decorations stay, still.
    ============================================================ */
 @media (prefers-reduced-motion: reduce) {
-  .halloween-bat-wing,
   .halloween-pumpkin,
   .halloween-pumpkin .face {
     animation: none;
@@ -341,14 +236,8 @@
     transform: translate3d(0, calc(var(--rest, 40) * -1vh), 0);
     opacity: var(--peak, 0.4);
   }
-  /* Bats park at their resting spot instead of flying across. */
-  .halloween-bat {
-    animation: none;
-    transform: translate3d(var(--rest-x, 50vw), 0, 0);
-  }
   .halloween-cursor-layer,
-  .halloween-ghost,
-  .halloween-flyer {
+  .halloween-ghost {
     display: none;
   }
 }
