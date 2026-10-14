@@ -104,8 +104,15 @@
   display: block;
   width: 100%;
   height: 100%;
-  transform-origin: 50% 40%;
-  animation: bat-flap 0.36s ease-in-out infinite alternate;
+}
+
+/* Wings flap from the shoulder: each wing path pivots on its inner edge. The
+   left wing is the same path mirrored, so the same rotation flaps it the
+   other way. */
+.halloween-bat-wing {
+  transform-box: fill-box;
+  transform-origin: 0% 40%;
+  animation: bat-flap 0.34s ease-in-out infinite alternate;
 }
 
 @keyframes ember-rise {
@@ -140,8 +147,11 @@
   }
 }
 @keyframes bat-flap {
+  from {
+    transform: rotate(-28deg);
+  }
   to {
-    transform: scaleY(0.55);
+    transform: rotate(22deg);
   }
 }
 
@@ -264,9 +274,8 @@
   width: 100%;
   height: 100%;
 }
-.halloween-flyer svg path {
-  transform-origin: 50% 40%;
-  animation: bat-flap 0.18s ease-in-out infinite alternate;
+.halloween-flyer .halloween-bat-wing {
+  animation-duration: 0.2s;
 }
 @keyframes flyer-across {
   0% { transform: translate3d(-8vw, 0, 0); opacity: 0.9; }
@@ -322,7 +331,7 @@
    Reduced motion: decorations stay, still.
    ============================================================ */
 @media (prefers-reduced-motion: reduce) {
-  .halloween-bat svg,
+  .halloween-bat-wing,
   .halloween-pumpkin,
   .halloween-pumpkin .face {
     animation: none;

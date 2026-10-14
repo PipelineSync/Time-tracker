@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { onAppEvent } from '@/lib/appEvents'
+import { BAT_ASPECT, BAT_SVG } from './bat'
 import { Cobweb } from './Cobweb'
 
 /**
@@ -47,23 +48,12 @@ function makeBats() {
   const rand = rng(31102025)
   return Array.from({ length: BAT_COUNT }, () => ({
     top: 6 + rand() * 60,
-    size: 18 + rand() * 16, // 18–34px wide
+    size: 24 + rand() * 18, // 24–42px wide
     duration: 22 + rand() * 18,
     delay: -rand() * 40,
     opacity: 0.12 + rand() * 0.14,
     restX: 10 + rand() * 80,
   }))
-}
-
-function Bat() {
-  return (
-    <svg viewBox="0 0 64 32" aria-hidden="true" focusable="false">
-      <path
-        fill="currentColor"
-        d={BAT_PATH}
-      />
-    </svg>
-  )
 }
 
 const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -100,9 +90,6 @@ function useCursorSparks(host: React.RefObject<HTMLDivElement>) {
   }, [host])
 }
 
-const BAT_PATH =
-  'M32 10c-1.6 0-2.6-2.4-3-4l-1.4 3.2C22 6 13 4 2 8c5 1 8 4 9 8 3-2 7-2 9 1 2-2 5-2 7 0l5 7 5-7c2-2 5-2 7 0 2-3 6-3 9-1 1-4 4-7 9-8-11-4-20-2-25.6 1.2L36 6c-.4 1.6-1.4 4-3 4h-1z'
-
 /** First flock shortly after the app opens, then one every 25–45 seconds. */
 const FIRST_FLOCK_MS = 2500
 const FLOCK_GAP_MS: [number, number] = [25_000, 45_000]
@@ -124,14 +111,14 @@ function useBatFlocks(host: React.RefObject<HTMLDivElement>) {
         for (let i = 0; i < count; i++) {
           const bat = document.createElement('span')
           bat.className = `halloween-flyer${rtl ? ' rtl' : ''}`
-          const size = 30 + Math.random() * 22
+          const size = 44 + Math.random() * 26 // 44–70px wide
           bat.style.width = `${size}px`
-          bat.style.height = `${size / 2}px`
+          bat.style.height = `${size / BAT_ASPECT}px`
           bat.style.top = `${baseY + (Math.random() - 0.5) * 12}vh`
           bat.style.setProperty('--dur', `${6 + Math.random() * 2.5}s`)
           bat.style.setProperty('--swoop', `${(Math.random() < 0.5 ? -1 : 1) * (6 + Math.random() * 10)}vh`)
           bat.style.animationDelay = `${i * (0.25 + Math.random() * 0.35)}s`
-          bat.innerHTML = `<span class="halloween-flyer-body"><svg viewBox="0 0 64 32" aria-hidden="true"><path fill="currentColor" d="${BAT_PATH}"/></svg></span>`
+          bat.innerHTML = `<span class="halloween-flyer-body">${BAT_SVG}</span>`
           bat.addEventListener('animationend', (e) => {
             if (e.target === bat) bat.remove()
           })
@@ -216,15 +203,14 @@ export function HalloweenLayer() {
           style={{
             top: `${b.top}%`,
             width: `${b.size}px`,
-            height: `${b.size / 2}px`,
+            height: `${b.size / BAT_ASPECT}px`,
             opacity: b.opacity,
             animationDuration: `${b.duration}s`,
             animationDelay: `${b.delay}s`,
             ['--rest-x' as string]: `${b.restX}vw`,
           }}
-        >
-          <Bat />
-        </span>
+          dangerouslySetInnerHTML={{ __html: BAT_SVG }}
+        />
       ))}
     </div>
     </>
