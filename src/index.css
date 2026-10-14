@@ -2,143 +2,167 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ============================================================
+   PipelineSync theme (the look of pipelinesync.net)
+
+   Two layers of tokens:
+   1. Brand tokens (--bg, --text, --brand, --grad …) — the PipelineSync
+      design tokens. Dark values are the brand spec verbatim; light mode is a
+      matching daylight version of the same palette.
+   2. shadcn semantic tokens (--background, --primary …) as HSL triplets,
+      derived from layer 1. Tailwind reads these (tailwind.config.js), so
+      every component — and every `bg-muted/40`-style opacity modifier —
+      follows the theme without component-level colour code.
+
+   `-rgb` twins of the accent colours exist only so Tailwind can apply
+   opacity modifiers to them (`bg-brand/15`).
+   ============================================================ */
 @layer base {
   :root {
-    /* PipelineSync brand palette */
-    --navy: 221 85% 19%;            /* #06245B Core Navy */
-    --blue: 212 93% 46%;            /* #0868D9 Pipeline Blue */
-    --steel: 206 43% 34%;           /* #37678C Sync Steel */
-    --aqua: 187 56% 50%;            /* #36B7C9 Bright Aqua */
-    --orange: 27 94% 50%;           /* #F77A0A Signal Orange */
-    --offwhite: 210 40% 98%;        /* #F8FAFC */
-    --ink: 216 47% 15%;             /* #15253A */
-    --border-gray: 208 28% 88%;     /* #D9E2EA */
+    color-scheme: light;
+    /* Surfaces */
+    --bg: #f6f7fb;
+    --bg-elev: #ffffff;
+    --bg-elev-2: #eef1f6;
+    --surface: rgba(15, 23, 42, 0.025);
+    --surface-2: rgba(15, 23, 42, 0.045);
+    --line: rgba(15, 23, 42, 0.1);
+    --line-2: rgba(15, 23, 42, 0.16);
+    /* Text */
+    --text: #0b1220;
+    --text-2: #3a4558;
+    --text-3: #586377; /* 5.3:1 on --bg-elev-2 */
+    /* Brand — --brand is the fill orange; --brand-2 is the readable text
+       orange, so on daylight surfaces it darkens to keep AA (5:1). */
+    --brand: #ff7a1a;
+    --brand-2: #b4490a;
+    --blue: #2f5fe0;
+    --cyan: #0e7490;
+    --green: #047857;
+    --brand-rgb: 255 122 26;
+    --brand-2-rgb: 180 73 10;
+    --blue-rgb: 47 95 224;
+    --cyan-rgb: 14 116 144;
+    --green-rgb: 4 120 87;
+    --grad: linear-gradient(115deg, #ffc285 0%, #ff7a1a 38%, #7a9bff 78%, #5b8cff 100%);
+    --grad-soft: linear-gradient(135deg, rgba(255, 122, 26, 0.12), rgba(91, 140, 255, 0.1));
+    /* Chart series (orange → blue) */
+    --chart-a: #ff7a1a;
+    --chart-b: #5b8cff;
+    /* Shape and depth */
+    --radius-sm: 10px;
+    --radius: 16px;
+    --radius-lg: 24px;
+    --shadow: 0 24px 60px -28px rgba(15, 23, 42, 0.28);
+    --shadow-glow: 0 0 0 1px rgba(255, 122, 26, 0.25), 0 12px 40px -10px rgba(255, 122, 26, 0.45);
+    /* Motion */
+    --ease: cubic-bezier(0.22, 1, 0.36, 1);
+    /* Type */
+    --font: 'Geist Sans', 'Geist', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --mono: 'Geist Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
 
-    --background: var(--offwhite);
-    --foreground: var(--ink);
+    /* Component recipes that differ per mode */
+    --card-fill: rgba(255, 255, 255, 0.86);
+    --card-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.6), rgba(255, 255, 255, 0));
+    --field-fill: rgba(255, 255, 255, 0.9);
+    --ghost-fill: rgba(255, 255, 255, 0.6);
+    --ghost-line-hover: rgba(15, 23, 42, 0.32);
+    --overlay: rgba(15, 23, 42, 0.42);
+    --modal-glow: radial-gradient(120% 60% at 50% -10%, rgba(255, 122, 26, 0.08), transparent 60%);
+    --ambient-opacity: 0.16;
+    --grid-line: rgba(15, 23, 42, 0.05);
+    --orb-a: #ff7a1a;
+    --orb-b: #5b8cff;
+    --orb-c: #3fd0ee;
+
+    /* shadcn semantic tokens */
+    --background: 228 38% 97%;
+    --foreground: 220 49% 8%;
     --card: 0 0% 100%;
-    --card-foreground: var(--ink);
+    --card-foreground: 220 49% 8%;
     --popover: 0 0% 100%;
-    --popover-foreground: var(--ink);
-    --primary: var(--blue);
-    --primary-foreground: 210 40% 98%;
-    --secondary: 208 42% 94%;
-    --secondary-foreground: var(--navy);
-    --muted: 210 40% 96%;
-    --muted-foreground: 212 18% 42%;
-    --accent: var(--aqua);
-    --accent-foreground: var(--navy);
+    --popover-foreground: 220 49% 8%;
+    --primary: 22 89% 37%; /* = --brand-2: text-primary must stay AA on white */
+    --primary-foreground: 0 0% 100%;
+    --secondary: 218 31% 95%;
+    --secondary-foreground: 220 49% 8%;
+    --muted: 218 31% 95%;
+    --muted-foreground: 219 15% 41%;
+    --accent: 218 31% 93%;
+    --accent-foreground: 220 49% 8%;
     --destructive: 0 72% 51%;
-    --destructive-foreground: 210 40% 98%;
-    --border: var(--border-gray);
-    --input: var(--border-gray);
-    --ring: var(--blue);
-    --radius: 0.625rem;
-    --sidebar: var(--navy);
-    --sidebar-foreground: 210 40% 98%;
-    --sidebar-border: 220 80% 24%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 7% 89%;
+    --input: 225 6% 84%;
+    --ring: 22 89% 37%;
+    /* The sidebar keeps the dark brand chrome in both modes. */
+    --sidebar: 222 39% 6%;
+    --sidebar-foreground: 217 40% 96%;
+    --sidebar-border: 222 17% 11%;
   }
 
   .dark {
-    /* PipelineSync dark treatment: navy field, white type, blue/aqua controls, orange signal only */
-    --navy: 221 85% 16%;
-    --blue: 213 90% 58%;            /* brighter blue for contrast on navy */
-    --steel: 206 43% 44%;
-    --aqua: 187 56% 58%;
-    --orange: 27 94% 52%;
+    color-scheme: dark;
+    /* Surfaces */
+    --bg: #05070c;
+    --bg-elev: #0a0e17;
+    --bg-elev-2: #0f1522;
+    --surface: rgba(255, 255, 255, 0.025);
+    --surface-2: rgba(255, 255, 255, 0.045);
+    --line: rgba(148, 163, 184, 0.13);
+    --line-2: rgba(148, 163, 184, 0.22);
+    /* Text */
+    --text: #f1f4f9;
+    --text-2: #aeb8c7;
+    --text-3: #8591a3;
+    /* Brand */
+    --brand: #ff7a1a;
+    --brand-2: #ffab5e;
+    --blue: #5b8cff;
+    --cyan: #3fd0ee;
+    --green: #34d399;
+    --brand-rgb: 255 122 26;
+    --brand-2-rgb: 255 171 94;
+    --blue-rgb: 91 140 255;
+    --cyan-rgb: 63 208 238;
+    --green-rgb: 52 211 153;
+    --grad: linear-gradient(115deg, #ffc285 0%, #ff7a1a 38%, #7a9bff 78%, #5b8cff 100%);
+    --grad-soft: linear-gradient(135deg, rgba(255, 122, 26, 0.16), rgba(91, 140, 255, 0.12));
+    --shadow: 0 24px 60px -24px rgba(0, 0, 0, 0.7);
 
-    --background: 221 60% 9%;
-    --foreground: 211 60% 95%;
-    --card: 220 55% 12%;
-    --card-foreground: 211 60% 95%;
-    --popover: 220 55% 12%;
-    --popover-foreground: 211 60% 95%;
-    --primary: var(--blue);
-    --primary-foreground: 222 47% 8%;
-    --secondary: 220 45% 18%;
-    --secondary-foreground: 211 60% 95%;
-    --muted: 220 45% 17%;
-    --muted-foreground: 214 25% 68%;
-    --accent: var(--aqua);
-    --accent-foreground: 222 47% 8%;
-    --destructive: 0 62% 45%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 219 40% 22%;
-    --input: 219 40% 22%;
-    --ring: var(--blue);
-    --sidebar: 221 60% 7%;
-    --sidebar-foreground: 211 60% 95%;
-    --sidebar-border: 219 40% 16%;
-  }
-}
+    --card-fill: rgba(10, 14, 23, 0.78);
+    --card-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.012));
+    --field-fill: rgba(255, 255, 255, 0.03);
+    --ghost-fill: rgba(255, 255, 255, 0.03);
+    --ghost-line-hover: rgba(255, 255, 255, 0.35);
+    --overlay: rgba(2, 4, 8, 0.72);
+    --modal-glow: radial-gradient(120% 60% at 50% -10%, rgba(255, 122, 26, 0.14), transparent 60%);
+    --ambient-opacity: 0.25;
+    --grid-line: rgba(148, 163, 184, 0.06);
 
-/* ============================================================
-   Christmas theme (seasonal skin)
-   Applied by adding `.christmas` to <html> — see src/lib/christmas.ts.
-   Only the semantic tokens are re-pointed, so every component picks the
-   festive palette up automatically without touching component code.
-   Contrast is kept at/above the original: deep evergreen text on a warm
-   off-white, and a Christmas red primary that still passes on white.
-   ============================================================ */
-@layer base {
-  .christmas {
-    --xmas-red: 355 72% 42%;        /* #B8202F  berry red  */
-    --xmas-red-bright: 355 78% 50%; /* #DC2436  ribbon red */
-    --xmas-green: 152 46% 22%;      /* #1E5138  evergreen  */
-    --xmas-green-deep: 155 52% 14%; /* #113124  pine shade */
-    --xmas-gold: 42 88% 46%;        /* #DEA10E  candlelight */
-    --xmas-cream: 30 40% 97%;       /* #FBF7F3  warm snow  */
-
-    --background: var(--xmas-cream);
-    --foreground: var(--xmas-green-deep);
-    --card: 0 0% 100%;
-    --card-foreground: var(--xmas-green-deep);
-    --popover: 0 0% 100%;
-    --popover-foreground: var(--xmas-green-deep);
-    --primary: var(--xmas-red);
-    --primary-foreground: 30 40% 98%;
-    --secondary: 150 30% 93%;
-    --secondary-foreground: var(--xmas-green);
-    --muted: 150 24% 94%;
-    --muted-foreground: 152 16% 36%;
-    --accent: var(--xmas-green);
-    --accent-foreground: 30 40% 98%;
-    --destructive: 0 72% 45%;
-    --destructive-foreground: 30 40% 98%;
-    --border: 150 20% 86%;
-    --input: 150 20% 86%;
-    --ring: var(--xmas-red);
-    --sidebar: var(--xmas-green-deep);
-    --sidebar-foreground: 30 40% 97%;
-    --sidebar-border: 152 40% 22%;
-  }
-
-  .christmas.dark {
-    /* Night-before-Christmas: deep pine field, warm snow type, red accents. */
-    --background: 155 42% 8%;
-    --foreground: 40 32% 94%;
-    --card: 155 36% 11%;
-    --card-foreground: 40 32% 94%;
-    --popover: 155 36% 11%;
-    --popover-foreground: 40 32% 94%;
-    /* 46% lightness keeps the button label at ~5.1:1 (WCAG AA); brighter
-       reds drop under 4.5:1 against the warm-white label. */
-    --primary: 355 78% 46%;
-    --primary-foreground: 40 32% 97%;
-    --secondary: 154 28% 17%;
-    --secondary-foreground: 40 32% 94%;
-    --muted: 154 26% 16%;
-    --muted-foreground: 145 16% 70%;
-    --accent: 42 80% 55%;
-    --accent-foreground: 155 42% 10%;
-    --destructive: 0 68% 50%;
-    --destructive-foreground: 40 32% 97%;
-    --border: 154 24% 21%;
-    --input: 154 24% 21%;
-    --ring: 355 78% 56%;   /* ring stays brighter — it is a focus cue, not text */
-    --sidebar: 155 48% 6%;
-    --sidebar-foreground: 40 32% 95%;
-    --sidebar-border: 154 28% 15%;
+    --background: 223 41% 3%;
+    --foreground: 217 40% 96%;
+    --card: 222 39% 6%;
+    --card-foreground: 217 40% 96%;
+    --popover: 222 39% 6%;
+    --popover-foreground: 217 40% 96%;
+    --primary: 25 100% 55%;
+    --primary-foreground: 23 100% 5%;
+    --secondary: 221 39% 10%;
+    --secondary-foreground: 217 40% 96%;
+    --muted: 221 39% 10%;
+    --muted-foreground: 216 14% 58%;
+    --accent: 222 26% 13%;
+    --accent-foreground: 217 40% 96%;
+    /* Light red with dark text: 7:1, where white-on-red never clears AA. */
+    --destructive: 0 91% 71%;
+    --destructive-foreground: 0 80% 6%;
+    --border: 222 17% 11%;
+    --input: 219 16% 17%;
+    --ring: 29 100% 68%;
+    --sidebar: 222 39% 6%;
+    --sidebar-foreground: 217 40% 96%;
+    --sidebar-border: 222 17% 11%;
   }
 }
 
@@ -146,9 +170,13 @@
   * {
     @apply border-border;
   }
+  html {
+    background: var(--bg);
+  }
   body {
     @apply bg-background text-foreground antialiased;
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+    font-family: var(--font);
+    line-height: 1.6;
     /* Native-app feel on phones: no grey tap flash, and no pull-to-refresh
        fighting the WebView / standalone PWA window. */
     -webkit-tap-highlight-color: transparent;
@@ -156,12 +184,49 @@
     -webkit-text-size-adjust: 100%;
     text-size-adjust: 100%;
   }
+  h1,
+  h2,
+  h3 {
+    letter-spacing: -0.025em;
+    text-wrap: balance;
+  }
   /* Removes the double-tap-to-zoom delay on tappable elements so clock-in
      buttons respond instantly on touch screens. */
   button,
   [role='button'],
   a {
     touch-action: manipulation;
+  }
+  /* One focus treatment everywhere: always visible, brand light-orange. */
+  :focus-visible {
+    outline: 2px solid var(--brand-2);
+    outline-offset: 3px;
+  }
+  ::selection {
+    background: rgb(var(--brand-rgb) / 0.3);
+  }
+
+  /* Data tables: mono uppercase headers, faint header band, row hover.
+     :where() keeps specificity at zero so any utility on a table wins. */
+  :where(thead) {
+    background: var(--surface);
+  }
+  :where(thead th) {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-3);
+  }
+  :where(tbody tr) {
+    transition: background-color 0.2s var(--ease);
+  }
+  :where(tbody tr:hover) {
+    background: var(--surface);
+  }
+  :where(td) {
+    font-variant-numeric: tabular-nums;
   }
 }
 
@@ -176,7 +241,257 @@
   }
 }
 
-/* Signal Orange — small, focused status/active-state cues only (brand rule #05) */
+/* ============================================================
+   Components
+   ============================================================ */
+@layer components {
+  /* Mono label — the PipelineSync signature for eyebrows, KPI labels,
+     table headers, timestamps and tags. */
+  .ps-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-3);
+  }
+
+  .ps-gradient-text {
+    background: var(--grad);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* ---------- Primary button: orange gradient pill with a hover sheen ---------- */
+  .ps-btn-primary {
+    position: relative;
+    overflow: hidden;
+    isolation: isolate;
+    color: #1a0a00;
+    font-weight: 600;
+    background: linear-gradient(180deg, #ffa357, #ff7a1a);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.45),
+      0 10px 30px -10px rgba(255, 122, 26, 0.8);
+    transition:
+      box-shadow 0.25s var(--ease),
+      transform 0.2s var(--ease),
+      filter 0.25s var(--ease);
+  }
+  .ps-btn-primary::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background: linear-gradient(105deg, transparent 30%, rgba(255, 255, 255, 0.45) 50%, transparent 70%);
+    transform: translateX(-120%);
+    pointer-events: none;
+  }
+  .ps-btn-primary:hover {
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.5),
+      0 14px 40px -10px rgba(255, 122, 26, 0.95);
+  }
+  .ps-btn-primary:hover::after {
+    transform: translateX(120%);
+    transition: transform 0.7s var(--ease);
+  }
+  .ps-btn-primary:active {
+    transform: scale(0.97);
+  }
+  .ps-btn-primary svg {
+    transition: transform 0.25s var(--ease);
+  }
+  .ps-btn-primary:hover svg.lucide-arrow-right,
+  .ps-btn-primary:hover svg.lucide-chevron-right {
+    transform: translateX(3px);
+  }
+
+  /* ---------- Ghost / secondary button ---------- */
+  .ps-btn-ghost {
+    background: var(--ghost-fill);
+    border: 1px solid var(--line-2);
+    color: var(--text);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    transition:
+      border-color 0.25s var(--ease),
+      background-color 0.25s var(--ease);
+  }
+  .ps-btn-ghost:hover {
+    border-color: var(--ghost-line-hover);
+    background: var(--surface-2);
+  }
+
+  /* ---------- Cards: gradient panel + pointer-following spotlight ----------
+     --mx/--my are set by src/lib/spotlight.ts on fine pointers only. */
+  .ps-card {
+    position: relative;
+    isolation: isolate;
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--line);
+    background-color: var(--card-fill);
+    background-image: var(--card-sheen);
+    box-shadow: var(--shadow);
+    transition:
+      transform 0.3s var(--ease),
+      border-color 0.3s var(--ease);
+  }
+  .ps-card::before,
+  .ps-card::after {
+    content: '';
+    position: absolute;
+    pointer-events: none;
+    border-radius: inherit;
+    opacity: 0;
+    transition: opacity 0.3s var(--ease);
+  }
+  .ps-card::before {
+    inset: 0;
+    z-index: -1;
+    background: radial-gradient(420px circle at var(--mx, 50%) var(--my, 0%), rgba(255, 122, 26, 0.1), transparent 45%);
+  }
+  /* Gradient border that lights up near the cursor, masked to 1px. */
+  .ps-card::after {
+    inset: -1px;
+    padding: 1px;
+    background: radial-gradient(
+      260px circle at var(--mx, 50%) var(--my, 0%),
+      rgba(255, 163, 87, 0.75),
+      rgb(var(--blue-rgb) / 0.45) 45%,
+      transparent 70%
+    );
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+  }
+  .ps-card[data-spot]::before,
+  .ps-card[data-spot]::after {
+    opacity: 1;
+  }
+  /* Small tiles (KPIs) lift on hover; large data panels stay put. */
+  .ps-card-lift:hover {
+    transform: translateY(-4px);
+  }
+
+  /* ---------- Icon tile ---------- */
+  .ps-icon-tile {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 46px;
+    height: 46px;
+    border-radius: 13px;
+    color: var(--brand-2);
+    background: linear-gradient(160deg, rgb(var(--brand-rgb) / 0.2), rgb(var(--brand-rgb) / 0.06));
+    border: 1px solid rgb(var(--brand-rgb) / 0.28);
+  }
+
+  /* ---------- Inputs / selects / textareas ---------- */
+  .ps-field {
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--line-2);
+    background-color: var(--field-fill);
+    color: var(--text);
+    transition:
+      border-color 0.2s var(--ease),
+      box-shadow 0.2s var(--ease);
+  }
+  .ps-field::placeholder {
+    color: var(--text-3);
+  }
+  .ps-field:focus,
+  .ps-field:focus-visible {
+    outline: none;
+    border-color: rgb(var(--brand-rgb) / 0.55);
+    box-shadow: 0 0 0 3px rgb(var(--brand-rgb) / 0.16);
+  }
+
+  /* ---------- Modals ---------- */
+  .ps-modal {
+    background-color: var(--bg-elev);
+    background-image: var(--modal-glow);
+    border: 1px solid var(--line-2);
+    box-shadow: var(--shadow);
+  }
+  .ps-modal[data-state='open'] {
+    animation: ps-modal-in 0.35s var(--ease) both;
+  }
+  .ps-modal[data-state='closed'] {
+    animation: ps-modal-out 0.2s var(--ease) both;
+  }
+  .ps-overlay {
+    background: var(--overlay);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+  }
+
+  /* ---------- Popovers (menus, select lists) ---------- */
+  .ps-popover {
+    background-color: var(--bg-elev);
+    border: 1px solid var(--line-2);
+    box-shadow: var(--shadow);
+  }
+
+  /* ---------- Glass chrome (mobile header, bottom nav) ---------- */
+  .ps-glass {
+    background: color-mix(in srgb, var(--bg) 72%, transparent);
+    -webkit-backdrop-filter: blur(18px) saturate(160%);
+    backdrop-filter: blur(18px) saturate(160%);
+    border-color: var(--line);
+  }
+}
+
+@keyframes ps-modal-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, calc(-50% + 16px)) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+@keyframes ps-modal-out {
+  to {
+    opacity: 0;
+    transform: translate(-50%, calc(-50% + 8px)) scale(0.98);
+  }
+}
+
+/* Live dot with an expanding "ping" ring (eyebrows, clocked-in state). */
+.ps-ping {
+  position: relative;
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--brand);
+  box-shadow: 0 0 10px rgb(var(--brand-rgb) / 0.8);
+}
+.ps-ping::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 1px solid var(--brand);
+  animation: ps-ping 1.8s var(--ease) infinite;
+}
+@keyframes ps-ping {
+  from {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+  to {
+    transform: scale(3);
+    opacity: 0;
+  }
+}
+
 @layer utilities {
   .animate-pulse-slow {
     animation: pulse 2.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
@@ -200,18 +515,134 @@
 }
 
 /* ============================================================
+   Ambient background — the signature PipelineSync atmosphere.
+   Blurred drifting orbs, a 64px grid fading out from the top, and a faint
+   noise grain. Fixed behind everything (negative z-index, no pointer
+   events) and kept dim in the app so data stays readable.
+   ============================================================ */
+.ps-ambient {
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  overflow: hidden;
+  pointer-events: none;
+}
+.ps-orb {
+  position: absolute;
+  border-radius: 999px;
+  filter: blur(90px);
+  opacity: var(--ambient-opacity);
+  will-change: transform;
+}
+.ps-orb-a {
+  top: -18vh;
+  left: -12vw;
+  width: 56vw;
+  height: 56vw;
+  max-width: 760px;
+  max-height: 760px;
+  background: var(--orb-a);
+  animation: ps-drift-a 26s ease-in-out infinite alternate;
+}
+.ps-orb-b {
+  top: -20vh;
+  right: -14vw;
+  width: 50vw;
+  height: 50vw;
+  max-width: 700px;
+  max-height: 700px;
+  background: var(--orb-b);
+  animation: ps-drift-b 30s ease-in-out infinite alternate;
+}
+.ps-orb-c {
+  top: 55vh;
+  left: 30vw;
+  width: 40vw;
+  height: 40vw;
+  max-width: 560px;
+  max-height: 560px;
+  background: var(--orb-c);
+  opacity: calc(var(--ambient-opacity) * 0.55);
+  animation: ps-drift-c 22s ease-in-out infinite alternate;
+}
+.ps-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(var(--grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+  background-size: 64px 64px;
+  -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 0%, #000 30%, transparent 75%);
+  mask-image: radial-gradient(ellipse 70% 60% at 50% 0%, #000 30%, transparent 75%);
+}
+.ps-noise {
+  position: absolute;
+  inset: 0;
+  opacity: 0.035;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+@keyframes ps-drift-a {
+  to {
+    transform: translate3d(8vw, 6vh, 0) scale(1.08);
+  }
+}
+@keyframes ps-drift-b {
+  to {
+    transform: translate3d(-7vw, 8vh, 0) scale(1.05);
+  }
+}
+@keyframes ps-drift-c {
+  to {
+    transform: translate3d(-10vw, -6vh, 0) scale(1.12);
+  }
+}
+
+/* ============================================================
+   Charts (recharts) — dark-aware grid, axes and tooltip
+   ============================================================ */
+.recharts-cartesian-grid line {
+  stroke: var(--line);
+}
+.recharts-cartesian-axis-tick-value {
+  fill: var(--text-3);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.recharts-cartesian-axis-line,
+.recharts-cartesian-axis-tick-line {
+  stroke: var(--line-2);
+}
+.recharts-default-tooltip {
+  background: var(--bg-elev) !important;
+  border: 1px solid var(--line-2) !important;
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  color: var(--text);
+}
+.recharts-tooltip-label {
+  font-family: var(--mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+}
+.recharts-legend-item-text {
+  color: var(--text-2) !important;
+}
+.recharts-tooltip-cursor {
+  fill: var(--surface-2);
+}
+
+/* ============================================================
    Section transition
    Moving between sections (Dashboard → Time Entries → Finance …) fades the
    new screen in while it settles up a few pixels, so the switch reads as one
    movement instead of a hard cut. `SectionTransition` remounts on a route
    change, which is what restarts this animation; tab switches *inside* a
    section keep the same key and stay instant.
-
-   Short and small on purpose: 220ms and 8px is enough to feel deliberate
-   without making people wait for their data.
    ============================================================ */
 .section-enter {
-  animation: section-enter var(--section-transition, 220ms) cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: section-enter var(--section-transition, 220ms) var(--ease) both;
   /* The slide starts 8px low, which would otherwise let the page paint over
      the sticky mobile header for a frame. */
   will-change: transform, opacity;
@@ -236,58 +667,24 @@
   }
 }
 
-
 /* ============================================================
-   Falling snow (Christmas theme)
-   The layer sits BEHIND the app's content on a negative z-index and never
-   takes pointer events, so it can never obscure text or swallow a click —
-   it shows through the page's translucent surfaces as background texture.
+   Reduced motion: everything is shown in its final, still state.
    ============================================================ */
-.snowfall {
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  overflow: hidden;
-  pointer-events: none;
-}
-
-.snowflake {
-  position: absolute;
-  top: -5vh;
-  display: block;
-  border-radius: 9999px;
-  background: #ffffff;
-  /* A soft halo keeps flakes visible on the light theme without needing
-     more opacity (which is what would start to hurt readability). */
-  box-shadow: 0 0 4px 1px rgba(255, 255, 255, 0.65);
-  will-change: transform;
-  animation-name: snow-fall;
-  animation-timing-function: linear;
-  animation-iteration-count: infinite;
-}
-
-/* On the light theme pure white flakes would vanish into the cream page, so
-   tint them a cool blue-grey and drop the glow. */
-:root:not(.dark) .snowflake {
-  background: #9fc0dd;
-  box-shadow: 0 0 4px 1px rgba(120, 160, 200, 0.4);
-}
-
-@keyframes snow-fall {
-  0% {
-    transform: translate3d(0, -5vh, 0);
-  }
-  100% {
-    transform: translate3d(var(--drift, 0px), 105vh, 0);
-  }
-}
-
-/* Respect a user's reduced-motion preference: keep a still dusting of snow
-   rather than animating it. */
 @media (prefers-reduced-motion: reduce) {
-  .snowflake {
+  .ps-modal[data-state='open'],
+  .ps-modal[data-state='closed'],
+  .ps-orb {
     animation: none;
-    transform: translate3d(0, 40vh, 0);
+  }
+  .ps-ping::after {
+    animation: none;
+    opacity: 0;
+  }
+  .ps-btn-primary::after {
+    display: none;
+  }
+  .ps-btn-primary:active,
+  .ps-card-lift:hover {
+    transform: none;
   }
 }
-

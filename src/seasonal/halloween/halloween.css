@@ -1,0 +1,243 @@
+/* Halloween seasonal skin — everything visual lives in this file.
+   Imported once from src/seasonal/halloween/index.ts. Every rule is scoped
+   to .halloween (or a halloween-* class), so with the season off it is inert. */
+
+/* ============================================================
+ Halloween theme (seasonal skin)
+ Applied by adding `.halloween` to <html> — see ./config.ts.
+ It layers on top of light/dark and only re-points tokens: the brand
+ orange becomes the pumpkin, the blue accent turns witch-purple and the
+ cyan turns slime-green. Every component follows automatically.
+ ============================================================ */
+:root.halloween {
+  --blue: #6d28d9;
+  --cyan: #4d7c0f;
+  --blue-rgb: 109 40 217;
+  --cyan-rgb: 77 124 15;
+  --grad: linear-gradient(115deg, #ffc285 0%, #ff7a1a 38%, #a974ff 78%, #7c3aed 100%);
+  --grad-soft: linear-gradient(135deg, rgba(255, 122, 26, 0.14), rgba(124, 58, 237, 0.12));
+  --chart-b: #8b5cf6;
+  --orb-b: #8b5cf6;
+  --orb-c: #84cc16;
+  --modal-glow: radial-gradient(120% 60% at 50% -10%, rgba(255, 122, 26, 0.1), transparent 60%),
+    radial-gradient(80% 50% at 100% 0%, rgba(124, 58, 237, 0.08), transparent 60%);
+
+  --background: 33 45% 96%; /* warm parchment */
+  --muted: 30 30% 93%;
+  --secondary: 30 30% 93%;
+  --accent: 268 40% 93%;
+  --border: 30 14% 86%;
+  --input: 30 12% 80%;
+}
+
+:root.halloween.dark,
+:root.halloween .dark {
+  --bg: #07050c;
+  --bg-elev: #0d0a16;
+  --bg-elev-2: #141022;
+  --blue: #a78bfa;
+  --cyan: #a3e635;
+  --blue-rgb: 167 139 250;
+  --cyan-rgb: 163 230 53;
+  --card-fill: rgba(13, 10, 22, 0.8);
+  --modal-glow: radial-gradient(120% 60% at 50% -10%, rgba(255, 122, 26, 0.16), transparent 60%),
+    radial-gradient(80% 50% at 100% 0%, rgba(139, 92, 246, 0.14), transparent 60%);
+  --ambient-opacity: 0.3;
+
+  --background: 260 41% 3%;
+  --card: 259 38% 6%;
+  --popover: 259 38% 6%;
+  --secondary: 256 36% 10%;
+  --muted: 256 36% 10%;
+  --muted-foreground: 255 12% 62%;
+  --accent: 262 30% 14%;
+  --border: 260 16% 12%;
+  --input: 260 15% 18%;
+  --sidebar: 259 38% 6%;
+  --sidebar-border: 260 16% 12%;
+}
+
+/* ============================================================
+   Halloween particles
+   Embers rise BEHIND the app's content on a negative
+   z-index with no pointer events — texture, never in the way of a click or
+   a line of text.
+   ============================================================ */
+.halloween-layer {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.halloween-ember {
+  position: absolute;
+  bottom: -2vh;
+  display: block;
+  border-radius: 999px;
+  background: #ff9a3c;
+  box-shadow: 0 0 8px 2px rgba(255, 122, 26, 0.55);
+  will-change: transform;
+  animation: ember-rise linear infinite;
+}
+.halloween-ember[data-tone='slime'] {
+  background: #a3e635;
+  box-shadow: 0 0 8px 2px rgba(132, 204, 22, 0.45);
+}
+.halloween:not(.dark) .halloween-ember {
+  box-shadow: 0 0 6px 1px rgba(255, 122, 26, 0.35);
+}
+
+@keyframes ember-rise {
+  0% {
+    transform: translate3d(0, 0, 0);
+    opacity: 0;
+  }
+  10%,
+  70% {
+    opacity: var(--peak, 0.4);
+  }
+  100% {
+    transform: translate3d(var(--drift, 0px), -105vh, 0);
+    opacity: 0;
+  }
+}
+
+/* ============================================================
+   Pumpkin live dot (replaces the orange "on the clock" ping)
+   ============================================================ */
+.halloween-pumpkin {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  filter: drop-shadow(0 0 6px rgba(255, 122, 26, 0.75));
+  animation: pumpkin-flicker 2.4s ease-in-out infinite;
+}
+.halloween-pumpkin .face {
+  animation: pumpkin-face 1.7s steps(1) infinite;
+}
+@keyframes pumpkin-flicker {
+  0%, 100% { filter: drop-shadow(0 0 6px rgba(255, 122, 26, 0.75)); }
+  22% { filter: drop-shadow(0 0 2px rgba(255, 122, 26, 0.4)); }
+  26% { filter: drop-shadow(0 0 9px rgba(255, 160, 60, 0.95)); }
+  60% { filter: drop-shadow(0 0 5px rgba(255, 122, 26, 0.65)); }
+}
+@keyframes pumpkin-face {
+  0%, 100% { fill: #ffd166; }
+  40% { fill: #ffe9a8; }
+  44% { fill: #f59e0b; }
+}
+
+/* ============================================================
+   Cobwebs in the corners — static, faint, never over content
+   ============================================================ */
+.halloween-cobweb {
+  position: absolute;
+  pointer-events: none;
+  color: #6b5a8e;
+  opacity: 0.32;
+}
+.halloween.dark .halloween-cobweb,
+.halloween .dark .halloween-cobweb {
+  color: #c4b5fd;
+  opacity: 0.16;
+}
+.halloween.dark .halloween-cobweb-page {
+  opacity: 0.24;
+}
+.halloween-cobweb-page {
+  top: 0;
+  right: 0;
+  width: 150px;
+  height: 150px;
+}
+.halloween-cobweb-sidebar {
+  top: 0;
+  left: 0;
+  width: 92px;
+  height: 92px;
+  transform: scaleX(-1);
+}
+
+/* ============================================================
+   Cursor embers (desktop, fine pointers only)
+   ============================================================ */
+.halloween-cursor-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+  overflow: hidden;
+}
+.halloween-spark {
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  margin: -2.5px 0 0 -2.5px;
+  border-radius: 999px;
+  background: #ff9a3c;
+  box-shadow: 0 0 6px 1px rgba(255, 122, 26, 0.7);
+  animation: spark-fade 0.5s ease-out forwards;
+}
+@keyframes spark-fade {
+  to {
+    transform: translate3d(var(--dx, 0px), var(--dy, 10px), 0) scale(0.2);
+    opacity: 0;
+  }
+}
+
+/* ============================================================
+   Clock-out ghost — floats up from where you clicked and fades
+   ============================================================ */
+.halloween-ghost {
+  position: fixed;
+  z-index: 70;
+  width: 44px;
+  height: 52px;
+  margin: -26px 0 0 -22px;
+  pointer-events: none;
+  color: #f8f5ff;
+  filter: drop-shadow(0 6px 14px rgba(139, 92, 246, 0.45));
+  animation: ghost-rise 1.9s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+@keyframes ghost-rise {
+  0% { opacity: 0; transform: translate3d(0, 10px, 0) scale(0.6); }
+  15% { opacity: 0.95; transform: translate3d(0, -10px, 0) scale(1); }
+  45% { transform: translate3d(-10px, -70px, 0) scale(1); }
+  75% { opacity: 0.8; transform: translate3d(8px, -120px, 0) scale(0.95); }
+  100% { opacity: 0; transform: translate3d(0, -170px, 0) scale(0.9); }
+}
+
+/* ============================================================
+   Candy-corn progress bars — stripes over the bar's own colour, so
+   whatever the colour means (on track / at risk) still reads.
+   ============================================================ */
+.halloween .ps-progress-fill {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    rgba(255, 214, 102, 0.55) 0 6px,
+    rgba(255, 255, 255, 0.5) 6px 12px,
+    transparent 12px 18px
+  );
+}
+
+/* ============================================================
+   Reduced motion: decorations stay, still.
+   ============================================================ */
+@media (prefers-reduced-motion: reduce) {
+  .halloween-pumpkin,
+  .halloween-pumpkin .face {
+    animation: none;
+  }
+  .halloween-ember {
+    animation: none;
+    transform: translate3d(0, calc(var(--rest, 40) * -1vh), 0);
+    opacity: var(--peak, 0.4);
+  }
+  .halloween-cursor-layer,
+  .halloween-ghost {
+    display: none;
+  }
+}

@@ -21,21 +21,21 @@ export function StatCard({
   accent?: boolean
 }) {
   return (
-    <Card className={cn(accent && 'border-primary/40 bg-primary/5', className)}>
+    <Card className={cn('ps-card-lift rounded-2xl', accent && 'border-brand/40 bg-brand/5', className)}>
       <CardContent className="p-5">
         <div className="flex items-start justify-between">
           <div className="space-y-1.5">
-            <p className="text-sm font-medium text-muted-foreground">{label}</p>
+            <p className="ps-label">{label}</p>
             {loading ? (
               <Skeleton className="h-8 w-24" />
             ) : (
-              <p className="text-2xl font-bold tracking-tight">{value}</p>
+              <p className="text-2xl font-semibold tracking-[-0.02em] tabular-nums">{value}</p>
             )}
-            {sub && <p className="text-xs text-muted-foreground">{sub}</p>}
+            {sub && <p className="font-mono text-xs text-muted-foreground">{sub}</p>}
           </div>
           {Icon && (
-            <div className="rounded-lg bg-muted p-2">
-              <Icon className="h-5 w-5 text-muted-foreground" />
+            <div className="ps-icon-tile h-10 w-10 sm:h-[46px] sm:w-[46px]">
+              <Icon className="h-5 w-5" />
             </div>
           )}
         </div>

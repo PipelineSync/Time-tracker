@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { formatDurationFromMs, timerElapsedMs } from '@/lib/utils'
+import { SeasonLiveDot } from '@/seasonal'
 import type { ActiveTimer } from '@/lib/types'
 
 /**
@@ -31,7 +32,11 @@ export function TimerDisplay({ ms, running, timer }: { ms?: number; running?: bo
   return (
     <div className="relative">
       {(running ?? !!(timer && !timer.paused)) && (
-        <span className="absolute -left-5 top-1/2 h-3 w-3 -translate-y-1/2 animate-pulse rounded-full bg-[#F77A0A]" aria-hidden />
+        <span className="absolute -left-6 top-1/2 flex -translate-y-1/2">
+          <SeasonLiveDot>
+            <span className="h-3 w-3 animate-pulse rounded-full bg-brand" aria-hidden />
+          </SeasonLiveDot>
+        </span>
       )}
       <div className="font-mono text-5xl font-bold tracking-tight tabular-nums sm:text-6xl">
         {formatDurationFromMs(displayMs)}

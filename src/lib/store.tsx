@@ -49,6 +49,7 @@ import { supabaseBackend, isSupabaseConfigured, ACCOUNT_DEACTIVATED_MESSAGE } fr
 import { toast } from 'sonner'
 import { notifySlack } from './slack'
 import { playCue, playCues, readTeamSoundsPref, writeTeamSoundsPref } from './sounds'
+import { emitAppEvent } from './appEvents'
 import { diffTimerSnapshots, snapshotsEqual, timerSnapshots, type TimerSnapshot } from './teamSounds'
 import { formatMinutes } from './utils'
 import { loadPersonalFinance, getOverdueRecurringPayments, money } from './personalFinance'
@@ -1016,6 +1017,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setActiveTimers((prev) => prev.filter((t) => t.id !== current.id))
     noteLocalTimerAction(current.id)
     playCue('clock_out')
+    emitAppEvent('clock_out', { minutes: res.data.total_minutes })
     const workerName = workers.find((w) => w.id === res.data!.worker_id)?.name || 'Someone'
     notifySlack('clock_out', {
       entry_id: res.data.id,
@@ -1529,6 +1531,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     await refreshTasks()
     if (previous && patch.status && previous.status !== patch.status) {
       const task = res.data
+      if (task.status === 'completed') emitAppEvent('task_completed', { title: task.title })
       const assignee = workers.find((w) => w.id === task.worker_id)?.name || 'Unassigned'
       const client = clients.find((c) => c.id === task.client_id)?.name || 'No client'
       const actor = isAdmin ? 'Admin' : (myWorker?.name || user?.email || 'A worker')
@@ -1573,6 +1576,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     await refreshTasks()
     if (previous && previous.status !== status) {
       const task = res.data
+      if (status === 'completed') emitAppEvent('task_completed', { title: task.title })
       const assignee = workers.find((w) => w.id === task.worker_id)?.name || 'Unassigned'
       const client = clients.find((c) => c.id === task.client_id)?.name || 'No client'
       const actor = isAdmin ? 'Admin' : (myWorker?.name || user?.email || 'A worker')

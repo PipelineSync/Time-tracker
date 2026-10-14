@@ -20,7 +20,8 @@ import { ClientDot } from '@/components/ClientBadge'
 import { daysUntil, dueLabel, financeByMonth, financeChartMonths, monthKeysBetween, subscriptionsPerMonth } from '@/lib/finance'
 import { Badge } from '@/components/ui/badge'
 
-const COLORS = ['#3b82f6', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899', '#84cc16']
+// PipelineSync series palette: brand orange first, then blue, cyan, green.
+const COLORS = ['#ff7a1a', '#5b8cff', '#3fd0ee', '#34d399', '#ffab5e', '#a78bfa', '#fbbf24', '#f87171']
 
 type Period = 'today' | 'week' | 'month' | 'custom'
 
@@ -364,7 +365,7 @@ export function ReportsPage() {
                   <XAxis dataKey="day" fontSize={12} />
                   <YAxis fontSize={12} />
                   <Tooltip formatter={(v: number) => [`${v}h`, 'Hours']} />
-                  <Bar dataKey="hours" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="hours" fill="url(#ps-bar)" radius={[6, 6, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             )}
@@ -384,7 +385,7 @@ export function ReportsPage() {
                   <XAxis dataKey="day" fontSize={12} />
                   <YAxis fontSize={12} />
                   <Tooltip formatter={(v: number) => [money(v, currency), 'Earnings']} />
-                  <Line type="monotone" dataKey="earnings" stroke="#22c55e" strokeWidth={2} dot={{ r: 3 }} />
+                  <Line type="monotone" dataKey="earnings" stroke="#ff7a1a" strokeWidth={2} dot={{ r: 3, fill: '#ff7a1a' }} />
                 </LineChart>
               </ResponsiveContainer>
             )}
@@ -520,10 +521,10 @@ export function ReportsPage() {
                     <YAxis fontSize={12} />
                     <Tooltip formatter={(v: number, key: string) => [money(v, currency), key === 'subscriptions' ? 'Subscriptions' : key === 'payroll' ? 'Payroll' : key === 'bills' ? 'Bills' : 'One-time expenses']} />
                     <Legend />
-                    <Bar dataKey="subscriptions" stackId="costs" fill="#8b5cf6" />
-                    <Bar dataKey="payroll" stackId="costs" fill="#3b82f6" />
-                    <Bar dataKey="bills" stackId="costs" fill="#f59e0b" />
-                    <Bar dataKey="expenses" stackId="costs" fill="#10b981" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="subscriptions" stackId="costs" fill="#5b8cff" />
+                    <Bar dataKey="payroll" stackId="costs" fill="#ff7a1a" />
+                    <Bar dataKey="bills" stackId="costs" fill="#3fd0ee" />
+                    <Bar dataKey="expenses" stackId="costs" fill="#ffab5e" radius={[6, 6, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
               )}

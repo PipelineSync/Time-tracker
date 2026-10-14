@@ -78,12 +78,12 @@ export function ActiveWorkersPanel() {
         </CardTitle>
         <div className="flex items-center gap-2">
           {workingCount > 0 && (
-            <Badge className="gap-1 border-transparent bg-[#F77A0A] text-white">
+            <Badge className="gap-1 border-brand/30 bg-brand/10 text-brand-2">
               {workingCount} working
             </Badge>
           )}
           {breakCount > 0 && (
-            <Badge className="gap-1 border-transparent bg-[#36B7C9] text-white">
+            <Badge className="gap-1 border-ps-cyan/30 bg-ps-cyan/10 text-ps-cyan">
               <Coffee className="h-3 w-3" /> {breakCount} on break
             </Badge>
           )}
@@ -96,7 +96,7 @@ export function ActiveWorkersPanel() {
               className={cn(
                 'flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors',
                 teamSoundsEnabled
-                  ? 'border-[#F77A0A]/40 bg-[#F77A0A]/10 text-[#b85c05] dark:text-[#ffb066]'
+                  ? 'border-brand/40 bg-brand/10 text-brand-2'
                   : 'text-muted-foreground hover:bg-muted'
               )}
             >
@@ -122,10 +122,10 @@ export function ActiveWorkersPanel() {
                     <span
                       className={cn(
                         'absolute inline-flex h-full w-full animate-ping rounded-full opacity-75',
-                        r.onBreak ? 'bg-[#36B7C9]' : 'bg-[#F77A0A]'
+                        r.onBreak ? 'bg-ps-cyan' : 'bg-brand'
                       )}
                     />
-                    <span className={cn('relative inline-flex h-3 w-3 rounded-full', r.onBreak ? 'bg-[#36B7C9]' : 'bg-[#F77A0A]')} />
+                    <span className={cn('relative inline-flex h-3 w-3 rounded-full', r.onBreak ? 'bg-ps-cyan' : 'bg-brand')} />
                   </span>
                   <AvatarBubble
                     name={r.worker?.name || r.name}
@@ -138,11 +138,11 @@ export function ActiveWorkersPanel() {
                       <p className="truncate font-semibold">{r.name}</p>
                       {r.worker?.color && <WorkerDot color={r.worker.color} />}
                       {r.onBreak ? (
-                        <Badge className="gap-1 border-transparent bg-[#36B7C9]/15 text-[#0d7c8c] dark:text-[#7fdbe8]">
+                        <Badge className="gap-1 border-transparent bg-ps-cyan/15 text-ps-cyan">
                           <Coffee className="h-3 w-3" /> On break
                         </Badge>
                       ) : (
-                        <Badge className="border-transparent bg-[#F77A0A]/15 text-[#b85c05] dark:text-[#ffb066]">Working</Badge>
+                        <Badge className="border-transparent bg-brand/15 text-brand-2">Working</Badge>
                       )}
                     </div>
                     <p className="truncate text-xs text-muted-foreground">

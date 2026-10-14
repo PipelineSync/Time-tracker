@@ -110,7 +110,7 @@ export function WorkersPage() {
                 key={w.id}
                 className={cn(
                   w.status === 'inactive' && 'opacity-70',
-                  timer && (onBreak ? 'border-[#36B7C9]/50' : 'border-[#F77A0A]/50')
+                  timer && (onBreak ? 'border-ps-cyan/50' : 'border-brand/50')
                 )}
               >
                 <CardContent className="p-5">
@@ -132,14 +132,14 @@ export function WorkersPage() {
                       </Badge>
                       {timer && (
                         onBreak ? (
-                          <Badge className="gap-1 border-transparent bg-[#36B7C9]/15 text-[#0d7c8c] dark:text-[#7fdbe8]">
+                          <Badge className="gap-1 border-transparent bg-ps-cyan/15 text-ps-cyan">
                             <Coffee className="h-3 w-3" /> On break
                           </Badge>
                         ) : (
-                          <Badge className="gap-1 border-transparent bg-[#F77A0A]/15 text-[#b85c05] dark:text-[#ffb066]">
+                          <Badge className="gap-1 border-transparent bg-brand/15 text-brand-2">
                             <span className="relative flex h-2 w-2">
-                              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#F77A0A] opacity-75" />
-                              <span className="relative inline-flex h-2 w-2 rounded-full bg-[#F77A0A]" />
+                              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand opacity-75" />
+                              <span className="relative inline-flex h-2 w-2 rounded-full bg-brand" />
                             </span>
                             Working
                           </Badge>

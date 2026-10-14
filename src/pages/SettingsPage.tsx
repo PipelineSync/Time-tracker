@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '@/lib/store'
+import { SeasonSettings } from '@/seasonal'
 import { useTheme } from '@/lib/theme'
 import { PageHeader } from '@/components/PageHeader'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -512,6 +513,7 @@ export function SettingsPage() {
                   </button>
                 ))}
               </div>
+              <SeasonSettings />
             </CardContent>
           </Card>
         </TabsContent>

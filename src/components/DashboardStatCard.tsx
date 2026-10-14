@@ -50,7 +50,7 @@ export function DashboardStatCard({
         {loading ? (
           <Skeleton className="h-7 w-16" />
         ) : (
-          <span className={cn('block text-2xl font-bold leading-tight tabular-nums', valueCls)}>{value}</span>
+          <span className={cn('block text-2xl font-semibold leading-tight tracking-[-0.02em] tabular-nums', valueCls)}>{value}</span>
         )}
         <span className="mt-0.5 block truncate text-sm font-medium">{label}</span>
         {sub && <span className={cn('block truncate text-xs', subCls ?? 'text-muted-foreground')}>{sub}</span>}
@@ -59,9 +59,9 @@ export function DashboardStatCard({
   )
 
   const base = cn(
-    'flex items-center gap-3 rounded-2xl border bg-card p-4 text-left shadow-sm transition',
-    onClick && 'cursor-pointer hover:border-primary/50 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-    active && 'ring-2 ring-primary/40 border-primary/40 bg-primary/5'
+    'ps-card ps-card-lift flex items-center gap-3 rounded-2xl p-4 text-left',
+    onClick && 'cursor-pointer hover:border-brand/40',
+    active && 'ring-2 ring-brand/40 border-brand/40 bg-brand/5'
   )
 
   if (onClick) {

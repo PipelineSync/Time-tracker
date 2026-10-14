@@ -14,6 +14,7 @@ import { Square, Pause, PlayCircle, LogIn, TimerReset, Repeat } from 'lucide-rea
 import { formatMinutes, money, timerBreakMs, timerElapsedMs, timerSessionStart, todayISO } from '@/lib/utils'
 import { clientColorStyles } from '@/lib/types'
 import { cn } from '@/lib/utils'
+import { SeasonLiveDot } from '@/seasonal'
 import { BRAND_ACTION_BUTTON } from '@/lib/brand'
 
 /**
@@ -202,10 +203,14 @@ export function TrackerPage() {
       />
 
       {myTimer ? (
-        <Card className="border-primary/40">
+        <Card className="border-brand/40">
           <CardHeader className="text-center">
-            <CardDescription className="flex items-center justify-center gap-2">
-              <span className={`h-2 w-2 animate-pulse rounded-full ${running ? 'bg-[#F77A0A]' : 'bg-[#36B7C9]'}`} />
+            <CardDescription className="ps-label flex items-center justify-center gap-2.5">
+              {running ? (
+                <SeasonLiveDot><span className="ps-ping" aria-hidden /></SeasonLiveDot>
+              ) : (
+                <span className="h-2 w-2 rounded-full bg-ps-cyan" aria-hidden />
+              )}
               {running ? 'On the clock' : 'On break'}
             </CardDescription>
             <CardTitle className="text-2xl">{workerProfile?.name || 'You'}</CardTitle>
@@ -215,14 +220,14 @@ export function TrackerPage() {
                   className={cn(
                     'inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-medium',
                     running
-                      ? 'bg-[#F77A0A]/15 text-[#b85c05] dark:text-[#ffb066]'
-                      : 'bg-[#36B7C9]/15 text-[#0d7c8c] dark:text-[#7fdbe8]'
+                      ? 'bg-brand/15 text-brand-2'
+                      : 'bg-ps-cyan/15 text-ps-cyan'
                   )}
                 >
                   <span
                     className={cn(
                       'h-2 w-2 rounded-full',
-                      currentClientDot ? currentClientDot.dot : running ? 'bg-[#F77A0A]' : 'bg-[#36B7C9]'
+                      currentClientDot ? currentClientDot.dot : running ? 'bg-brand' : 'bg-ps-cyan'
                     )}
                     style={currentClientDot?.dotStyle}
                   />
@@ -232,7 +237,7 @@ export function TrackerPage() {
             )}
           </CardHeader>
           <CardContent className="flex flex-col items-center space-y-6">
-            <div className="rounded-2xl bg-primary/5 px-10 py-8">
+            <div className="rounded-2xl border border-[var(--line)] [background-image:var(--grad-soft)] px-10 py-8">
               <TimerDisplay timer={myTimer} />
             </div>
             <p className="text-sm text-muted-foreground">Clocked in {new Date(timerSessionStart(myTimer)).toLocaleString()}</p>
@@ -267,17 +272,17 @@ export function TrackerPage() {
           </CardContent>
         </Card>
       ) : (
-        <Card className="border-primary/40 bg-primary/5">
+        <Card className="border-brand/40">
           <CardHeader className="text-center">
             <CardTitle className="text-2xl">{workerProfile?.name || 'Welcome'}</CardTitle>
           </CardHeader>
           <CardContent className="flex flex-col items-center gap-6">
-            <div className="rounded-2xl bg-background px-10 py-8 dark:bg-white/5">
+            <div className="rounded-2xl border border-[var(--line)] bg-[var(--surface)] px-10 py-8">
               <TimerDisplay ms={0} running={false} />
             </div>
             <Button
               size="lg"
-              className={cn('gap-2 px-10 text-base', BRAND_ACTION_BUTTON)}
+              className={cn('h-14 gap-2 px-10 text-base', BRAND_ACTION_BUTTON)}
               onClick={() => setClockInOpen(true)}
               disabled={starting || !currentWorkerId || noActiveClients}
               title={noActiveClients ? 'Add a client before clocking in' : undefined}

@@ -125,13 +125,20 @@ A **very small circle with a question mark** sits at the **upper-left of the sec
 
 The copy is plain data in **`src/lib/faq.ts`** — one list per role — and `FaqButton` only renders it, so editing an answer is a one-line change with no component work (and no backend, table or policy: the button is pure UI). `npm run verify:faq` keeps both lists honest (no empty, duplicated or id-colliding entries).
 
-### Christmas theme 🎄
-The app ships with a **seasonal Christmas skin**, on by default:
-- **Logo wearing a Santa hat** — an SVG hat is tilted over the "S" of the PipelineSync mark (`src/components/SantaHat.tsx`). It is positioned and scaled as a fraction of the logo's *height*, with per-variant offsets measured from the two logo files, so it sits correctly on the light and dark lockups at every size (sidebar, mobile header, sign-in card).
-- **Festive palette** — a Christmas-red primary, evergreen accents and a warm-snow background replace the brand blues, in both light and dark mode. Only the semantic theme tokens are re-pointed, so every component picks it up with no component-level changes. **All text pairings were contrast-checked and meet WCAG AA** (the dark-mode button red was darkened to 46% lightness specifically to clear 4.5:1).
-- **Falling snow** — a semi-transparent snowfall layer (`src/components/Snowfall.tsx`). It is deliberately unobtrusive: it sits at `z-index: -1` **behind all content**, is `pointer-events-none` (never swallows a click), uses small low-opacity flakes (12–38%), and freezes for anyone with `prefers-reduced-motion`. **Text readability is unaffected.**
+### PipelineSync theme
+The UI follows the **PipelineSync brand theme** (the dark, animated look of pipelinesync.net):
+- **Design tokens** live in `src/index.css` — the brand tokens (`--bg`, `--text`, `--brand`, `--grad` …) plus the shadcn semantic tokens Tailwind reads, so components never hard-code colours. **Dark mode** uses the brand spec verbatim; **light mode** is a matching daylight version of the same palette (the Light / Dark / System switch is unchanged). The sidebar keeps the dark brand chrome in both modes.
+- **Type**: Geist and Geist Mono, self-hosted via `@fontsource` (no cross-origin font requests, so the CSP stays at `'self'`). Mono uppercase labels mark KPI labels, table headers and tags.
+- **Components**: orange gradient pill for the primary action (hover sheen, press scale), ghost pills for everything else, gradient cards with a pointer-following spotlight (`src/lib/spotlight.ts`, fine pointers only), pill tabs, orange-focus inputs and blurred modals.
+- **Atmosphere**: drifting blurred orbs, a fading 64px grid and a faint noise grain behind the app (`src/components/AmbientBackground.tsx`), kept dim so data stays readable. Charts use the orange → blue brand gradient.
+- **Reduced motion**: every animation is turned off for `prefers-reduced-motion: reduce`; nothing is ever left hidden.
 
-To ship the normal brand skin instead, build with `VITE_CHRISTMAS_THEME=off` — that removes the hat, the palette and the snow in one switch (`src/lib/christmas.ts`).
+### Halloween theme 🎃
+A **seasonal Halloween skin** runs automatically **during October** (it switches itself off on November 1): a pumpkin/purple/slime palette, a witch hat on the logo, embers behind the app, a flickering pumpkin "on the clock" dot, corner cobwebs, an ember trail behind the mouse, candy-corn progress bars, a ghost that floats up when you clock out, and spooky clock sounds. Everything respects `prefers-reduced-motion` and never takes a click.
+
+- Turn it off on one device: **Settings → Appearance → Halloween decorations**.
+- Turn it off for everyone: build with `VITE_HALLOWEEN_THEME=off` (`on` forces it outside October).
+- Remove it for good: see [`src/seasonal/halloween/README.md`](src/seasonal/halloween/README.md). It's one line in `src/seasonal/index.ts` plus deleting the folder.
 
 ### Notifications
 A notification bell (with an unread badge) appears for both roles. The admin is notified when a worker **clocks in**, **starts a break**, **comes back from a break**, **clocks out**, or **adds a note**. Workers are notified when the **admin replies to a note**, **adds time** for them, creates a **payment**, or changes a **payment status**. Clicking a notification opens the related entry.

@@ -69,7 +69,7 @@ async function testLocalBackend() {
   assert(normalizeWorkerColor(undefined) === null, 'normalizeWorkerColor returns null for undefined')
 
   // 3. workerColorStyles
-  assert(workerColorStyles('blue')?.chart === '#0868D9', 'workerColorStyles resolves blue chart hex')
+  assert(workerColorStyles('blue')?.chart === '#5b8cff', 'workerColorStyles resolves blue chart hex')
   assert(workerColorStyles('#123456')?.chart === '#123456', 'workerColorStyles resolves custom hex')
   assert(workerColorStyles(null) === null, 'workerColorStyles returns null for unset')
   assert(workerColorStyles('bad-tag') === null, 'workerColorStyles returns null for bad tag')

@@ -1,9 +1,11 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import type { Theme } from './types'
 import { storage } from './storage'
-import { isChristmasTheme } from './christmas'
+import { useSeasonClass } from '@/seasonal'
 
 const KEY = 'wt_theme'
+/** Every seasonal class theme-init.js may add before the app boots. */
+const SEASON_CLASSES = ['halloween']
 
 interface ThemeCtx {
   theme: Theme
@@ -35,15 +37,22 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const resolved: 'light' | 'dark' = theme === 'system' ? (systemDark ? 'dark' : 'light') : theme
+  const seasonClass = useSeasonClass()
 
   useEffect(() => {
     const root = document.documentElement
     root.classList.remove('light', 'dark')
     root.classList.add(resolved)
-    // The seasonal skin layers on top of light/dark rather than replacing it,
-    // so both `.christmas` and `.christmas.dark` are meaningful.
-    root.classList.toggle('christmas', isChristmasTheme())
   }, [resolved])
+
+  // The seasonal skin layers on top of light/dark rather than replacing it
+  // (see src/seasonal). theme-init.js may have added it before first paint;
+  // this keeps it in step with the season and the Settings switch.
+  useEffect(() => {
+    const root = document.documentElement
+    for (const c of SEASON_CLASSES) if (c !== seasonClass) root.classList.remove(c)
+    if (seasonClass) root.classList.add(seasonClass)
+  }, [seasonClass])
 
   const setTheme = (t: Theme) => {
     storage.setItem(KEY, t)

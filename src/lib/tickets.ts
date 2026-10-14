@@ -83,14 +83,14 @@ export function ticketStatusLabel(status: TicketStatus | null | undefined): stri
  */
 export const TICKET_PRIORITY_BADGE: Record<TicketPriority, string> = {
   low: 'bg-muted text-muted-foreground',
-  medium: 'bg-[#36B7C9]/15 text-[#0d7c8c] dark:text-[#7fdbe8]',
+  medium: 'bg-ps-cyan/15 text-ps-cyan',
   high: 'bg-destructive/15 text-destructive',
 }
 
 /** Status badge styling — resolved goes quiet, open is the loud one. */
 export const TICKET_STATUS_BADGE: Record<TicketStatus, string> = {
-  open: 'bg-[#F77A0A]/15 text-[#b85c05] dark:text-[#ffb066]',
-  in_progress: 'bg-[#36B7C9]/15 text-[#0d7c8c] dark:text-[#7fdbe8]',
+  open: 'bg-brand/15 text-brand-2',
+  in_progress: 'bg-ps-cyan/15 text-ps-cyan',
   resolved: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400',
 }
 

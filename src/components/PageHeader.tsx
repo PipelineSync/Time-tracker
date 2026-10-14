@@ -22,7 +22,7 @@ export function PageHeader({
             heading sizes (text-2xl and sm:text-3xl). */}
         {leading && <div className="pt-1 sm:pt-1.5">{leading}</div>}
         <div className="space-y-1">
-          <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">{title}</h1>
+          <h1 className="text-[28px] font-semibold leading-[1.1] tracking-[-0.03em] sm:text-[32px]">{title}</h1>
           {description && <p className="text-sm text-muted-foreground">{description}</p>}
         </div>
       </div>

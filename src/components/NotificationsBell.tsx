@@ -17,12 +17,12 @@ import type { NotificationType } from '@/lib/types'
 
 const typeMeta: Record<NotificationType, { icon: LucideIcon; color: string }> = {
   note: { icon: MessageSquare, color: 'text-primary' },
-  time_in: { icon: LogIn, color: 'text-[#36B7C9]' },
-  time_out: { icon: LogOut, color: 'text-[#F77A0A]' },
-  time_added: { icon: Plus, color: 'text-[#36B7C9]' },
+  time_in: { icon: LogIn, color: 'text-ps-cyan' },
+  time_out: { icon: LogOut, color: 'text-brand-2' },
+  time_added: { icon: Plus, color: 'text-ps-cyan' },
   payment: { icon: Wallet, color: 'text-emerald-600' },
-  break_start: { icon: Coffee, color: 'text-[#36B7C9]' },
-  break_end: { icon: Play, color: 'text-[#F77A0A]' },
+  break_start: { icon: Coffee, color: 'text-ps-cyan' },
+  break_end: { icon: Play, color: 'text-brand-2' },
   // IT Support tickets — a submission or a reply waiting on someone.
   ticket: { icon: Headset, color: 'text-violet-600' },
 }
@@ -44,7 +44,7 @@ export function NotificationsBell({ onNavy }: { onNavy?: boolean }) {
         <Button variant="ghost" size="icon" aria-label="Notifications" className={cn('relative', bellCls)}>
           <Bell className="h-5 w-5" />
           {unreadCount > 0 && (
-            <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#F77A0A] px-1 text-[10px] font-bold text-white">
+            <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-brand px-1 font-mono text-[10px] font-bold text-[#1a0a00]">
               {unreadCount > 99 ? '99+' : unreadCount}
             </span>
           )}
@@ -81,7 +81,7 @@ export function NotificationsBell({ onNavy }: { onNavy?: boolean }) {
                       ? 'border-l-transparent'
                       : isOverdue
                       ? 'border-l-rose-500 bg-rose-500/10'
-                      : 'border-l-[#F77A0A] bg-[#F77A0A]/5'
+                      : 'border-l-brand bg-brand/5'
                   )}
                   onClick={() => {
                     // A note opens its entry; a ticket notification opens that
@@ -108,7 +108,7 @@ export function NotificationsBell({ onNavy }: { onNavy?: boolean }) {
                   </div>
                   {!n.read && (
                     <span
-                      className={cn('mt-1 h-2 w-2 shrink-0 rounded-full', isOverdue ? 'bg-rose-500' : 'bg-[#F77A0A]')}
+                      className={cn('mt-1 h-2 w-2 shrink-0 rounded-full', isOverdue ? 'bg-rose-500' : 'bg-brand')}
                     />
                   )}
                 </DropdownMenuItem>
