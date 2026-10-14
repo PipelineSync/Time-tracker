@@ -182,6 +182,11 @@ export interface Settings {
   timezone: string
   default_hourly_rate: number
   avatar_url: string | null
+  /**
+   * Workspace switch for the in-app AI assistant. Missing (an older database
+   * without supabase/RUN-THIS-ai-assistant.sql) counts as on.
+   */
+  ai_assistant_enabled?: boolean
 }
 
 // ---- Worker permissions ----------------------------------------------------
