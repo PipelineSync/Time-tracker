@@ -19,8 +19,7 @@ import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { initNativeShell } from '@/lib/native'
 import { isNativeShell } from '@/lib/platform'
 import { installAudioUnlock } from '@/lib/sounds'
-import { isHalloweenTheme } from '@/lib/halloween'
-import { HalloweenLayer } from '@/components/HalloweenLayer'
+import { installSeason, SeasonLayer } from '@/seasonal'
 import { AmbientBackground } from '@/components/AmbientBackground'
 import { installCardSpotlight } from '@/lib/spotlight'
 import './index.css'
@@ -34,7 +33,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         <StoreProvider>
           <AmbientBackground />
           <App />
-          {isHalloweenTheme() && <HalloweenLayer />}
+          <SeasonLayer />
           <Toaster position="top-center" richColors closeButton />
         </StoreProvider>
       </ErrorBoundary>
@@ -60,6 +59,9 @@ void initNativeShell()
 // sound before the first real interaction. Arm the audio context on it, so the
 // very first clock-in of a session is not silently swallowed.
 installAudioUnlock()
+
+// Seasonal extras (spooky sounds, treat milestones) — a no-op out of season.
+installSeason()
 
 // Cards light up around the cursor (fine pointers only, off for reduced motion).
 installCardSpotlight()

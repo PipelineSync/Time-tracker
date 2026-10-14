@@ -28,7 +28,7 @@ import { storage } from './storage'
 export type SoundCue = 'clock_in' | 'clock_out' | 'break_start' | 'break_end'
 
 /** A single beep: frequency, offset from the start of the cue, length. */
-interface Tone {
+export interface Tone {
   freq: number
   /** Seconds after the cue starts. */
   at: number
@@ -38,7 +38,7 @@ interface Tone {
   gain?: number
 }
 
-interface CueDef {
+export interface CueDef {
   label: string
   wave: OscillatorType
   /** Overall level of this cue, before the master gain. */
@@ -90,6 +90,21 @@ export const CUES: Record<SoundCue, CueDef> = {
       { freq: 880.0, at: 0.11, dur: 0.18 }, // A5
     ],
   },
+}
+
+/**
+ * Seasonal skins may swap in their own version of a cue (see src/seasonal).
+ * The override is asked at play time, so turning a season off takes effect on
+ * the very next cue. Returning undefined keeps the standard sound.
+ */
+let cueOverride: ((cue: SoundCue) => CueDef | undefined) | null = null
+
+export function setCueOverride(fn: ((cue: SoundCue) => CueDef | undefined) | null): void {
+  cueOverride = fn
+}
+
+function cueDef(cue: SoundCue): CueDef {
+  return cueOverride?.(cue) ?? CUES[cue]
 }
 
 /** Order cues are played (and deduped) in. */
@@ -149,7 +164,7 @@ function getCtx(): AudioContext | null {
  * tail of the last note inside the envelope rather than being cut off by it.
  */
 export function cueDuration(cue: SoundCue): number {
-  const def = CUES[cue]
+  const def = cueDef(cue)
   return def.tones.reduce((end, t) => Math.max(end, t.at + t.dur), 0)
 }
 
@@ -184,8 +199,7 @@ function scheduleTone(audio: AudioContext, dest: AudioNode, tone: Tone, wave: Os
  * needs almost none; a waking one gets enough that several cues scheduled in
  * the same instant still come out one after the other instead of stacked.
  */
-function scheduleCue(audio: AudioContext, dest: AudioNode, cue: SoundCue, lead: number) {
-  const def = CUES[cue]
+function scheduleCue(audio: AudioContext, dest: AudioNode, def: CueDef, lead: number) {
   const t0 = audio.currentTime + lead
   for (const tone of def.tones) scheduleTone(audio, dest, tone, def.wave, t0 + tone.at, def.level)
 }
@@ -213,12 +227,32 @@ export function playCue(cue: SoundCue, opts?: { minGapMs?: number }): boolean {
   if (waking) void audio.resume().catch(() => undefined)
   lastPlayedAt.set(cue, now)
   try {
-    scheduleCue(audio, master, cue, waking ? WAKE_LEAD_SEC : PLAY_LEAD_SEC)
+    scheduleCue(audio, master, cueDef(cue), waking ? WAKE_LEAD_SEC : PLAY_LEAD_SEC)
   } catch {
     return false
   }
   // Contexts left open and idle get suspended by the browser; touching the
   // clock keeps ours warm between actions instead of it coming back cold.
+  keepWarm()
+  return true
+}
+
+/**
+ * Play a one-off sound that is not one of the four clock cues (a seasonal
+ * flourish, say). Same rules as `playCue`: silent before the first gesture,
+ * never throws.
+ */
+export function playSound(def: CueDef): boolean {
+  const audio = getCtx()
+  if (!audio || !master) return false
+  const waking = audio.state !== 'running'
+  if (waking && !unlockedByGesture) return false
+  if (waking) void audio.resume().catch(() => undefined)
+  try {
+    scheduleCue(audio, master, def, waking ? WAKE_LEAD_SEC : PLAY_LEAD_SEC)
+  } catch {
+    return false
+  }
   keepWarm()
   return true
 }

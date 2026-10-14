@@ -748,7 +748,7 @@ export function FinancePage() {
                                 aria-valuemax={100}
                                 aria-valuenow={share}
                               >
-                                <div className={cn('h-full rounded-full transition-all', accent)} style={{ width: `${share}%` }} />
+                                <div className={cn('ps-progress-fill h-full rounded-full transition-all', accent)} style={{ width: `${share}%` }} />
                               </div>
                             </div>
                           )

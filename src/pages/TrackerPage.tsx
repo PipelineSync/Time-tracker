@@ -14,6 +14,7 @@ import { Square, Pause, PlayCircle, LogIn, TimerReset, Repeat } from 'lucide-rea
 import { formatMinutes, money, timerBreakMs, timerElapsedMs, timerSessionStart, todayISO } from '@/lib/utils'
 import { clientColorStyles } from '@/lib/types'
 import { cn } from '@/lib/utils'
+import { SeasonLiveDot } from '@/seasonal'
 import { BRAND_ACTION_BUTTON } from '@/lib/brand'
 
 /**
@@ -205,7 +206,11 @@ export function TrackerPage() {
         <Card className="border-brand/40">
           <CardHeader className="text-center">
             <CardDescription className="ps-label flex items-center justify-center gap-2.5">
-              {running ? <span className="ps-ping" aria-hidden /> : <span className="h-2 w-2 rounded-full bg-ps-cyan" aria-hidden />}
+              {running ? (
+                <SeasonLiveDot><span className="ps-ping" aria-hidden /></SeasonLiveDot>
+              ) : (
+                <span className="h-2 w-2 rounded-full bg-ps-cyan" aria-hidden />
+              )}
               {running ? 'On the clock' : 'On break'}
             </CardDescription>
             <CardTitle className="text-2xl">{workerProfile?.name || 'You'}</CardTitle>

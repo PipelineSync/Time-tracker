@@ -1,4 +1,6 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
+import { onAppEvent } from '@/lib/appEvents'
+import { Cobweb } from './Cobweb'
 
 /**
  * Halloween atmosphere: a few bats flitting across the viewport and embers
@@ -64,12 +66,85 @@ function Bat() {
   )
 }
 
+const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
+/**
+ * A short trail of embers behind the mouse. Fine pointers only (never on
+ * touch), throttled, and capped so it can never pile up.
+ */
+function useCursorSparks(host: React.RefObject<HTMLDivElement>) {
+  useEffect(() => {
+    if (!window.matchMedia('(pointer: fine)').matches) return
+    let last = 0
+    let alive = 0
+    const onMove = (e: PointerEvent) => {
+      if (e.pointerType !== 'mouse' || reducedMotion() || !host.current) return
+      const now = performance.now()
+      if (now - last < 45 || alive >= 12) return
+      last = now
+      const spark = document.createElement('span')
+      spark.className = 'halloween-spark'
+      spark.style.left = `${e.clientX}px`
+      spark.style.top = `${e.clientY}px`
+      spark.style.setProperty('--dx', `${(Math.random() - 0.5) * 16}px`)
+      spark.style.setProperty('--dy', `${6 + Math.random() * 12}px`)
+      alive++
+      spark.addEventListener('animationend', () => {
+        spark.remove()
+        alive--
+      })
+      host.current.appendChild(spark)
+    }
+    window.addEventListener('pointermove', onMove, { passive: true })
+    return () => window.removeEventListener('pointermove', onMove)
+  }, [host])
+}
+
+const GHOST_SVG = `<svg viewBox="0 0 44 52" width="44" height="52" aria-hidden="true"><path fill="currentColor" d="M22 2C11 2 4 10 4 21v27l6-5 6 5 6-5 6 5 6-5 6 5V21C40 10 33 2 22 2z"/><ellipse cx="16" cy="21" rx="3" ry="4" fill="#1b0f30"/><ellipse cx="28" cy="21" rx="3" ry="4" fill="#1b0f30"/><ellipse cx="22" cy="31" rx="3.2" ry="2.4" fill="#1b0f30"/></svg>`
+
+/**
+ * On clock-out, a little ghost floats up from where you clicked and fades
+ * away. Nothing else changes: the clock-out itself has already happened.
+ */
+function useClockOutGhost(host: React.RefObject<HTMLDivElement>) {
+  useEffect(() => {
+    let x = window.innerWidth / 2
+    let y = window.innerHeight * 0.6
+    const remember = (e: PointerEvent) => {
+      x = e.clientX
+      y = e.clientY
+    }
+    window.addEventListener('pointerdown', remember, { passive: true, capture: true })
+    const off = onAppEvent('clock_out', () => {
+      if (reducedMotion() || !host.current) return
+      const ghost = document.createElement('span')
+      ghost.className = 'halloween-ghost'
+      ghost.style.left = `${x}px`
+      ghost.style.top = `${y}px`
+      ghost.innerHTML = GHOST_SVG
+      ghost.addEventListener('animationend', () => ghost.remove())
+      host.current.appendChild(ghost)
+    })
+    return () => {
+      window.removeEventListener('pointerdown', remember, { capture: true })
+      off()
+    }
+  }, [host])
+}
+
 export function HalloweenLayer() {
   const embers = useMemo(makeEmbers, [])
   const bats = useMemo(makeBats, [])
+  const fx = useRef<HTMLDivElement>(null)
+  useCursorSparks(fx)
+  useClockOutGhost(fx)
 
   return (
+    <>
+    {/* Above content but click-through: cursor sparks and the clock-out ghost. */}
+    <div ref={fx} className="halloween-cursor-layer" aria-hidden="true" />
     <div className="halloween-layer" aria-hidden="true">
+      <Cobweb className="halloween-cobweb-page" />
       {embers.map((e, i) => (
         <span
           key={`e${i}`}
@@ -105,5 +180,6 @@ export function HalloweenLayer() {
         </span>
       ))}
     </div>
+    </>
   )
 }

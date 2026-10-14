@@ -31,6 +31,7 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { BrandLogo } from '@/components/BrandLogo'
 import { NotificationsBell } from '@/components/NotificationsBell'
+import { SeasonHeaderExtras, SeasonSidebarDecor } from '@/seasonal'
 import { SectionTransition } from '@/components/SectionTransition'
 import { ChangePasswordDialog } from '@/components/ChangePasswordDialog'
 import {
@@ -211,6 +212,7 @@ export function AppLayout() {
           scopes the dark tokens to it, so its controls read correctly even
           when the page itself is in light mode. */}
       <aside className="dark fixed inset-y-0 left-0 z-30 hidden w-64 flex-col border-r border-[var(--line)] bg-sidebar text-foreground lg:flex">
+        <SeasonSidebarDecor />
         <div className="flex h-16 items-center border-b border-[var(--line)] px-6">
           <BrandLogo onNavy />
         </div>
@@ -272,6 +274,7 @@ export function AppLayout() {
               {isDemo && <DemoModeBadge />}
             </div>
             <div className="flex items-center gap-1">
+              <SeasonHeaderExtras />
               <NotificationsBell />
               <ThemeToggle />
               {UserMenu}
@@ -283,7 +286,7 @@ export function AppLayout() {
       {/* Main content */}
       <main className="px-4 pb-24 pt-6 sm:px-6 lg:ml-64 lg:pb-10">
         <div className="mx-auto max-w-6xl">
-          <div className="mb-2 hidden justify-end lg:flex"><NotificationsBell /></div>
+          <div className="mb-2 hidden justify-end gap-1 lg:flex"><SeasonHeaderExtras /><NotificationsBell /></div>
           {/* Changing section fades + settles the new screen in (CSS only, and
               off for `prefers-reduced-motion`). The bell above stays put: only
               the page content moves, so the chrome never jitters. */}

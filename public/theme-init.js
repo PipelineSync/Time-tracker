@@ -12,11 +12,12 @@
       (stored !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches)
     document.documentElement.classList.add(dark ? 'dark' : 'light')
     // Seasonal skin, applied before first paint so the spooky palette
-    // never flashes in as the bundle boots. This pre-paint hint is
-    // always added; if the build disabled the theme
-    // (VITE_HALLOWEEN_THEME=off) the app removes the class on mount —
-    // see src/lib/theme.tsx.
-    document.documentElement.classList.add('halloween')
+    // never flashes in as the bundle boots: October only, unless this
+    // device switched it off in Settings. The app re-checks on mount
+    // (build flag VITE_HALLOWEEN_THEME included) — see src/seasonal.
+    if (new Date().getMonth() === 9 && localStorage.getItem('wt_halloween') !== 'off') {
+      document.documentElement.classList.add('halloween')
+    }
   } catch (e) {
     /* private mode: default to light */
   }

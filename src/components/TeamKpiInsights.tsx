@@ -186,7 +186,7 @@ export function GoalProgressCard({
                 </span>
                 <span className="block h-2.5 w-full overflow-hidden rounded-full bg-muted">
                   <span
-                    className={cn('block h-full rounded-full transition-all', barColor)}
+                    className={cn('ps-progress-fill block h-full rounded-full transition-all', barColor)}
                     style={{ width: `${pct ?? 0}%` }}
                   />
                 </span>

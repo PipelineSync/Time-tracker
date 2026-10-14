@@ -134,12 +134,11 @@ The UI follows the **PipelineSync brand theme** (the dark, animated look of pipe
 - **Reduced motion**: every animation is turned off for `prefers-reduced-motion: reduce`; nothing is ever left hidden.
 
 ### Halloween theme 🎃
-The app ships with a **seasonal Halloween skin**, on by default, layered on top of light and dark mode:
-- **Logo wearing a witch hat** — an SVG hat is tilted over the "S" of the PipelineSync mark (`src/components/WitchHat.tsx`). It is positioned and scaled as a fraction of the logo's *height*, with per-variant offsets measured from the two logo files, so it sits correctly on the light and dark lockups at every size.
-- **Spooky palette** — the brand orange becomes the pumpkin, the blue accent turns witch-purple and the cyan turns slime-green; dark mode gets a deep purple-black field. Only tokens are re-pointed, so every component follows with no component-level changes.
-- **Bats and embers** — a few faint bats flit across and tiny embers rise (`src/components/HalloweenLayer.tsx`). The layer sits at `z-index: -1` **behind all content**, is `pointer-events-none`, and parks everything in place for `prefers-reduced-motion`. **Text readability is unaffected.**
+A **seasonal Halloween skin** runs automatically **during October** (it switches itself off on November 1): a pumpkin/purple/slime palette, a witch hat on the logo, bats and embers behind the app, a flickering pumpkin "on the clock" dot, corner cobwebs, an ember trail behind the mouse, candy-corn progress bars, a ghost that floats up when you clock out, a trick-or-treat candy bag in the header (treats for finished tasks, clock-outs and 8-hour days, kept in the browser only), and spooky clock sounds. Everything respects `prefers-reduced-motion` and never takes a click.
 
-To ship the plain brand skin instead, build with `VITE_HALLOWEEN_THEME=off` — that removes the hat, the palette and the particles in one switch (`src/lib/halloween.ts`).
+- Turn it off on one device: **Settings → Appearance → Halloween decorations**.
+- Turn it off for everyone: build with `VITE_HALLOWEEN_THEME=off` (`on` forces it outside October).
+- Remove it for good: see [`src/seasonal/halloween/README.md`](src/seasonal/halloween/README.md). It's one line in `src/seasonal/index.ts` plus deleting the folder.
 
 ### Notifications
 A notification bell (with an unread badge) appears for both roles. The admin is notified when a worker **clocks in**, **starts a break**, **comes back from a break**, **clocks out**, or **adds a note**. Workers are notified when the **admin replies to a note**, **adds time** for them, creates a **payment**, or changes a **payment status**. Clicking a notification opens the related entry.
