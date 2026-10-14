@@ -518,9 +518,9 @@ export function SettingsPage() {
               {can('settings.manage') && backendKind === 'supabase' && (
                 <div className="mt-4 flex items-start justify-between gap-4 rounded-2xl border border-[var(--line)] p-4">
                   <div className="space-y-1">
-                    <Label htmlFor="ai-assistant-enabled">AI assistant</Label>
+                    <Label htmlFor="ai-assistant-enabled">Nova AI</Label>
                     <p className="text-sm text-muted-foreground">
-                      The chat button in the corner. Everyone can ask about and change their own work, with the
+                      PipelineSync's AI assistant, the chat button in the corner. Everyone can ask about and change their own work, with the
                       same access they have in the app, and every change needs their approval. Turn it off to hide
                       it for the whole team.
                     </p>
@@ -530,7 +530,7 @@ export function SettingsPage() {
                     checked={settings?.ai_assistant_enabled !== false}
                     onCheckedChange={async (on) => {
                       const saved = await saveSettings({ ai_assistant_enabled: on })
-                      if (saved) toast.success(on ? 'AI assistant turned on' : 'AI assistant turned off')
+                      if (saved) toast.success(on ? 'Nova AI turned on' : 'Nova AI turned off')
                     }}
                   />
                 </div>

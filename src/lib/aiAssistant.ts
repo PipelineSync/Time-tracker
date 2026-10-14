@@ -74,7 +74,7 @@ export async function sendStep(
   decisions?: Record<string, 'approve' | 'reject'>,
 ): Promise<StepResponse> {
   const token = await getSupabaseAccessToken()
-  if (!token) throw new AssistantError('Sign in again to use the assistant.', 'unauthorized')
+  if (!token) throw new AssistantError('Sign in again to use Nova AI.', 'unauthorized')
   let res: Response
   try {
     res = await fetch('/.netlify/functions/ai-chat', {
@@ -84,11 +84,11 @@ export async function sendStep(
       signal: AbortSignal.timeout(60_000),
     })
   } catch {
-    throw new AssistantError("Couldn't reach the assistant. Check your connection and try again.", 'network')
+    throw new AssistantError("Couldn't reach Nova AI. Check your connection and try again.", 'network')
   }
   const body = (await res.json().catch(() => null)) as (StepResponse & { error?: string; message?: string }) | null
   if (!res.ok || !body || body.error) {
-    throw new AssistantError(body?.message || 'The assistant could not answer. Try again.', body?.error || 'http_' + res.status)
+    throw new AssistantError(body?.message || 'Nova AI could not answer. Try again.', body?.error || 'http_' + res.status)
   }
   return body
 }

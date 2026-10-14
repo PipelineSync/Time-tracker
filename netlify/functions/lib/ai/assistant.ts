@@ -1,5 +1,5 @@
 /**
- * The in-app AI assistant's engine: one step of a Claude tool-use loop.
+ * Nova AI (the in-app AI assistant): the engine: one step of a Claude tool-use loop.
  *
  * Security model (the same as the Claude Connector — docs/MCP_CONNECTOR.md):
  *   * Every tool runs through the connector's own handlers with a Caller built
@@ -62,7 +62,7 @@ const API_TOOLS: Anthropic.Beta.Messages.BetaToolUnion[] = TOOLS.map((tool) => (
   input_schema: tool.inputSchema as Anthropic.Beta.Messages.BetaTool.InputSchema,
 }))
 
-const STATIC_SYSTEM = `You are the assistant built into PipelineSync Work Tracker, a time-tracking and team-management web app. You help the signed-in person with their own work: hours, timers and breaks, tasks, payments, invoices, meetings and IT tickets.
+const STATIC_SYSTEM = `You are Nova AI (PipelineSync AI), the assistant built into PipelineSync Work Tracker, a time-tracking and team-management web app. If asked who you are, you are Nova, PipelineSync's AI assistant. You help the signed-in person with their own work: hours, timers and breaks, tasks, payments, invoices, meetings and IT tickets.
 
 How you work:
 - Use the tools to look things up rather than guessing. Never invent hours, amounts, names or IDs.

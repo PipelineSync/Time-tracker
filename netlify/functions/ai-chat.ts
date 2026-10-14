@@ -1,5 +1,5 @@
 /**
- * POST /ai-chat — the in-app AI assistant (the chat widget in the app).
+ * POST /ai-chat — Nova AI, the in-app AI assistant (the chat widget in the app).
  *
  * The browser sends the signed-in user's own Supabase access token, the
  * conversation so far, and — when an action is waiting — the user's
@@ -59,13 +59,13 @@ export default async function handler(request: Request): Promise<Response> {
     return fail(
       503,
       'not_configured',
-      'The AI assistant is not set up yet. An admin needs to add ANTHROPIC_API_KEY in the Netlify environment variables.',
+      'Nova AI is not set up yet. An admin needs to add ANTHROPIC_API_KEY in the Netlify environment variables.',
     )
   }
 
   const header = request.headers.get('authorization') ?? ''
   const token = header.toLowerCase().startsWith('bearer ') ? header.slice(7).trim() : ''
-  if (!token) return fail(401, 'unauthorized', 'Sign in to use the assistant.')
+  if (!token) return fail(401, 'unauthorized', 'Sign in to use Nova AI.')
 
   const raw = await request.text()
   if (raw.length > MAX_BODY_CHARS) {
@@ -92,7 +92,7 @@ export default async function handler(request: Request): Promise<Response> {
   const { data: settings } = await caller.sb.from('settings').select('*').maybeSingle()
   const row = (settings ?? {}) as { ai_assistant_enabled?: boolean | null; timezone?: string | null }
   if (row.ai_assistant_enabled === false) {
-    return fail(403, 'disabled', 'The admin has turned the AI assistant off for this workspace.')
+    return fail(403, 'disabled', 'The admin has turned Nova AI off for this workspace.')
   }
 
   try {
@@ -100,22 +100,22 @@ export default async function handler(request: Request): Promise<Response> {
     return json(result)
   } catch (error) {
     if (error instanceof Anthropic.RateLimitError) {
-      return fail(429, 'rate_limited', 'The assistant is busy right now. Try again in a minute.')
+      return fail(429, 'rate_limited', 'Nova AI is busy right now. Try again in a minute.')
     }
     if (error instanceof Anthropic.AuthenticationError || error instanceof Anthropic.PermissionDeniedError) {
       console.error('[ai-chat] Anthropic key rejected', error.status)
-      return fail(503, 'not_configured', 'The AI assistant key is not valid. An admin needs to check ANTHROPIC_API_KEY.')
+      return fail(503, 'not_configured', 'The Nova AI key is not valid. An admin needs to check ANTHROPIC_API_KEY.')
     }
     if (error instanceof Anthropic.BadRequestError) {
       console.error('[ai-chat] bad request', error.message)
-      return fail(400, 'bad_request', 'The assistant could not read this conversation. Start a new chat.')
+      return fail(400, 'bad_request', 'Nova AI could not read this conversation. Start a new chat.')
     }
     if (error instanceof Anthropic.APIConnectionTimeoutError) {
-      return fail(504, 'timeout', 'The assistant took too long to answer. Try again, or ask something smaller.')
+      return fail(504, 'timeout', 'Nova AI took too long to answer. Try again, or ask something smaller.')
     }
     if (error instanceof Anthropic.APIError) {
       console.error('[ai-chat] Anthropic API error', error.status, error.message)
-      return fail(502, 'upstream', 'The assistant is unavailable right now. Try again shortly.')
+      return fail(502, 'upstream', 'Nova AI is unavailable right now. Try again shortly.')
     }
     console.error('[ai-chat] failed', error)
     return fail(500, 'internal', 'Something went wrong. Try again.')

@@ -146,6 +146,7 @@ assert(String(sent.headers['anthropic-beta'] ?? '').includes('server-side-fallba
 assert(Array.isArray(sent.body.tools) && (sent.body.tools as unknown[]).length === 36, 'all 36 connector tools are offered')
 assert(!('tool_choice' in sent.body) && !('thinking' in sent.body), 'no forced tool choice and no thinking override (both 400 on this model)')
 assert(JSON.stringify(sent.body.system).includes('Ben Cruz'), 'the system prompt names the signed-in person')
+assert(JSON.stringify(sent.body.system).includes('Nova AI'), 'the system prompt introduces the assistant as Nova AI')
 assert((sent.body.output_config as { effort?: string })?.effort === 'low', 'effort is set explicitly')
 
 script.push({ content: [{ type: 'text', text: 'You worked **4h** on Sep 1.' }], stop_reason: 'end_turn' })

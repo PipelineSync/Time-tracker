@@ -5,7 +5,7 @@
 --
 --  What it does
 --  ------------
---  Adds the workspace on/off switch for the in-app AI assistant:
+--  Adds the workspace on/off switch for Nova AI, the in-app AI assistant:
 --  `settings.ai_assistant_enabled` (on by default). The admin flips it in
 --  Settings → Appearance; when it is off the chat button disappears and the
 --  /ai-chat endpoint refuses every request.

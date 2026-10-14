@@ -1,6 +1,6 @@
-# AI assistant (in-app chat)
+# Nova AI (PipelineSync AI)
 
-A chat button in the corner of the app. Anyone signed in can ask about their own
+**Nova AI** is PipelineSync's assistant: a chat button in the corner of the app. Anyone signed in can ask about their own
 work — *"how many hours did I work this week?"*, *"what's overdue on my board?"* —
 or ask for a change — *"start a break"*, *"add a task to write the Q4 report, due
 Friday"* — and the assistant does it through the same tools as the
@@ -38,14 +38,14 @@ Browser widget ──(your session token)──▶ /ai-chat (Netlify Function) �
    `supabase/RUN-THIS-ai-assistant.sql` in the Supabase SQL editor. It adds the
    workspace on/off switch. Without it the assistant still works; the admin just
    can't switch it off.
-3. That's it. The chat button appears for everyone after the next deploy.
+3. That's it. The Nova AI button appears for everyone after the next deploy.
 
 The assistant needs the real (Supabase) backend; in demo mode the button is
 hidden.
 
 ## Turning it off
 
-**Settings → Appearance → AI assistant** (admin). Off hides the button for the
+**Settings → Appearance → Nova AI** (admin). Off hides the button for the
 whole team, and the `/ai-chat` endpoint refuses every request — it never calls
 Claude while switched off.
 

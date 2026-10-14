@@ -125,8 +125,8 @@ A **very small circle with a question mark** sits at the **upper-left of the sec
 
 The copy is plain data in **`src/lib/faq.ts`** — one list per role — and `FaqButton` only renders it, so editing an answer is a one-line change with no component work (and no backend, table or policy: the button is pure UI). `npm run verify:faq` keeps both lists honest (no empty, duplicated or id-colliding entries).
 
-### AI assistant
-A chat button in the corner lets anyone ask about their own hours, tasks and pay, or ask for a change ("start a break", "add a task due Friday"). It runs the [Claude Connector](docs/MCP_CONNECTOR.md)'s tools **as the signed-in person**, so it only reaches their own data plus whatever the admin granted them, and **every change waits for an Approve click**. Chat history stays on the device. Needs `ANTHROPIC_API_KEY` on Netlify; the admin can switch it off in **Settings → Appearance**. Setup and details: [`docs/AI_ASSISTANT.md`](docs/AI_ASSISTANT.md).
+### Nova AI (PipelineSync AI)
+**Nova AI** is the in-app assistant: a chat button in the corner lets anyone ask about their own hours, tasks and pay, or ask for a change ("start a break", "add a task due Friday"). It runs the [Claude Connector](docs/MCP_CONNECTOR.md)'s tools **as the signed-in person**, so it only reaches their own data plus whatever the admin granted them, and **every change waits for an Approve click**. Chat history stays on the device. Needs `ANTHROPIC_API_KEY` on Netlify; the admin can switch it off in **Settings → Appearance**. Setup and details: [`docs/AI_ASSISTANT.md`](docs/AI_ASSISTANT.md).
 
 ### PipelineSync theme
 The UI follows the **PipelineSync brand theme** (the dark, animated look of pipelinesync.net):

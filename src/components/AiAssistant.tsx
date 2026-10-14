@@ -376,8 +376,8 @@ export function AiAssistant() {
         <button
           type="button"
           onClick={() => setOpen(true)}
-          aria-label="Open the AI assistant"
-          title="Ask the AI assistant"
+          aria-label="Open Nova AI"
+          title="Ask Nova AI"
           className="ps-btn-primary fixed right-4 z-40 flex h-14 w-14 items-center justify-center rounded-full lg:bottom-6 lg:right-6"
           style={{ bottom: 'calc(5rem + env(safe-area-inset-bottom, 0px))' }}
         >
@@ -388,7 +388,7 @@ export function AiAssistant() {
       {open && (
         <section
           role="dialog"
-          aria-label="AI assistant"
+          aria-label="Nova AI"
           className="ps-modal fixed inset-0 z-50 flex flex-col overflow-hidden lg:inset-auto lg:bottom-6 lg:right-6 lg:h-[min(680px,calc(100vh-3rem))] lg:w-[420px] lg:rounded-3xl"
         >
           <header className="pt-safe flex items-center gap-3 border-b border-[var(--line)] px-4 py-3">
@@ -396,13 +396,13 @@ export function AiAssistant() {
               <Sparkles className="h-[18px] w-[18px]" aria-hidden />
             </span>
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold leading-tight">Assistant</p>
-              <p className="ps-label text-[10px]">Your data · your access</p>
+              <p className="text-sm font-semibold leading-tight">Nova AI</p>
+              <p className="ps-label text-[10px]">PipelineSync AI</p>
             </div>
             <Button variant="ghost" size="iconSm" onClick={newChat} disabled={busy || messages.length === 0} aria-label="New chat" title="New chat">
               <SquarePen className="h-4 w-4" />
             </Button>
-            <Button variant="ghost" size="iconSm" onClick={() => setOpen(false)} aria-label="Close the assistant">
+            <Button variant="ghost" size="iconSm" onClick={() => setOpen(false)} aria-label="Close Nova AI">
               <X className="h-4 w-4" />
             </Button>
           </header>
@@ -410,7 +410,7 @@ export function AiAssistant() {
           <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto px-4 py-4" aria-live="polite">
             {items.length === 0 && !busy && (
               <div className="space-y-4 pt-6 text-center">
-                <p className="text-base font-semibold">What can I help with?</p>
+                <p className="text-base font-semibold">Hi, I'm Nova. What can I help with?</p>
                 <p className="mx-auto max-w-[30ch] text-sm text-muted-foreground">
                   Ask about your hours, tasks or pay, or ask me to make a change. I'll always check with you before
                   changing anything.
@@ -508,7 +508,7 @@ export function AiAssistant() {
             )}
             <div className="flex items-end gap-2">
               <label htmlFor="ai-assistant-input" className="sr-only">
-                Message the assistant
+                Message Nova AI
               </label>
               <textarea
                 id="ai-assistant-input"
