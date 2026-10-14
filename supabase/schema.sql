@@ -799,6 +799,8 @@ create trigger trg_settings_updated before update on public.settings
 alter table public.workers add column if not exists position text;
 alter table public.workers add column if not exists avatar_url text;
 alter table public.settings add column if not exists avatar_url text;
+-- Workspace switch for the in-app AI assistant (Settings → Appearance).
+alter table public.settings add column if not exists ai_assistant_enabled boolean not null default true;
 
 -- Worker-chosen payment methods ('cash' and/or 'qr') plus the QR code image
 -- (data URL) a worker uploads when they accept QR Code payments.

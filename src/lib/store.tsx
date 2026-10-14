@@ -209,6 +209,8 @@ interface StoreValue {
   updateOwnPaymentMethods: (paymentMethods: PaymentMethod[], qrCodeUrl?: string | null) => Promise<Worker | null>
 
   refreshData: (opts?: { background?: boolean; light?: boolean }) => Promise<void>
+  /** Reload everything something outside the UI may have changed (the AI assistant). */
+  refreshAfterExternalChange: () => Promise<void>
 
   createWorker: (input: CreateWorkerInput) => Promise<Worker | null>
   updateWorker: (id: string, patch: Partial<Worker> & { newPassword?: string }) => Promise<Worker | null>
@@ -1713,6 +1715,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return true
   }, [backend, refreshFinance])
 
+  // The AI assistant changes data through the server, not this store, so
+  // after it acts every view reloads what it may have touched.
+  const refreshAfterExternalChange = useCallback(async () => {
+    await Promise.all([
+      refreshData({ background: true }),
+      refreshTimer(),
+      refreshTasks(),
+      refreshKpi(),
+      refreshTickets(),
+    ]).catch(() => undefined)
+  }, [refreshData, refreshTimer, refreshTasks, refreshKpi, refreshTickets])
+
   const value: StoreValue = {
     backend,
     user,
@@ -1752,6 +1766,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     updateOwnProfile,
     updateOwnPaymentMethods,
     refreshData,
+    refreshAfterExternalChange,
     createWorker,
     updateWorker,
     deleteWorker,

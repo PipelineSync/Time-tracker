@@ -171,16 +171,45 @@ export async function resolveCaller(mcpToken: string): Promise<Caller | null> {
     }
   }
 
+  let caller: Caller
+  try {
+    caller = await callerFromSupabaseToken(accessToken, mcpToken)
+  } catch (error) {
+    if (error instanceof AuthError) {
+      await revokeToken(mcpToken).catch(() => undefined)
+      throw new AuthError(
+        'invalid_token',
+        'Your Work Tracker session expired. Reconnect the Claude connector to sign in again.',
+      )
+    }
+    throw error
+  }
+
+  await adminClient()
+    .from('mcp_oauth_tokens')
+    .update({ last_used_at: new Date().toISOString() })
+    .eq('token_hash', token.token_hash)
+    .then(() => undefined, () => undefined)
+
+  return caller
+}
+
+/**
+ * Build a Caller straight from a Supabase access token — the signed-in user's
+ * own session. The connector reaches this after exchanging its OAuth token;
+ * the in-app AI assistant (netlify/functions/ai-chat.ts) passes the browser's
+ * session token directly. Either way every query runs as that user, so Row
+ * Level Security decides what they can read and write.
+ *
+ * Throws AuthError('invalid_token') when the session is not valid.
+ */
+export async function callerFromSupabaseToken(accessToken: string, mcpToken = ''): Promise<Caller> {
   const sb = userClient(accessToken)
 
   // Verify the session still works and read the role in one round trip.
   const { data: userData, error: userError } = await sb.auth.getUser(accessToken)
   if (userError || !userData?.user) {
-    await revokeToken(mcpToken).catch(() => undefined)
-    throw new AuthError(
-      'invalid_token',
-      'Your Work Tracker session expired. Reconnect the Claude connector to sign in again.',
-    )
+    throw new AuthError('invalid_token', 'Your Work Tracker session expired. Sign in again.')
   }
 
   const profile = await sb
@@ -214,7 +243,7 @@ export async function resolveCaller(mcpToken: string): Promise<Caller | null> {
       : []
   }
 
-  const caller: Caller = {
+  return {
     userId: userData.user.id,
     email: userData.user.email ?? null,
     role,
@@ -224,12 +253,4 @@ export async function resolveCaller(mcpToken: string): Promise<Caller | null> {
     sb,
     mcpToken,
   }
-
-  await adminClient()
-    .from('mcp_oauth_tokens')
-    .update({ last_used_at: new Date().toISOString() })
-    .eq('token_hash', token.token_hash)
-    .then(() => undefined, () => undefined)
-
-  return caller
 }

@@ -1,0 +1,23 @@
+-- ============================================================================
+--  WORK TRACKER — RUN THIS ONCE IN SUPABASE
+--
+--  Copy this whole file into:  Supabase → SQL Editor → New query → Run
+--
+--  What it does
+--  ------------
+--  Adds the workspace on/off switch for the in-app AI assistant:
+--  `settings.ai_assistant_enabled` (on by default). The admin flips it in
+--  Settings → Appearance; when it is off the chat button disappears and the
+--  /ai-chat endpoint refuses every request.
+--
+--  Nothing else changes. The assistant needs no new tables and no new
+--  policies: every tool it runs goes through the same Row Level Security as
+--  the app, as the signed-in person (see docs/AI_ASSISTANT.md).
+--
+--  Without this column the assistant still works (it counts as "on"); the
+--  admin just cannot switch it off until this has been run.
+--
+--  Safe to re-run: the statement is idempotent.
+-- ============================================================================
+
+alter table public.settings add column if not exists ai_assistant_enabled boolean not null default true;

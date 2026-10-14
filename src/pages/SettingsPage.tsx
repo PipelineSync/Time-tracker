@@ -20,7 +20,8 @@ import { imageFileToDataUrl, validateImageFile } from '@/lib/image'
 import type { PaymentMethod } from '@/lib/types'
 
 export function SettingsPage() {
-  const { settings, saveSettings, resetAllData, workers, entries, user, isAdmin, can, updateOwnProfile, updateOwnPaymentMethods } = useStore()
+  const { settings, saveSettings, resetAllData, workers, entries, user, isAdmin, can, updateOwnProfile, updateOwnPaymentMethods, backend } = useStore()
+  const backendKind = backend.kind
   // Business settings can be handed to a worker; wiping the workspace cannot.
   const canManageSettings = can('settings.manage')
   const { theme, setTheme } = useTheme()
@@ -514,6 +515,26 @@ export function SettingsPage() {
                 ))}
               </div>
               <SeasonSettings />
+              {can('settings.manage') && backendKind === 'supabase' && (
+                <div className="mt-4 flex items-start justify-between gap-4 rounded-2xl border border-[var(--line)] p-4">
+                  <div className="space-y-1">
+                    <Label htmlFor="ai-assistant-enabled">AI assistant</Label>
+                    <p className="text-sm text-muted-foreground">
+                      The chat button in the corner. Everyone can ask about and change their own work, with the
+                      same access they have in the app, and every change needs their approval. Turn it off to hide
+                      it for the whole team.
+                    </p>
+                  </div>
+                  <Switch
+                    id="ai-assistant-enabled"
+                    checked={settings?.ai_assistant_enabled !== false}
+                    onCheckedChange={async (on) => {
+                      const saved = await saveSettings({ ai_assistant_enabled: on })
+                      if (saved) toast.success(on ? 'AI assistant turned on' : 'AI assistant turned off')
+                    }}
+                  />
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>

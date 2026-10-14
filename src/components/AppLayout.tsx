@@ -32,6 +32,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { BrandLogo } from '@/components/BrandLogo'
 import { NotificationsBell } from '@/components/NotificationsBell'
 import { SeasonSidebarDecor } from '@/seasonal'
+import { AiAssistant } from '@/components/AiAssistant'
 import { SectionTransition } from '@/components/SectionTransition'
 import { ChangePasswordDialog } from '@/components/ChangePasswordDialog'
 import {
@@ -328,6 +329,10 @@ export function AppLayout() {
       </nav>
 
       <ChangePasswordDialog open={changePwOpen} onOpenChange={setChangePwOpen} />
+
+      {/* The AI assistant needs the real backend (it runs server-side as the
+          signed-in user) and respects the admin's workspace switch. */}
+      {backend.kind === 'supabase' && settings?.ai_assistant_enabled !== false && <AiAssistant />}
     </div>
   )
 }

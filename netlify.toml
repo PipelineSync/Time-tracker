@@ -49,6 +49,11 @@
 # the origin the discovery documents advertise. Diagnoses any future
 # "Claude will not connect" report without opening the Netlify dashboard.
 [[redirects]]
+  from = "/ai-chat"
+  to = "/.netlify/functions/ai-chat"
+  status = 200
+
+[[redirects]]
   from = "/mcp-status"
   to = "/.netlify/functions/mcp-status"
   status = 200
