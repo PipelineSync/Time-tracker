@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { ArrowUp, Check, Loader2, RotateCcw, Search, Sparkles, SquarePen, X } from 'lucide-react'
+import { ArrowUp, Check, RotateCcw, Search, SquarePen, X } from 'lucide-react'
+import { NovaOrb, type OrbState } from '@/components/NovaOrb'
 import { useStore } from '@/lib/store'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -258,6 +259,8 @@ export function AiAssistant() {
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
+  // Turns the orb green for a moment after an approved action goes through.
+  const [justCompleted, setJustCompleted] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
@@ -326,7 +329,11 @@ export function AiAssistant() {
         setError(e instanceof AssistantError ? e.message : 'Something went wrong. Try again.')
       } finally {
         setBusy(false)
-        if (changedData) void refreshAfterExternalChange()
+        if (changedData) {
+          void refreshAfterExternalChange()
+          setJustCompleted(true)
+          window.setTimeout(() => setJustCompleted(false), 2200)
+        }
       }
     },
     [commit, refreshAfterExternalChange],
@@ -368,6 +375,16 @@ export function AiAssistant() {
     return base.slice(0, 4)
   }, [isAdmin, can])
 
+  const orbState: OrbState = busy
+    ? 'thinking'
+    : error
+      ? 'error'
+      : pending.length
+        ? 'listening'
+        : justCompleted
+          ? 'complete'
+          : 'idle'
+
   if (!user) return null
 
   return (
@@ -378,10 +395,10 @@ export function AiAssistant() {
           onClick={() => setOpen(true)}
           aria-label="Open Nova AI"
           title="Ask Nova AI"
-          className="ps-btn-primary fixed right-4 z-40 flex h-14 w-14 items-center justify-center rounded-full lg:bottom-6 lg:right-6"
+          className="fixed right-4 z-40 flex h-16 w-16 items-center justify-center rounded-full border border-white/10 bg-[#05070c] shadow-[0_12px_36px_-10px_rgba(255,122,26,.55)] transition-transform duration-300 ease-ps hover:scale-105 active:scale-95 lg:bottom-6 lg:right-6"
           style={{ bottom: 'calc(5rem + env(safe-area-inset-bottom, 0px))' }}
         >
-          <Sparkles className="h-6 w-6" aria-hidden />
+          <NovaOrb size={60} state={busy ? 'thinking' : pending.length ? 'listening' : 'idle'} />
         </button>
       )}
 
@@ -392,8 +409,8 @@ export function AiAssistant() {
           className="ps-modal fixed inset-0 z-50 flex flex-col overflow-hidden lg:inset-auto lg:bottom-6 lg:right-6 lg:h-[min(680px,calc(100vh-3rem))] lg:w-[420px] lg:rounded-3xl"
         >
           <header className="pt-safe flex items-center gap-3 border-b border-[var(--line)] px-4 py-3">
-            <span className="ps-icon-tile h-9 w-9 rounded-xl">
-              <Sparkles className="h-[18px] w-[18px]" aria-hidden />
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/10 bg-[#05070c]">
+              <NovaOrb size={44} state={orbState} />
             </span>
             <div className="min-w-0 flex-1">
               <p className="text-sm font-semibold leading-tight">Nova AI</p>
@@ -409,7 +426,8 @@ export function AiAssistant() {
 
           <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto px-4 py-4" aria-live="polite">
             {items.length === 0 && !busy && (
-              <div className="space-y-4 pt-6 text-center">
+              <div className="space-y-4 pt-2 text-center">
+                <NovaOrb size={148} state={orbState} className="mx-auto" />
                 <p className="text-base font-semibold">Hi, I'm Nova. What can I help with?</p>
                 <p className="mx-auto max-w-[30ch] text-sm text-muted-foreground">
                   Ask about your hours, tasks or pay, or ask me to make a change. I'll always check with you before
@@ -480,7 +498,7 @@ export function AiAssistant() {
 
             {busy && (
               <p className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> Working on it…
+                <NovaOrb size={22} state="thinking" /> Working on it…
               </p>
             )}
             {notice && <p className="rounded-xl bg-[var(--surface-2)] px-3 py-2 text-xs text-muted-foreground">{notice}</p>}
