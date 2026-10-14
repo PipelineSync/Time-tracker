@@ -252,17 +252,6 @@
 }
 
 /* ============================================================
-   Candy bag (trick-or-treat milestones)
-   ============================================================ */
-.halloween-bag-pop {
-  animation: bag-pop 0.6s cubic-bezier(0.22, 1, 0.36, 1);
-}
-@keyframes bag-pop {
-  30% { transform: scale(1.25) rotate(-8deg); }
-  60% { transform: scale(0.95) rotate(5deg); }
-}
-
-/* ============================================================
    Candy-corn progress bars — stripes over the bar's own colour, so
    whatever the colour means (on track / at risk) still reads.
    ============================================================ */
@@ -281,8 +270,7 @@
 @media (prefers-reduced-motion: reduce) {
   .halloween-bat svg,
   .halloween-pumpkin,
-  .halloween-pumpkin .face,
-  .halloween-bag-pop {
+  .halloween-pumpkin .face {
     animation: none;
   }
   .halloween-ember {

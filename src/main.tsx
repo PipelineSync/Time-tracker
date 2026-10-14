@@ -60,7 +60,7 @@ void initNativeShell()
 // very first clock-in of a session is not silently swallowed.
 installAudioUnlock()
 
-// Seasonal extras (spooky sounds, treat milestones) — a no-op out of season.
+// Seasonal extras (spooky sounds) — a no-op out of season.
 installSeason()
 
 // Cards light up around the cursor (fine pointers only, off for reduced motion).

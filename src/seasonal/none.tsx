@@ -15,9 +15,6 @@ export function SeasonLayer() {
 export function SeasonLiveDot({ children }: { children: ReactNode }) {
   return <>{children}</>
 }
-export function SeasonHeaderExtras() {
-  return null
-}
 export function SeasonSidebarDecor() {
   return null
 }

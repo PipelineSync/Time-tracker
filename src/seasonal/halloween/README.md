@@ -15,7 +15,6 @@ Everything Halloween lives in this folder. The app reaches it only through
 | Ember trail behind the mouse (desktop only) | `HalloweenLayer.tsx` (`useCursorSparks`) |
 | Candy-corn stripes on progress bars | `halloween.css` (`.ps-progress-fill`) |
 | Ghost floating up on clock-out | `HalloweenLayer.tsx` (`useClockOutGhost`) |
-| Trick-or-treat candy bag in the header | `CandyBag.tsx`, `treats.ts` |
 | Spooky clock sounds + organ chord on task completion | `sounds.ts` |
 | Settings → Appearance switch | `index.tsx` (`SeasonSettings`) |
 
@@ -37,8 +36,7 @@ All motion stops for `prefers-reduced-motion`. Decorations never take clicks.
 3. In `public/theme-init.js`, delete the seasonal `if (…) classList.add('halloween')`
    block.
 
-That's it. The app keeps working with no seasonal code. The candy counts were
-only ever stored in each browser (`wt_halloween_treats`).
+That's it. The app keeps working with no seasonal code.
 
 ## Swapping in another season
 

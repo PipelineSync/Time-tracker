@@ -134,7 +134,7 @@ The UI follows the **PipelineSync brand theme** (the dark, animated look of pipe
 - **Reduced motion**: every animation is turned off for `prefers-reduced-motion: reduce`; nothing is ever left hidden.
 
 ### Halloween theme 🎃
-A **seasonal Halloween skin** runs automatically **during October** (it switches itself off on November 1): a pumpkin/purple/slime palette, a witch hat on the logo, bats and embers behind the app, a flickering pumpkin "on the clock" dot, corner cobwebs, an ember trail behind the mouse, candy-corn progress bars, a ghost that floats up when you clock out, a trick-or-treat candy bag in the header (treats for finished tasks, clock-outs and 8-hour days, kept in the browser only), and spooky clock sounds. Everything respects `prefers-reduced-motion` and never takes a click.
+A **seasonal Halloween skin** runs automatically **during October** (it switches itself off on November 1): a pumpkin/purple/slime palette, a witch hat on the logo, bats and embers behind the app, a flickering pumpkin "on the clock" dot, corner cobwebs, an ember trail behind the mouse, candy-corn progress bars, a ghost that floats up when you clock out, and spooky clock sounds. Everything respects `prefers-reduced-motion` and never takes a click.
 
 - Turn it off on one device: **Settings → Appearance → Halloween decorations**.
 - Turn it off for everyone: build with `VITE_HALLOWEEN_THEME=off` (`on` forces it outside October).

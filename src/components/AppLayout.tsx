@@ -31,7 +31,7 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { BrandLogo } from '@/components/BrandLogo'
 import { NotificationsBell } from '@/components/NotificationsBell'
-import { SeasonHeaderExtras, SeasonSidebarDecor } from '@/seasonal'
+import { SeasonSidebarDecor } from '@/seasonal'
 import { SectionTransition } from '@/components/SectionTransition'
 import { ChangePasswordDialog } from '@/components/ChangePasswordDialog'
 import {
@@ -274,7 +274,6 @@ export function AppLayout() {
               {isDemo && <DemoModeBadge />}
             </div>
             <div className="flex items-center gap-1">
-              <SeasonHeaderExtras />
               <NotificationsBell />
               <ThemeToggle />
               {UserMenu}
@@ -286,7 +285,7 @@ export function AppLayout() {
       {/* Main content */}
       <main className="px-4 pb-24 pt-6 sm:px-6 lg:ml-64 lg:pb-10">
         <div className="mx-auto max-w-6xl">
-          <div className="mb-2 hidden justify-end gap-1 lg:flex"><SeasonHeaderExtras /><NotificationsBell /></div>
+          <div className="mb-2 hidden justify-end lg:flex"><NotificationsBell /></div>
           {/* Changing section fades + settles the new screen in (CSS only, and
               off for `prefers-reduced-motion`). The bell above stays put: only
               the page content moves, so the chrome never jitters. */}
