@@ -24,6 +24,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { ToolError, type Caller } from '../mcp/session'
 import { TOOLS, findTool, type Tool } from '../mcp/tools'
+import { PERSONAL_TOOLS } from './personalTools'
 
 export const AI_MODEL = 'claude-sonnet-5-5'
 /** Low effort: chat-style lookups and short actions, answered quickly. */
@@ -55,14 +56,18 @@ export type StepResult =
 
 const isReadOnly = (tool: Tool | undefined) => tool?.annotations.readOnlyHint === true
 
-/** The connector's tools, in a fixed order so the prompt cache stays warm. */
-const API_TOOLS: Anthropic.Beta.Messages.BetaToolUnion[] = TOOLS.map((tool) => ({
+/**
+ * The connector's tools plus Nova's own Personal Tracker tools, in a fixed
+ * order so the prompt cache stays warm.
+ */
+const NOVA_TOOLS: Tool[] = [...TOOLS, ...PERSONAL_TOOLS]
+const API_TOOLS: Anthropic.Beta.Messages.BetaToolUnion[] = NOVA_TOOLS.map((tool) => ({
   name: tool.name,
   description: tool.description,
   input_schema: tool.inputSchema as Anthropic.Beta.Messages.BetaTool.InputSchema,
 }))
 
-const STATIC_SYSTEM = `You are Nova AI (PipelineSync AI), the assistant built into PipelineSync Work Tracker, a time-tracking and team-management web app. If asked who you are, you are Nova, PipelineSync's AI assistant. You help the signed-in person with their own work: hours, timers and breaks, tasks, payments, invoices, meetings and IT tickets.
+const STATIC_SYSTEM = `You are Nova AI (PipelineSync AI), the assistant built into PipelineSync Work Tracker, a time-tracking and team-management web app. If asked who you are, you are Nova, PipelineSync's AI assistant. You help the signed-in person with their own work: hours, timers and breaks, tasks, payments, invoices, meetings and IT tickets. You can also read their Personal Tracker (their private finance workspace: accounts, balances, bills, income and expenses), but you cannot change it; for changes, point them to the Personal Tracker page.
 
 How you work:
 - Use the tools to look things up rather than guessing. Never invent hours, amounts, names or IDs.
@@ -169,9 +174,11 @@ export interface StepDeps {
   findTool: (name: string) => Tool | undefined
 }
 
+const PERSONAL_BY_NAME = new Map(PERSONAL_TOOLS.map((tool) => [tool.name, tool]))
+
 const defaultDeps: StepDeps = {
   createMessage: (params) => client().beta.messages.create(params),
-  findTool,
+  findTool: (name) => findTool(name) ?? PERSONAL_BY_NAME.get(name),
 }
 
 /** Do one unit of work on the conversation. */

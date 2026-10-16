@@ -156,6 +156,8 @@ function visibleRows(tableName, rows, actor) {
 
   switch (tableName) {
     case 'profiles':
+    case 'personal_finance_data':
+      // personal_finance_data: owner-only (supabase/personal-finance.sql).
       return rows.filter((r) => r.user_id === actor.userId)
     case 'workers':
       // Workers see themselves; the admin sees everyone.

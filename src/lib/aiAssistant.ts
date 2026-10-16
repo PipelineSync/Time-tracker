@@ -106,8 +106,12 @@ export function messageText(m: ChatMessage): string {
     .join('\n\n')
 }
 
+/** Tools whose generated label reads badly. */
+const TOOL_LABELS: Record<string, string> = { get_personal_tracker: 'Your personal tracker' }
+
 /** "list_time_entries" → "List time entries". */
 export function toolLabel(name: string): string {
+  if (TOOL_LABELS[name]) return TOOL_LABELS[name]
   const words = name.replace(/_/g, ' ')
   return words.charAt(0).toUpperCase() + words.slice(1)
 }

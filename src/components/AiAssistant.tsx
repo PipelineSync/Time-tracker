@@ -248,7 +248,11 @@ function ActionCard({
   )
 }
 
-export function AiAssistant() {
+/**
+ * `personal` is the copy shown on the Personal Tracker page: the same Nova,
+ * with suggestions about the person's own finances.
+ */
+export function AiAssistant({ variant = 'work' }: { variant?: 'work' | 'personal' }) {
   const { user, isAdmin, can, refreshAfterExternalChange } = useStore()
   const userId = user?.id ?? ''
   const [open, setOpen] = useState(false)
@@ -369,11 +373,14 @@ export function AiAssistant() {
   const canResume = !busy && !pending.length && needsResume(messages)
 
   const suggestions = useMemo(() => {
+    if (variant === 'personal') {
+      return ["What's my total balance?", 'Which bills are due this month?', 'How much did I spend last month?', 'What did I spend the most on?']
+    }
     const base = ['How many hours did I work this week?', "What's on my task board?", 'Start a break']
     if (isAdmin || can('entries.view_all')) base.unshift("Who's on the clock right now?")
     if (isAdmin || can('reports.view')) base.push("Summarize last week's hours by worker")
     return base.slice(0, 4)
-  }, [isAdmin, can])
+  }, [variant, isAdmin, can])
 
   const orbState: OrbState = busy
     ? 'thinking'
@@ -540,7 +547,7 @@ export function AiAssistant() {
                     send(draft)
                   }
                 }}
-                placeholder={pending.length ? 'Waiting for your approval…' : 'Ask about your time, tasks or pay…'}
+                placeholder={pending.length ? 'Waiting for your approval…' : variant === 'personal' ? 'Ask about your balances, bills or spending…' : 'Ask about your time, tasks or pay…'}
                 disabled={busy || pending.length > 0}
                 className="ps-field max-h-32 min-h-[44px] flex-1 resize-none px-3 py-2.5 text-sm"
               />

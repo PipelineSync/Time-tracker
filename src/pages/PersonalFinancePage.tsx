@@ -16,6 +16,7 @@ import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { NotificationsBell } from '@/components/NotificationsBell'
+import { AiAssistant } from '@/components/AiAssistant'
 import { cn } from '@/lib/utils'
 import { accountBalance, buildInstallments, compareScheduledPayments, currentPeriod, daysDifference, deleteRecurringPayment, effectiveUnpaidAmounts, emptyPFData, formatShortDate, getOverdueRecurringPayments, getScheduledPayments, loadPersonalFinance, money, normalizePFData, pfId, recurringPaidCount, recurringPaidTotal, recurringRemainingBalance, savePersonalFinance, scheduledPaymentLabel, today, type PFData, type PFAccount, type PFExpense, type PFOverduePayment, type PFRecurring, type PFScheduledPayment } from '@/lib/personalFinance'
 
@@ -29,7 +30,7 @@ const NAV: { id: View; label: string; icon: typeof LayoutDashboard }[] = [
 ]
 
 export function PersonalFinancePage() {
-  const { user, workers, settings, checkOverdueRecurring, isAdmin } = useStore()
+  const { user, workers, settings, checkOverdueRecurring, isAdmin, backend } = useStore()
   const navigate = useNavigate()
   // The personal tracker follows the workspace currency when one is set, and
   // defaults to PHP (the tracker was built for PHP) otherwise.
@@ -875,7 +876,10 @@ export function PersonalFinancePage() {
     <ConfirmDialog open={!!deleteTx} onOpenChange={v=>{if(!v)setDeleteTx(null)}} title={deleteTxTitle} description={deleteTxExpense?.recurringId ? 'This payment was recorded from a recurring bill. Removing it reopens the installment — the paid count and total balance to pay go back to what they were.' : 'The transaction will be removed from your tracker. This cannot be undone.'} confirmLabel="Delete" onConfirm={doDeleteTx}/>
     <ConfirmDialog open={!!deleteRecurring} onOpenChange={v=>{if(!v)setDeleteRecurring(null)}} title={deleteRecurring ? `Delete ${deleteRecurring.name}?` : 'Delete recurring payment?'} description="This recurring payment will be removed from your tracker. Past transactions already recorded will be kept." confirmLabel="Delete" onConfirm={doDeleteRecurring}/>
     {payRecurring && <PayRecurringDialog recurring={payRecurring.r} installment={payRecurring.i} overduePayment={payRecurring.overduePayment} data={data} currency={currency} close={()=>setPayRecurring(null)} commit={commit} onPaidSuccess={()=>setOverviewTab('paid')}/>}
-  </main></div>
+  </main>
+    {/* Nova AI, as in the work tracker: needs the real backend and follows the admin's switch. */}
+    {backend.kind === 'supabase' && settings?.ai_assistant_enabled !== false && <AiAssistant variant="personal" />}
+  </div>
 }
 
 /** Table columns of the recurring payments schedule, in display order. */

@@ -143,7 +143,8 @@ const sent = requests[0]
 assert(sent.body.model === 'claude-sonnet-5-5', 'the request uses claude-sonnet-5-5')
 assert(sent.body.fallbacks === 'default', 'refusal fallback is on ("default")')
 assert(String(sent.headers['anthropic-beta'] ?? '').includes('server-side-fallback-2026-07-01'), 'the fallback beta header is sent')
-assert(Array.isArray(sent.body.tools) && (sent.body.tools as unknown[]).length === 36, 'all 36 connector tools are offered')
+assert(Array.isArray(sent.body.tools) && (sent.body.tools as unknown[]).length === 37, 'all 36 connector tools plus the personal tracker tool are offered')
+assert((sent.body.tools as { name: string }[]).some((t) => t.name === 'get_personal_tracker'), 'Nova offers get_personal_tracker')
 assert(!('tool_choice' in sent.body) && !('thinking' in sent.body), 'no forced tool choice and no thinking override (both 400 on this model)')
 assert(JSON.stringify(sent.body.system).includes('Ben Cruz'), 'the system prompt names the signed-in person')
 assert(JSON.stringify(sent.body.system).includes('Nova AI'), 'the system prompt introduces the assistant as Nova AI')
@@ -252,6 +253,37 @@ delete process.env.ANTHROPIC_API_KEY
 r = await chat({ messages: [{ role: 'user', content: 'hi' }] })
 assert(r.status === 503 && r.body.error === 'not_configured', 'a missing ANTHROPIC_API_KEY gives a clear setup message')
 process.env.ANTHROPIC_API_KEY = 'test-key'
+
+// ===========================================================================
+// 6b. The Personal Tracker: Nova reads the caller's own row only, and the
+//     tool is not exposed through the MCP connector
+// ===========================================================================
+
+seed()
+table('personal_finance_data').push(
+  {
+    user_id: BEN_ID,
+    updated_at: '2026-10-01T00:00:00.000Z',
+    data: {
+      accounts: [{ id: 'acc-b', name: 'BEN-WALLET', purpose: '', startingBalance: 1000, archived: false }],
+      categories: [{ id: 'cat-food', name: 'Food' }],
+      sources: [],
+      incomes: [],
+      expenses: [{ id: 'x1', date: new Date().toISOString().slice(0, 10), name: 'Lunch', categoryId: 'cat-food', amount: 250, accountId: 'acc-b', paid: true, note: '' }],
+      transfers: [],
+      recurring: [],
+    },
+  },
+  { user_id: ANA_ID, updated_at: '2026-10-01T00:00:00.000Z', data: { accounts: [{ id: 'acc-a', name: 'ANA-SAVINGS', startingBalance: 99999, archived: false }] } },
+)
+script.push({ content: [toolUse('tu_pf', 'get_personal_tracker')], stop_reason: 'tool_use' })
+r = await chat({ messages: [{ role: 'user', content: "What's my balance?" }] })
+const pfResult = lastMessage(r.body).content[0]
+assert(r.body.status === 'continue' && pfResult.type === 'tool_result' && !pfResult.is_error, 'get_personal_tracker runs without an approval card (read-only)')
+assert(String(pfResult.content).includes('BEN-WALLET') && String(pfResult.content).includes('"totalBalance": 750'), "it returns Ben's own accounts with the computed balance")
+assert(!String(pfResult.content).includes('ANA-SAVINGS'), "it never returns another person's personal tracker")
+const { findTool: findConnectorTool } = await import('../netlify/functions/lib/mcp/tools')
+assert(!findConnectorTool('get_personal_tracker'), 'the personal tracker tool is not part of the MCP connector')
 
 // ===========================================================================
 // 7. History trimming
